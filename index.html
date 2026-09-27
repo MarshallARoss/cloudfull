@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cloudfull</title>
+<meta name="description" content="Cloudfull is an iPhone app that helps you rediscover old photos and videos and free up storage.">
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #ffffff;
+    --fg: #1c1c1e;
+    --muted: #6e6e73;
+    --card: #f5f7fb;
+    --border: #e2e5ea;
+    --accent: #1E6BFF;
+    --accent-fg: #ffffff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0e0f12;
+      --fg: #f2f2f4;
+      --muted: #9a9aa2;
+      --card: #17191e;
+      --border: #2a2d34;
+      --accent: #4d8bff;
+      --accent-fg: #ffffff;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--fg);
+  }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.5;
+    -webkit-text-size-adjust: 100%;
+  }
+  main {
+    max-width: 680px;
+    margin: 0 auto;
+    padding: 32px 16px 64px;
+  }
+  .icon {
+    width: 96px;
+    height: 96px;
+    border-radius: 22px;
+    display: block;
+    margin: 0 0 20px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+  }
+  h1 {
+    font-size: 32px;
+    font-weight: 700;
+    margin: 0 0 6px;
+  }
+  .pitch {
+    font-size: 19px;
+    color: var(--muted);
+    margin: 0 0 28px;
+  }
+  h2 {
+    font-size: 15px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+    color: var(--muted);
+    margin: 32px 0 12px;
+  }
+  ul.features {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  ul.features li {
+    padding: 12px 14px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    margin-bottom: 8px;
+  }
+  .links {
+    display: flex;
+    gap: 12px;
+    margin-top: 32px;
+    flex-wrap: wrap;
+  }
+  .links a {
+    display: inline-block;
+    padding: 10px 18px;
+    border-radius: 10px;
+    text-decoration: none;
+    font-weight: 600;
+  }
+  .links a.primary {
+    background: var(--accent);
+    color: var(--accent-fg);
+  }
+  .links a.secondary {
+    background: var(--card);
+    color: var(--fg);
+    border: 1px solid var(--border);
+  }
+  footer {
+    margin-top: 48px;
+    color: var(--muted);
+    font-size: 13px;
+  }
+</style>
+</head>
+<body>
+<main>
+  <img class="icon" src="icon.png" alt="Cloudfull app icon">
+  <h1>Cloudfull</h1>
+  <p class="pitch">Rediscover your photos and videos, and free up space, one item at a time.</p>
+
+  <h2>What it does</h2>
+  <ul class="features">
+    <li>Shows your photos and videos in a familiar format, so you can enjoy them again.</li>
+    <li>Play your videos on shuffle through your library.</li>
+    <li>Keep, share, shrink, or delete each memory as you go.</li>
+    <li>Shrinks large videos to save space, and shows you how much space you saved.</li>
+    <li>Keeps deleted items in an in-app Bin, so you can restore them before they are gone.</li>
+    <li>Keeps your photos and videos on your device. Nothing is uploaded.</li>
+  </ul>
+
+  <div class="links">
+    <a class="primary" href="support/">Support</a>
+    <a class="secondary" href="privacy/">Privacy Policy</a>
+  </div>
+
+  <footer>
+    &copy; 2026 Marshall Ross
+  </footer>
+</main>
+</body>
+</html>
