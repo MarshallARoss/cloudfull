@@ -66,6 +66,13 @@
     margin: 0;
     font-weight: 600;
   }
+  .card ul {
+    margin: 8px 0 0;
+    padding-left: 20px;
+  }
+  .card li {
+    margin: 4px 0;
+  }
   a {
     color: var(--accent);
   }
@@ -106,22 +113,38 @@
 
   <div class="card">
     <p class="q">What does Shrink do?</p>
-    <p>Shrink re-encodes a video to 1080p HEVC, a format that takes up less space. Cloudfull shows the size before and after, and how much space you saved. The original video then goes to the Bin.</p>
+    <p>Shrink re-encodes a 4K video into a smaller HD copy, so it takes up much less space. The picture still looks sharp on a phone screen, and the copy keeps the original's date and location. Cloudfull shows the size before and after, and how much space you saved. The original video then goes to the Bin.</p>
+  </div>
+
+  <div class="card">
+    <p class="q">What format does Shrink convert from and to?</p>
+    <p>Shrink converts a 4K (or larger) video into a smaller 1080p HEVC video, saved as a QuickTime .mov file.</p>
+    <ul>
+      <li><strong>Which videos qualify:</strong> any video whose short side is 2160 px or more (4K and up). Cloudfull never offers Shrink for a video whose size it cannot read.</li>
+      <li><strong>Input:</strong> any 4K or larger video your iPhone can play. We tested HEVC and H.264 sources, both 8-bit and 10-bit HDR.</li>
+      <li><strong>Output:</strong> HEVC (H.265) video, 1920&times;1080, in a .mov file. The frame rate and aspect ratio stay the same as the original.</li>
+      <li><strong>HDR:</strong> an HDR original (HLG, wide color) stays HDR in the copy, with the same color tags.</li>
+      <li><strong>Audio:</strong> kept as is &mdash; same codec, channels, and sample rate as the original.</li>
+      <li><strong>Typical bitrate:</strong> the new video track measured 6&ndash;13 Mbps in our tests, well below a typical 4K original.</li>
+      <li><strong>Metadata:</strong> the copy carries the original's date and location.</li>
+      <li><strong>The 90% rule:</strong> Cloudfull only swaps in the copy if it is smaller than 90% of the original size. Otherwise Cloudfull says the video "is already efficiently compressed" and leaves the original untouched.</li>
+      <li><strong>Safety order:</strong> the original moves to the Bin only after the new copy finishes saving. Nothing is permanently deleted until you empty the Bin, and Recently Deleted in Photos clears it 30 days after that.</li>
+    </ul>
   </div>
 
   <div class="card">
     <p class="q">What is the "Cloudfull keeps" album?</p>
-    <p>When you keep an item, Cloudfull saves it into a "Cloudfull keeps" album in your Photos app. Kept items are shielded, so Cloudfull never deletes them. You can turn this album off in Settings.</p>
+    <p>When you keep an item, Cloudfull saves it into a "Cloudfull keeps" album in your Photos app.</p>
   </div>
 
   <div class="card">
-    <p class="q">How do I turn off the daily reminder?</p>
-    <p>Open Cloudfull, go to Settings, and turn off the "On this date" reminder. The reminder is off by default until you turn it on.</p>
+    <p class="q">How do I turn on the daily reminder?</p>
+    <p>Open Cloudfull, go to Settings, and turn on Daily &ldquo;On this date&rdquo;. Then pick the time you want the reminder.</p>
   </div>
 
   <div class="card">
     <p class="q">Does Cloudfull need an account?</p>
-    <p>No. Cloudfull has no account and no sign-up. You can start using it right away.</p>
+    <p>No. Cloudfull has no account and no sign-up. It runs on your iOS device with your media. You can start using it right away.</p>
   </div>
 
   <footer>
