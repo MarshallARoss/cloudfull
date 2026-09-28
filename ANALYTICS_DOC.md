@@ -227,6 +227,54 @@ looking at. It sends that photo's own embedded coordinate to Apple. It is
 not part of the usage analytics described above, it is not sent to
 Cloudfull's own database, and it does not use the phone's current location.
 
+## For maintainers
+
+### The CloudKit schema
+
+- Container: `iCloud.com.cloudfull.app`, public database.
+- Record type: `UsageSession`, one record for each session.
+- Fields: `installId`, `startedAt`, `endedAt`, `coldStart`, `schema`, `app`, `ios`, `device`, `libraryCount`, `sessionSeconds`, `daysSinceInstall`, `country`, `photoPermissionAtStart`, `endReason`, `counts`, `facts`.
+- `counts` and `facts` are JSON text. Do not index them. An index on a large text field wastes the container's index limit.
+- Security roles, in both environments:
+  - `GRANT CREATE TO "_icloud"`: a signed-in iCloud user can create a record.
+  - `GRANT WRITE TO "_creator"`: only the creator can change it.
+  - No grant to `_world`. No grant on `Users`.
+
+### Deploy the schema to Production before a release
+
+The environment follows the build configuration. `Cloudfull.entitlements` sets `com.apple.developer.icloud-container-environment` to `$(CLOUDKIT_ENVIRONMENT)`: Debug uses Development, Release uses Production.
+
+Development creates new fields automatically on the first save. Production does not. An App Store or TestFlight build cannot save a record with a field that Production does not have.
+
+When you add a field:
+
+1. Run a Debug build once, so that Development gets the new field.
+2. Deploy the schema to Production **before** you ship the release. In the CloudKit Console, select the container, then **Deploy Schema Changes**.
+3. Check the result. Export both schemas and compare them:
+
+   ```
+   xcrun cktool export-schema --team-id <TEAM_ID> --container-id iCloud.com.cloudfull.app --environment development --output-file dev.ckdb
+   xcrun cktool export-schema --team-id <TEAM_ID> --container-id iCloud.com.cloudfull.app --environment production --output-file prod.ckdb
+   diff dev.ckdb prod.ckdb
+   ```
+
+   `cktool` schema commands need a management token (`xcrun cktool save-token`, type `m`). Record queries need a user token (type `u`).
+
+### Rules for new fields
+
+- Do not add anything more identifying. The install ID, country, device, language, and hour together can already narrow a record to a small group of people.
+- Add new names. Do not rename or reuse old names. After a Production deploy, a renamed field leaves the old records under the old name, and `scripts/usage_report.py` reads fields by name.
+- Update this document and the privacy page when you add a field.
+
+### Look at the raw records
+
+1. Open [the CloudKit Console](https://icloud.developer.apple.com/dashboard).
+2. Select the container `iCloud.com.cloudfull.app`, then **Data**.
+3. Select database **Public** and environment **Development** or **Production**.
+4. Select record type **UsageSession**, then **Query Records**.
+
+For totals, use `scripts/usage_report.py`. It needs `CLOUDFULL_TEAM_ID` set to your Apple Developer Team ID.
+
 ## More information
 
 For the full privacy statement, see
