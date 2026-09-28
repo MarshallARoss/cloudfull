@@ -95,7 +95,7 @@
   }
   .appstore {
     display: inline-block;
-    margin-top: 32px;
+    margin-top: 20px;
   }
   .appstore img {
     display: block;
@@ -114,6 +114,15 @@
   <img class="icon" src="icon.png" alt="Cloudfull app icon">
   <h1>Cloudfull</h1>
   <p class="pitch">Rediscover your photos and videos, and free up space, one item at a time.</p>
+  <!-- App Store badge: staged until release. Hidden unless the URL has ?preview. On release, remove `hidden` and the script below. -->
+  <a class="appstore" id="appstore" href="https://apps.apple.com/app/id6816547769" hidden>
+    <img src="app-store-badge.svg" alt="Download on the App Store">
+  </a>
+  <script>
+    if (new URLSearchParams(location.search).has("preview")) {
+      document.getElementById("appstore").hidden = false;
+    }
+  </script>
 
   <h2>What it does</h2>
   <ul class="features">
@@ -125,16 +134,6 @@
     <li>Sends a daily "On this date" reminder, so you can see what you shot on this day in past years.</li>
     <li>Never uploads your photos or videos.</li>
   </ul>
-
-  <!-- App Store badge: staged until release. Hidden unless the URL has ?preview. On release, remove `hidden` and the script below. -->
-  <a class="appstore" id="appstore" href="https://apps.apple.com/app/id6816547769" hidden>
-    <img src="app-store-badge.svg" alt="Download on the App Store">
-  </a>
-  <script>
-    if (new URLSearchParams(location.search).has("preview")) {
-      document.getElementById("appstore").hidden = false;
-    }
-  </script>
 
   <div class="links">
     <a class="primary" href="support/">Support</a>
