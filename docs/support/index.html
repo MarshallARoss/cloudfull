@@ -66,6 +66,13 @@
     margin: 0;
     font-weight: 600;
   }
+  .card ul {
+    margin: 8px 0 0;
+    padding-left: 20px;
+  }
+  .card li {
+    margin: 4px 0;
+  }
   a {
     color: var(--accent);
   }
@@ -83,7 +90,7 @@
 
   <h2>Contact us</h2>
   <div class="card">
-    <p>For help, questions, or feedback, email <a href="mailto:fluffy@cloudfull.app">fluffy@cloudfull.app</a>.</p>
+    <p>For help, questions, or feedback, email <a href="mailto:fluffy@cloudfull.app">fluffy@cloudfull.app</a></p>
     <p>We read every message and reply as soon as we can.</p>
   </div>
 
@@ -100,23 +107,44 @@
   </div>
 
   <div class="card">
+    <p class="q">Why is there a Bin? Why can't Cloudfull delete items right away?</p>
+    <p>iOS asks you to confirm every time an app deletes photos or videos. Without the Bin, you would see that dialog after every single delete. With the Bin, you delete as many items as you like, then confirm once for the whole batch.</p>
+  </div>
+
+  <div class="card">
     <p class="q">What does Shrink do?</p>
-    <p>Shrink re-encodes a video to 1080p HEVC, a format that takes up less space. Cloudfull shows the size before and after, and how much space you saved. The original video then goes to the Bin.</p>
+    <p>Shrink re-encodes a video to reduce its size and get you space. The new copy keeps the original's date and location. Cloudfull shows the size before and after, and how much space you saved. The original video then goes to the Bin.</p>
   </div>
 
   <div class="card">
-    <p class="q">What is the "Cloudfull keeps" album?</p>
-    <p>When you keep an item, Cloudfull saves it into a "Cloudfull keeps" album in your Photos app. Kept items are shielded, so Cloudfull never deletes them. You can turn this album off in Settings.</p>
+    <p class="q">What format does Shrink convert from and to?</p>
+    <p>Shrink converts a 4K (or larger) video into a smaller 1080p HEVC video, saved as a QuickTime .mov file.</p>
+    <ul>
+      <li><strong>Which videos qualify:</strong> 4K and up</li>
+      <li><strong>Output:</strong> HEVC (H.265), 1920&times;1080, .mov. Same frame rate and aspect ratio as the original.</li>
+      <li><strong>Processor:</strong> on-device</li>
+      <li><strong>HDR:</strong> same as original</li>
+      <li><strong>Audio:</strong> stereo only</li>
+      <li><strong>Bitrate:</strong> 6&ndash;13 Mbps VBR</li>
+      <li><strong>Metadata:</strong> original date and location</li>
+      <li><strong>Safety order:</strong> the original moves to the Bin only after the new copy finishes saving.</li>
+      <li><strong>The 90% rule:</strong> Cloudfull only swaps in the copy if it is smaller than 90% of the original size. Otherwise Cloudfull says the video "is already efficiently compressed" and leaves the original untouched.</li>
+    </ul>
   </div>
 
   <div class="card">
-    <p class="q">How do I turn off the daily reminder?</p>
-    <p>Open Cloudfull, go to Settings, and turn off the "On this date" reminder. The reminder is off by default until you turn it on.</p>
+    <p class="q">Where do my kept photos and videos go?</p>
+    <p>Everything you keep is added to an album called "Cloudfull keeps" in the Photos app, so your favorites are all in one place.</p>
+  </div>
+
+  <div class="card">
+    <p class="q">How do I turn on the daily reminder?</p>
+    <p>Open Cloudfull, go to Settings, and turn on Daily &ldquo;On this date&rdquo;. Then pick the time you want the reminder.</p>
   </div>
 
   <div class="card">
     <p class="q">Does Cloudfull need an account?</p>
-    <p>No. Cloudfull has no account and no sign-up. You can start using it right away.</p>
+    <p>No. Cloudfull has no account and no sign-up. It runs on your iOS device with your media. You can start using it right away.</p>
   </div>
 
   <footer>
