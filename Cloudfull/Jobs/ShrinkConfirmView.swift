@@ -132,6 +132,7 @@ struct ShrinkConfirmView: View {
                 dismiss()
             }
             .buttonStyle(.borderedProminent)
+            .accentButtonLabel()
             .controlSize(.large)
             .frame(maxWidth: .infinity)
             .accessibilityIdentifier("shrink_confirm")
