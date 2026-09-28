@@ -268,8 +268,7 @@ def main():
 
 if __name__ == "__main__":
     main()
-    # Optional: set CLOUDFULL_DASHBOARD_URL to the page that shows these
-    # numbers, and the script reminds you to update it.
-    dashboard = os.environ.get("CLOUDFULL_DASHBOARD_URL")
-    if dashboard:
-        print(f"\nReminder: update the usage dashboard with these numbers: {dashboard}")
+    # The usage dashboard is a private page. Only the maintainer can open it.
+    # Set CLOUDFULL_DASHBOARD_URL to use a different page.
+    dashboard = os.environ.get("CLOUDFULL_DASHBOARD_URL", "https://claude.ai/artifact/TME9cPtKC82fhePavDVhTJ")
+    print(f"\nReminder: update the usage dashboard with these numbers: {dashboard}")

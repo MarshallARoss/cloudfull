@@ -275,7 +275,7 @@ When you add a field:
 
 For totals, use `scripts/usage_report.py`. It needs `CLOUDFULL_TEAM_ID` set to your Apple Developer Team ID.
 
-After you run the report, update the usage dashboard page with the new numbers. Set `CLOUDFULL_DASHBOARD_URL` to the page's link, and the script prints a reminder with the link at the end of each report.
+After you run the report, update the [usage dashboard](https://claude.ai/artifact/TME9cPtKC82fhePavDVhTJ) with the new numbers. The dashboard is a private page; only the maintainer can open it. The script prints this reminder at the end of each report. Set `CLOUDFULL_DASHBOARD_URL` to use a different page.
 
 ## More information
 
