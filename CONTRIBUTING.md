@@ -67,6 +67,10 @@ running it.
 ### Contributor License Agreement
 
 First-time contributors must accept the Contributor License Agreement
-before a pull request can be merged. The CLA Assistant bot posts a comment
-on your first pull request with instructions. Read [CLA.md](CLA.md) before
-you accept it.
+before a pull request can be merged. On your first pull request, a bot
+posts a comment with instructions. Read [CLA.md](CLA.md). To sign, reply to
+the pull request with this exact comment:
+
+    I have read the CLA Document and I hereby sign the CLA
+
+The `license/cla` check passes when every commit author has signed.
