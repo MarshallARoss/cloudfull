@@ -1,2 +1,46 @@
-store-listing.md
+# macOS
 .DS_Store
+
+# Website (kept locally, never published to git)
+store-listing.md
+screenshots/
+
+# Xcode build artifacts
+build/
+build-device/
+build-*/
+build*/
+*.xcresult
+xcuserdata/
+DerivedData/
+
+# Claude Code project files
+.claude/
+
+# Credentials and signing material. Never commit these.
+# An App Store Connect API key belongs in ~/.appstoreconnect/private_keys/,
+# not in this repo. These entries exist only so a stray copy can't land here.
+.env
+.env.*
+*.mobileprovision
+*.p12
+*.pfx
+*.cer
+*.pem
+*.p8
+AuthKey_*
+*.keychain*
+ExportOptions.plist
+
+# Traces and archives
+*.trace
+*.ktrace
+*.ipa
+*.xcarchive
+
+# Large fixture videos (regenerate with scripts/make_seed_clip.sh)
+scripts/fixtures/seed4k/*.mp4
+
+# Internal planning notes, not part of the public project
+plan.md
+design/*

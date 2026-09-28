@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Development for Debug, Production for Release (TestFlight and the App
+	     Store use Production). Set by CLOUDKIT_ENVIRONMENT in the project's
+	     build settings, so an archive can never carry the Development value. -->
+	<key>com.apple.developer.icloud-container-environment</key>
+	<string>$(CLOUDKIT_ENVIRONMENT)</string>
+	<key>com.apple.developer.icloud-container-identifiers</key>
+	<array>
+		<string>iCloud.com.cloudfull.app</string>
+	</array>
+	<key>com.apple.developer.icloud-services</key>
+	<array>
+		<string>CloudKit</string>
+	</array>
+</dict>
+</plist>
