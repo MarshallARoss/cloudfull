@@ -489,7 +489,12 @@ final class M11Tests: FeedUITestCase {
         restoreButton.tap()
         XCTAssertTrue(waitFor(timeout: 5) { !restoreButton.exists }, "\(deletedID) still shows a restore cell after restoring it")
         dismissBinSheet()
-        XCTAssertTrue(waitFor(timeout: 10) { !self.element("trash_empty").exists }, "Bin sheet did not dismiss after restoring")
+        // This restore empties the bin, so `trash_empty` (which lives only
+        // in the bottom chin, absent on an empty bin) would vacuously read
+        // "gone" even if the sheet were still open. The nav bar, titled
+        // "Bin" whether or not the sheet's content is empty, is the sound
+        // signal here.
+        XCTAssertTrue(waitFor(timeout: 10) { !self.app.navigationBars["Bin"].exists }, "Bin sheet did not dismiss after restoring")
 
         XCTAssertTrue(
             waitFor(timeout: 15) { self.trashRows(timeout: 2)?.trash == rowsBefore.trash },

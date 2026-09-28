@@ -132,8 +132,14 @@ final class M2TrashTests: FeedUITestCase {
         } else {
             app.swipeDown()
         }
+        // Neither `trash_empty` nor `trash_empty_state` is a sound "sheet
+        // dismissed" signal here: this sheet started non-empty and ends
+        // empty, so either identifier's disappearance could mean "still
+        // open, but its content changed" as easily as "closed." The nav
+        // bar, titled "Bin" regardless of what the sheet holds, is the one
+        // signal that means the same thing in both states.
         XCTAssertTrue(
-            waitFor(timeout: 10) { !self.app.buttons["trash_empty"].exists },
+            waitFor(timeout: 10) { !self.app.navigationBars["Bin"].exists },
             "Bin sheet did not dismiss after Done"
         )
 
@@ -190,11 +196,23 @@ final class M2TrashTests: FeedUITestCase {
         let binButton = app.buttons["bin_open"]
         XCTAssertTrue(binButton.waitForExistence(timeout: 5), "bin_open control not found")
         binButton.tap()
-        XCTAssertTrue(app.buttons["trash_empty"].waitForExistence(timeout: 5), "Trash sheet did not open")
+        // This bin is empty (the like shielded the only queued candidate),
+        // so `trash_empty` does not exist to wait on: it lives in the
+        // bottom chin, and `TrashView` shows no chin at all while the bin
+        // is empty. `trash_empty_state` is the empty grid's own identifier
+        // and exists whether or not the chin does, so it is what actually
+        // proves the sheet opened here.
+        XCTAssertTrue(
+            app.descendants(matching: .any)["trash_empty_state"].waitForExistence(timeout: 5),
+            "Trash sheet did not open"
+        )
         XCTAssertEqual(restoreCellCount(), 0, "Trash grid is not empty after tapping trash on a liked, shielded video")
         app.buttons["Done"].tap()
+        // Same reasoning as `testTrashQueueRestoreEmpty`'s dismiss check:
+        // the nav bar is titled "Bin" whether or not the sheet's content is
+        // empty, so its disappearance is a sound dismiss signal here too.
         XCTAssertTrue(
-            waitFor(timeout: 5) { !self.app.buttons["trash_empty"].exists },
+            waitFor(timeout: 5) { !self.app.navigationBars["Bin"].exists },
             "Trash sheet did not dismiss"
         )
 
