@@ -14,7 +14,8 @@ record carries a random ID that the app generates once when it is first
 installed. This ID does not identify a person: it is not linked to a name, an
 email address, or an Apple Account. The app does not send a record when it
 runs in the iOS Simulator, and it does not send one during an automated UI
-test run. A record also never reaches the developer if the phone is not
+test run. A copy of the app built with a different bundle ID (a fork) never sends
+one. A record also never reaches the developer if the phone is not
 signed into iCloud, because it has nowhere to go.
 
 ## What is sent
@@ -199,6 +200,13 @@ to the key.
 | `slowDownloadCount` | An iCloud download was slow to arrive. | Exact integer, running total. |
 | `settingsOpened` | The Settings screen was opened. | Exact integer, running total. |
 | `setting.<name>` | A setting was changed, by name (`name` = `keepsAlbum`, `defaultTab`, `openMuted`, `dailyReminder`, `dailyReminderHour`). | Exact integer, running total. |
+| `settingsLink.<name>` | A link row was tapped in Settings, by which link (`name` = `website`, `contact`, `privacy`, `sourceCode`, `feelsMusic`, `guestBets`, `carlyAndTheUniverse`, `tabzTech`, `barkBarkBark`). Caught by one handler for every link on the screen; never the raw URL. | Exact integer, running total. |
+| `showWelcomeTapped` | "Show welcome screen" was tapped in Settings. | Exact integer, running total. |
+| `showOnboardingAgainTapped` | "Show onboarding again" was tapped in Settings. | Exact integer, running total. |
+| `settingsOpenIOSSettingsTapped` | "Turn on notifications in iOS Settings" was tapped in Settings (shown only after the daily reminder's notification permission is denied). | Exact integer, running total. |
+| `tip.tapped.<tier>` | A tip jar button was tapped, by price tier (`tier` = `1`, `10`, `100`). Never the product's actual price or currency. | Exact integer, running total. |
+| `tip.outcome.<tier>.<outcome>` | How a tapped tip purchase ended (`outcome` = `success`, `cancelled`, `pending`). | Exact integer, running total. |
+| `tip.unavailable.<reason>` | The tip jar had no products to show (`reason` = `loadFailed` when StoreKit's load threw, `empty` when it returned zero products). | Exact integer, running total. |
 | `mainThreadStallsOver250ms` | Main-thread stalls longer than 250ms this session. Written only in DEBUG builds, never in the App Store build. | Exact integer. |
 
 ## Never sent
@@ -213,6 +221,8 @@ verified against the code, not assumed:
 - A photo's or video's location.
 - Album names.
 - Anything the user types.
+- A tip jar product's price or currency. Only its fixed tier (`1`, `10`, or `100`) is sent.
+- The destination URL of a tapped link. Only the fixed name of the link row is sent.
 
 The only identifiers Cloudfull sends about media are exact pixel dimensions
 (such as `1920x1080`) and, for a deleted video, its duration in

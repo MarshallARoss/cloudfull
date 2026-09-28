@@ -154,6 +154,7 @@ struct OnboardingView: View {
                 dismiss()
             }
             .buttonStyle(.borderedProminent)
+            .accentButtonLabel()
             .controlSize(.large)
             .frame(maxWidth: .infinity)
             .accessibilityIdentifier("onboarding_cta")     // Do not change this identifier.

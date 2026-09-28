@@ -94,6 +94,23 @@ final class Usage {
     }
     enum Gate: String { case welcome, limited, denied }
 
+    /// A link row in Settings, either "Assistance" or "Check out
+    /// Marshall's other projects". One event covers every `Link` on the
+    /// screen; the raw URL is never sent, only which fixed link it was.
+    enum SettingsLink: String {
+        case website, contact, privacy, sourceCode
+        case feelsMusic, guestBets, carlyAndTheUniverse, tabzTech, barkBarkBark
+    }
+    /// A tip jar product, by its price tier. Matches the last dot-separated
+    /// part of the product id (`com.cloudfull.app.tip.10` → `ten`).
+    enum TipTier: String { case one = "1", ten = "10", hundred = "100" }
+    /// How a started tip purchase ended. Mirrors `TipJar.PurchaseOutcome`;
+    /// kept as its own type here so this file stays free of a StoreKit
+    /// import.
+    enum TipOutcome: String { case success, cancelled, pending }
+    /// Why the tip jar has no products to show.
+    enum TipUnavailableReason: String { case loadFailed, empty }
+
     /// The mode the user is in right now.
     ///
     /// `creditModeSeconds` must credit the mode that is ending. A read of
@@ -172,6 +189,21 @@ final class Usage {
     func albumPickerCancelled() { bump("album.cancel") }
     func settingsOpened() { bump("settingsOpened") }
     func settingChanged(_ name: String) { bump("setting.\(name)") }
+    /// A tap on any of the outbound `Link` rows in Settings, caught in one
+    /// place by an `OpenURLAction` on the List. Counted on tap, not on
+    /// whether Safari finished opening.
+    func settingsLinkTapped(_ link: SettingsLink) { bump("settingsLink.\(link.rawValue)") }
+    func showWelcomeTapped() { bump("showWelcomeTapped") }
+    func showOnboardingAgainTapped() { bump("showOnboardingAgainTapped") }
+    /// A tap on "Turn on notifications in iOS Settings", the button shown
+    /// only once the daily reminder's notification permission is denied.
+    func settingsOpenIOSSettingsTapped() { bump("settingsOpenIOSSettingsTapped") }
+    // Tip jar. `tipTapped` fires on the button tap, before StoreKit's
+    // purchase sheet appears; `tipOutcome` fires once StoreKit returns.
+    // Never records a price, only the fixed tier.
+    func tipTapped(_ tier: TipTier) { bump("tip.tapped.\(tier.rawValue)") }
+    func tipOutcome(_ tier: TipTier, _ outcome: TipOutcome) { bump("tip.outcome.\(tier.rawValue).\(outcome.rawValue)") }
+    func tipProductsUnavailable(_ reason: TipUnavailableReason) { bump("tip.unavailable.\(reason.rawValue)") }
     func fullscreenEntered() { bump("video.rotatedToFullscreen") }
     func quickAction(mode: Mode) { bump("quickAction.\(mode.rawValue)") }
 
@@ -663,7 +695,11 @@ final class Usage {
     /// This is a plain constant because an `INFOPLIST_KEY_` for a custom
     /// key is silently dropped by Xcode's generated Info.plist, and
     /// `SecTask` is macOS-only.
-    static let containerID: String? = "iCloud.com.cloudfull.app"
+    ///
+    /// Only the official app (bundle ID `com.cloudfull.app`) uploads. A fork
+    /// with a different bundle ID has no access to this container, and
+    /// `CKContainer(identifier:)` stops the app for a container it cannot use.
+    static let containerID: String? = Bundle.main.bundleIdentifier == "com.cloudfull.app" ? "iCloud.com.cloudfull.app" : nil
 
     /// Called when the app goes to the background. Ends the session,
     /// queues it, and uploads everything queued, off the main actor.
@@ -720,7 +756,9 @@ final class Usage {
               ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { existing?.end(); return }
         // Only one upload loop runs at a time. Cancel a loop that iOS
         // suspended, and start a new one. A duplicate save of the same
-        // record id is safe because of `.allKeys`.
+        // record id is usually safe because of `.allKeys`; `isAlreadySaved`
+        // below covers the rare conflict `.allKeys` does not, when the
+        // cancelled loop's save already landed.
         uploadTask?.cancel()
         guard let data = defaults.data(forKey: Self.pendingKey),
               let sessions = try? JSONDecoder().decode([Session].self, from: data), !sessions.isEmpty else { existing?.end(); return }
@@ -787,15 +825,30 @@ final class Usage {
                             #if DEBUG
                             DiagnosticsLog.shared.log("Usage", "upload_failed_\(session.id.prefix(8))_\((error as NSError).code)_\(error.localizedDescription.replacingOccurrences(of: " ", with: "_"))")
                             #endif
-                            cont.resume(returning: Self.isPermanent(error) ? .rejected : .retryLater)
+                            if Self.isAlreadySaved(error) {
+                                #if DEBUG
+                                DiagnosticsLog.shared.log("Usage", "upload_already_on_server_\(session.id.prefix(8))")
+                                #endif
+                                cont.resume(returning: .sent)
+                            } else {
+                                cont.resume(returning: Self.isPermanent(error) ? .rejected : .retryLater)
+                            }
                         }
                     }
                     db.add(op)
                 }
+                // Record success before the cancellation check. Another
+                // loop's start can cancel this one right after this save
+                // finishes; the session must still count as uploaded
+                // instead of sitting in the pending queue forever.
+                if outcome == .sent || outcome == .rejected {
+                    uploaded.append(session.id)   // either sent, or rejected for good and dropped rather than retried forever
+                }
                 if Task.isCancelled { break }
                 if outcome == .retryLater { break }   // keep order; retry the rest next time
-                uploaded.append(session.id)   // either sent, or rejected for good and dropped rather than retried forever
             }
+            // Runs after a `break` too, so a cancelled loop still reports
+            // every session it finished uploading before the cancellation.
             await MainActor.run {
                 Usage.shared.noteUploaded(uploaded)
                 if Usage.shared.uploadToken == token { Usage.shared.uploadTask = nil }
@@ -825,6 +878,22 @@ final class Usage {
         default:
             return false
         }
+    }
+
+    /// True for the save conflict CloudKit returns when this exact record
+    /// id was already written, most often by a loop this loop's own start
+    /// just cancelled (see `uploadTask?.cancel()` above). A session's
+    /// record id is a UUID minted once for that session, so a create
+    /// conflict on it can only mean an earlier save already landed; there
+    /// is no update case to confuse it with. The app cannot confirm this
+    /// by fetching the record instead: the public database's schema grants
+    /// no `READ` role, so a fetch always comes back `.unknownItem`,
+    /// indistinguishable from "does not exist". Left untreated, this one
+    /// conflict blocks the whole queue forever, because `isPermanent`
+    /// returns false for it and every retry hits the same conflict again.
+    nonisolated private static func isAlreadySaved(_ error: Error) -> Bool {
+        guard let ck = error as? CKError, ck.code.rawValue == 23 else { return false }
+        return ck.localizedDescription.contains("CAS failed")
     }
 
     /// Facts that are also real CloudKit fields. Write each one once, as

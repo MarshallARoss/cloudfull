@@ -106,6 +106,19 @@ enum Rail {
     static let seamClearance: CGFloat = 12
 }
 
+// MARK: - Accent-filled buttons
+
+extension View {
+    /// Black label for a button filled with the plain accent color, for
+    /// example `.buttonStyle(.borderedProminent)` with no `.tint`
+    /// override. The accent is a light sky blue, so the system's default
+    /// white label is hard to read on it. Chain this after
+    /// `.buttonStyle`, the same spot `.tint` goes.
+    func accentButtonLabel() -> some View {
+        foregroundStyle(.black)
+    }
+}
+
 // MARK: - Formatting
 
 /// Shared value formatting for the feed caption, the bin header, and the

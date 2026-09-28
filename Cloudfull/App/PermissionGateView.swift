@@ -324,6 +324,7 @@ struct PermissionGateView: View {
             VStack(spacing: 10) {
                 Button(primaryTitle, action: primaryAction)
                     .buttonStyle(.borderedProminent)
+                    .accentButtonLabel()
                     .controlSize(.large)
                     .frame(maxWidth: .infinity)
                     .modifier(OptionalAccessibilityIdentifier(id: primaryIdentifier))
@@ -519,6 +520,7 @@ struct WelcomeScreenView: View {
             VStack(spacing: 12) {
                 Button("Done", action: onDone)
                     .buttonStyle(.borderedProminent)
+                    .accentButtonLabel()
                     .controlSize(.large)
                     .accessibilityIdentifier("welcome_done")
                 Text(PermissionGateView.welcomeFootnote)

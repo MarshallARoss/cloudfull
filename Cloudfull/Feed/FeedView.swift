@@ -672,6 +672,7 @@ struct FeedView: View {
         } actions: {
             Button("Open Photos") { openPhotosApp() }
                 .buttonStyle(.borderedProminent)
+                .accentButtonLabel()
                 .accessibilityIdentifier("empty_library_open_photos")
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

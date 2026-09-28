@@ -69,6 +69,7 @@ struct DoneForTodayPage: View {
             VStack(spacing: 10) {
                 Button("Keep scrolling", action: onReset)
                     .buttonStyle(.borderedProminent)
+                    .accentButtonLabel()
                     .controlSize(.large)
                     .frame(maxWidth: .infinity)
                     .accessibilityIdentifier("done_today_reset")

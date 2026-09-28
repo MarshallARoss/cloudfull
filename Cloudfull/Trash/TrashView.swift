@@ -504,6 +504,7 @@ private struct TrashPreviewView: View {
                         dismiss()
                     }
                     .buttonStyle(.borderedProminent)
+                    .accentButtonLabel()
                     .frame(maxWidth: .infinity)
                     .accessibilityIdentifier("preview_restore")
                     .accessibilityLabel("Restore")
