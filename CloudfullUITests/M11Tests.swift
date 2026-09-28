@@ -714,14 +714,17 @@ final class M11Tests: FeedUITestCase {
             XCTAssertTrue(element(id).waitForExistence(timeout: 5), "\(id) does not exist in Settings")
         }
         // `settings_version` sits near the bottom of the screen, under
-        // Diagnostics. On this screen size it starts below the visible
-        // area. XCUITest reports an off-screen row in a scroll view as not
+        // the Assistance, tip jar, other-projects, and Diagnostics
+        // sections. On this screen size it starts below the visible area.
+        // XCUITest reports an off-screen row in a scroll view as not
         // existing. The version footer in `SettingsView` keeps its
-        // identifier at every position, so the test scrolls to it instead
-        // of assuming it is already visible.
+        // identifier at every position, so the test swipes up until the
+        // footer shows instead of assuming it is already visible.
         let version = element("settings_version")
-        if !version.waitForExistence(timeout: 2) {
+        var swipesLeft = 8
+        while !version.waitForExistence(timeout: 1) && swipesLeft > 0 {
             element("settings_root").swipeUp()
+            swipesLeft -= 1
         }
         XCTAssertTrue(
             version.waitForExistence(timeout: 5),
