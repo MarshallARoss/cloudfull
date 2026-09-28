@@ -1015,8 +1015,13 @@ final class M5Tests: FeedUITestCase {
         } else {
             app.swipeDown()
         }
+        // `trash_empty` only exists inside `TrashView`'s bottom chin, which
+        // does not render while the bin is empty — as it is right here,
+        // right after this test's own empty. The nav bar, titled "Bin"
+        // regardless of the sheet's content, is the signal that means
+        // "dismissed" in both an empty and a non-empty bin.
         XCTAssertTrue(
-            waitFor(timeout: 10) { !self.app.buttons["trash_empty"].exists },
+            waitFor(timeout: 10) { !self.app.navigationBars["Bin"].exists },
             "Bin sheet did not dismiss after Done"
         )
 

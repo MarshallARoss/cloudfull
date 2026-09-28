@@ -174,7 +174,8 @@ to the key.
 | `bin.open` / `bin.preview` | The Bin was opened, or a bin item was previewed. | Exact integer, running total. |
 | `bin.emptyTapped` | "Empty Bin" was tapped (before the system confirms). | Exact integer, running total. |
 | `bin.emptiedCount` | An empty of the Bin was confirmed. | Exact integer, running total. |
-| `bin.restore` | An item was restored from the Bin. | Exact integer, running total. |
+| `bin.restore` | An item was restored from the Bin. The total; equals `bin.restore.shrunk` + `bin.restore.deleted`. | Exact integer, running total. |
+| `bin.restore.shrunk` / `bin.restore.deleted` | The same restore, split by whether the item was a shrunk original (`replacementBytes > 0`) or a plain delete. | Exact integer, running total. |
 | `keepPulledFromBin.<mode>` | A Keep pulled an item back out of the Bin queue. | Exact integer, running total. |
 | `unqueuedInFeed.<mode>` | A second trash tap took an item back out, without opening the Bin. | Exact integer, running total. |
 | `shrink.sheet` / `shrink.cancel` | The Shrink sheet was opened, or cancelled. | Exact integer, running total. |

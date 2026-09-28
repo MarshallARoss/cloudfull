@@ -20,6 +20,11 @@ import AVFoundation
 struct TrashView: View {
     @ObservedObject var trashService: TrashService
     @Environment(\.dismiss) private var dismiss
+    /// At an accessibility Dynamic Type size, `binChin` drops the
+    /// explainer text — the button alone can already need the chin's full
+    /// height — and `body` shows it in the scroll content below the grid
+    /// instead. See `explainerText`.
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     @State private var isEmptying = false
     @State private var freedMessage: String?
@@ -52,29 +57,64 @@ struct TrashView: View {
                         ContentUnavailableView(
                             "Bin Is Empty",
                             systemImage: "trash",
-                            description: Text("Nothing leaves your Photos app until you empty the bin.")
+                            description: Text("Your pending deletes show up here. You will need to regularly empty the bin to recover your iCloud storage.")
                         )
                         .padding(.top, 40)
                         .accessibilityIdentifier("trash_empty_state")
                     } else {
-                        LazyVGrid(columns: columns, spacing: 2) {
-                            ForEach(trashService.entries, id: \.assetKey) { entry in
-                                TrashCell(
-                                    entry: entry,
-                                    trashService: trashService,
-                                    onRestoreResult: handleRestoreResult,
-                                    onPreviewRequested: { Usage.shared.binPreviewOpened(); previewTarget = PreviewTarget(id: entry.assetKey) }
-                                )
-                            }
+                        // Two sections so a shrunk original never reads as
+                        // an unrequested delete: plan.md #26. A user who
+                        // shrinks a video and then opens the bin sees why
+                        // the original is sitting there, instead of
+                        // wondering what the app is deleting on its own.
+                        // `replacementBytes > 0` is the only signal this
+                        // needs — see `TrashEntry.replacementBytes`.
+                        if !deletedEntries.isEmpty {
+                            sectionHeader("Deleted")
+                            grid(for: deletedEntries)
                         }
-                    }
+                        if !shrunkEntries.isEmpty {
+                            sectionHeader("Shrunk")
+                                .padding(.top, deletedEntries.isEmpty ? 0 : 8)
+                            shrunkExplainer
+                            grid(for: shrunkEntries)
+                        }
 
-                    if !trashService.entries.isEmpty {
-                        footerExplainer
+                        // `binChin` carries this explainer at every other
+                        // Dynamic Type size. At an accessibility size, the
+                        // chin drops it (see `binChin`), and it shows here
+                        // instead, below the grid, so it never fights the
+                        // button for the chin's fixed height. Exactly one
+                        // copy of `explainerText` is ever in the tree.
+                        if dynamicTypeSize.isAccessibilitySize {
+                            explainerText
+                                .frame(maxWidth: .infinity)
+                                .padding(.horizontal, 24)
+                                .padding(.top, 20)
+                                .padding(.bottom, 12)
+                        }
                     }
                 }
             }
             .scrollBounceBehavior(.basedOnSize)
+            // A solid chin, not the old `.bottomBar` toolbar item. Shown
+            // only while the bin holds something, so Empty Bin cannot land
+            // on top of a bright photo behind it, and its explainer stays
+            // on screen instead of scrolling away. `EmptyView()` when the
+            // bin is empty adds no inset, so the empty state's layout is
+            // unchanged.
+            .safeAreaInset(edge: .bottom) {
+                if !trashService.entries.isEmpty {
+                    binChin
+                }
+            }
+            // Lets the chin leave smoothly once the bin is empty, the same
+            // way `freedMessage` fades in after an empty. Keyed to
+            // `entries.isEmpty` only, so a plain restore — which never
+            // flips that value unless it is the last item — is not swept
+            // into the animation; the grid still updates instantly, as
+            // before.
+            .animation(.default, value: trashService.entries.isEmpty)
             // Disables the whole grid, including every restore button, for
             // the entire batch delete, not only the Empty Bin button.
             // Without this, a restore tapped while `emptyBin()` awaits
@@ -89,7 +129,6 @@ struct TrashView: View {
                     Button("Done") { dismiss() }
                         .disabled(isEmptying)
                 }
-                ToolbarItem(placement: .bottomBar) { emptyButton }
             }
         }
         .presentationDragIndicator(.visible)
@@ -118,8 +157,84 @@ struct TrashView: View {
             restoreFailed = false
         } else {
             restoreFailed = true
-            AccessibilityNotification.Announcement("Couldn't restore that video. Tap it again.").post()
+            AccessibilityNotification.Announcement("Couldn't restore that item. Tap it again.").post()
         }
+    }
+
+    // MARK: - Sections
+
+    /// Items the user queued directly: a plain swipe-or-rail delete.
+    /// `replacementBytes == 0` is what tells this apart from
+    /// `shrunkEntries` — see `TrashEntry.replacementBytes`. Filtering
+    /// preserves `trashService.entries`' own newest-first order.
+    private var deletedEntries: [TrashEntry] {
+        trashService.entries.filter { $0.replacementBytes == 0 }
+    }
+
+    /// Originals a shrink replaced with a smaller HD copy, left in the bin
+    /// only because the shrink itself queues them. `replacementBytes > 0`
+    /// already marks this, so the split needs no new data. Filtering
+    /// preserves `trashService.entries`' own newest-first order.
+    private var shrunkEntries: [TrashEntry] {
+        trashService.entries.filter { $0.replacementBytes > 0 }
+    }
+
+    /// One section's grid. `deletedEntries` and `shrunkEntries` each get
+    /// their own, so the two never share a row.
+    private func grid(for entries: [TrashEntry]) -> some View {
+        LazyVGrid(columns: columns, spacing: 2) {
+            ForEach(entries, id: \.assetKey) { entry in
+                TrashCell(
+                    entry: entry,
+                    trashService: trashService,
+                    onRestoreResult: handleRestoreResult,
+                    onPreviewRequested: { Usage.shared.binPreviewOpened(); previewTarget = PreviewTarget(id: entry.assetKey) }
+                )
+            }
+        }
+    }
+
+    /// A small, plain title above a section's grid, in the same voice as
+    /// a system `List` section header. This screen is a `ScrollView`, not
+    /// a `List`, so it draws its own instead of getting one for free.
+    private func sectionHeader(_ title: String) -> some View {
+        Text(title.uppercased())
+            .font(.footnote.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 16)
+            .padding(.top, 16)
+            .padding(.bottom, 6)
+            // Lets VoiceOver announce this as a header and jump between
+            // sections with the rotor, the same navigation a sighted user
+            // gets for free from the visual grouping.
+            .accessibilityAddTraits(.isHeader)
+    }
+
+    /// Explains the "Shrunk" section once, under its own `sectionHeader`,
+    /// not per cell: the small HD copy already exists in Photos, so this
+    /// row is not the app deleting something the user did not ask for. A
+    /// full-width `secondarySystemBackground` band, edge to edge like the
+    /// grid below it, not an inset card. `sectionHeader("Shrunk")` (above,
+    /// at this property's call site) carries the "SHRUNK" heading and its
+    /// own `.isHeader` trait, as a separate view from this band — the
+    /// owner's call, back over a combined heading+note row on one line.
+    /// `TrashCell` also keeps its own per-item "Shrunk" badge — the owner
+    /// wants that label on every item, so the section header, this band,
+    /// and the badge all say the same thing, deliberately.
+    private var shrunkExplainer: some View {
+        Text("HD copies are already in Photos. These are the full-size originals.")
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(Color(uiColor: .secondarySystemBackground))
+            .padding(.top, 2)
+            .padding(.bottom, 10)
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("trash_shrunk_explainer")
     }
 
     // MARK: - Header count
@@ -145,7 +260,7 @@ struct TrashView: View {
                     .accessibilityLabel("\(Fmt.bytes(trashService.reclaimedBytes)) reclaimed all time, across every bin empty")
             }
             if restoreFailed {
-                Text("Couldn't restore that video. Tap it again.")
+                Text("Couldn't restore that item. Tap it again.")
                     .foregroundStyle(.red)
                     .accessibilityIdentifier("trash_restore_failed")
             }
@@ -188,20 +303,39 @@ struct TrashView: View {
 
     // MARK: - Empty Bin button
 
+    /// Owner's call: keep the original look — red "Empty Bin" text on a
+    /// glass capsule, exactly what the old `.bottomBar` toolbar item drew
+    /// (`role: .destructive` + `.tint(.red)`; the bottom bar itself
+    /// supplied the glass capsule then). `.buttonStyle(.glass)` supplies
+    /// that same capsule explicitly now that this button sits in
+    /// `binChin` instead of a toolbar. Full width and `.controlSize(.large)`
+    /// carry over from the chin redesign; the color and material are
+    /// otherwise unchanged from HEAD.
     private var emptyButton: some View {
         Button(role: .destructive) {
             Task { await performEmpty() }
         } label: {
-            if isEmptying {
-                HStack(spacing: 8) {
-                    ProgressView()
-                    Text("Emptying\u{2026}")
+            // The `.frame(maxWidth: .infinity)` belongs on the label, not
+            // only on the button. A button style sizes its background to
+            // the label's own reported width; a frame applied outside the
+            // button leaves the fill shrink-wrapped around the text,
+            // centered in extra empty space instead of actually filling
+            // the chin edge to edge.
+            Group {
+                if isEmptying {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                        Text("Emptying\u{2026}")
+                    }
+                } else {
+                    Text("Empty Bin")
                 }
-            } else {
-                Text("Empty Bin")
             }
+            .frame(maxWidth: .infinity)
         }
-        .tint(.red)   // `role: .destructive` alone does not render red in the bottom bar.
+        .buttonStyle(.glass)
+        .tint(.red)   // `role: .destructive` alone does not render red on `.glass`, same as the old bottom-bar comment.
+        .controlSize(.large)
         .disabled(trashService.count == 0 || isEmptying)
         .accessibilityIdentifier("trash_empty")
         .accessibilityLabel("Empty bin")
@@ -210,19 +344,57 @@ struct TrashView: View {
             : "No videos are queued")
     }
 
-    // MARK: - Footer explainer
+    // MARK: - Bottom chin
 
-    /// Shown only while the bin holds at least one item.
-    private var footerExplainer: some View {
+    /// "Emptying the bin moves these…" — normally lives in `binChin`.
+    /// Extracted so `TrashView.body` can show the same view, carrying the
+    /// same `trash_explainer` identifier, in the scroll content instead at
+    /// an accessibility Dynamic Type size. Only one of the two call sites
+    /// is ever in the tree at once (`binChin`'s and `body`'s conditions on
+    /// `dynamicTypeSize.isAccessibilitySize` are exact opposites), so the
+    /// identifier always resolves to exactly one element.
+    private var explainerText: some View {
         Text("Emptying the bin moves these to Recently Deleted in Photos. They stay there 30 days, or until you delete them from there.")
-        .accessibilityIdentifier("trash_explainer")
-        .font(.footnote)
-        .foregroundStyle(.secondary)
-        .multilineTextAlignment(.center)
-        .frame(maxWidth: .infinity)
-        .padding(.horizontal, 24)
-        .padding(.top, 20)
-        .padding(.bottom, 12)
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+            .multilineTextAlignment(.center)
+            .fixedSize(horizontal: false, vertical: true)   // wraps under large Dynamic Type instead of clipping
+            .accessibilityIdentifier("trash_explainer")
+    }
+
+    /// The bin's bottom chin, in `.safeAreaInset(edge: .bottom)` on the
+    /// `ScrollView`. Owner's ask: a solid bar, so Empty Bin cannot end up
+    /// over a bright photo behind it, and so this explainer is always on
+    /// screen instead of scrolled away with the old `footerExplainer`.
+    /// `TrashView.body` shows this only while the bin holds something.
+    private var binChin: some View {
+        VStack(spacing: 0) {
+            Divider()
+            VStack(spacing: 12) {
+                emptyButton
+                // At an accessibility Dynamic Type size the button alone
+                // can already need the chin's full height; the explainer
+                // moves into the scroll content below the grid instead
+                // (`TrashView.body`), so it never gets cramped or clipped
+                // here.
+                if !dynamicTypeSize.isAccessibilitySize {
+                    explainerText
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 12)
+            .padding(.bottom, 8)
+        }
+        // `.bar` is a translucent blur Material — a bright cell behind it
+        // bleeds through and its vibrancy tints the explainer text, which
+        // is exactly what this chin exists to prevent. `systemBackground`
+        // is opaque, and resolves dynamically to this sheet's own
+        // elevated dark background (the sheet is presented, not the base
+        // window, so iOS already resolves this color one shade lighter
+        // than the app behind it), which is what makes the chin read as
+        // the bottom half of the same sheet chrome instead of a floating
+        // bar over the grid.
+        .background(Color(uiColor: .systemBackground))
     }
 
     /// Calls `emptyBin()`, which calls PhotoKit's delete. This is the only
@@ -338,7 +510,10 @@ private struct TrashCell: View {
             // `replacementBytes` is the size of the 1080p copy that replaced
             // this original. It is zero for a row that did not come from a
             // shrink. A positive value marks a row whose original the user
-            // did not choose to delete directly.
+            // did not choose to delete directly. The owner wants this badge
+            // kept on every cell, even though `TrashView`'s "Shrunk" section
+            // header and row already say the same thing for the section as
+            // a whole.
             .overlay(alignment: .topLeading) {
                 if entry.replacementBytes > 0 {
                     Text("Shrunk")
@@ -389,6 +564,13 @@ private struct TrashCell: View {
             // `trash_restore_<assetKey>` on `restoreGlyph`.
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("trash_preview_\(entry.assetKey)")
+            // No ", shrunk original" suffix here. The restored `Shrunk`
+            // badge above is its own accessibility element, with its own
+            // longer label ("Shrunk: the original of a video Cloudfull
+            // replaced with a smaller copy") — `.accessibilityElement(children:
+            // .contain)` keeps it reachable as a separate stop, same as
+            // `restoreGlyph`. Adding the suffix here too would make
+            // VoiceOver say "shrunk" twice for the same cell.
             .accessibilityLabel(isDormant
                 ? "\(mediaNoun), not available right now"
                 : (isVideo ? "\(mediaNoun), \(durationText)" : mediaNoun))
@@ -409,8 +591,11 @@ private struct TrashCell: View {
     /// to this button, not to the cell's `onTapGesture`.
     private var restoreGlyph: some View {
         Button {
+            // Reads `replacementBytes` before the restore call, which
+            // deletes the SwiftData row and can invalidate this object.
+            let shrunkOriginal = entry.replacementBytes > 0
             let restored = trashService.restore(assetID: entry.assetKey)
-            if restored { Usage.shared.binRestore() }
+            if restored { Usage.shared.binRestore(shrunkOriginal: shrunkOriginal) }
             withAnimation { onRestoreResult(restored) }
         } label: {
             Image(systemName: "arrow.uturn.backward.circle.fill")
@@ -500,7 +685,11 @@ private struct TrashPreviewView: View {
             .safeAreaInset(edge: .bottom) {
                 HStack(spacing: 12) {
                     Button("Restore") {
-                        if trashService.restore(assetID: assetKey) { Usage.shared.binRestore() }
+                        // Reads `replacementBytes` before the restore call,
+                        // which deletes the SwiftData row and can
+                        // invalidate the matching entry.
+                        let shrunkOriginal = (trashService.entries.first { $0.assetKey == assetKey }?.replacementBytes ?? 0) > 0
+                        if trashService.restore(assetID: assetKey) { Usage.shared.binRestore(shrunkOriginal: shrunkOriginal) }
                         dismiss()
                     }
                     .buttonStyle(.borderedProminent)
