@@ -14,7 +14,8 @@ record carries a random ID that the app generates once when it is first
 installed. This ID does not identify a person: it is not linked to a name, an
 email address, or an Apple Account. The app does not send a record when it
 runs in the iOS Simulator, and it does not send one during an automated UI
-test run. A record also never reaches the developer if the phone is not
+test run. A copy of the app built with a different bundle ID (a fork) never sends
+one. A record also never reaches the developer if the phone is not
 signed into iCloud, because it has nowhere to go.
 
 ## What is sent

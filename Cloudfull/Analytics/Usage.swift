@@ -663,7 +663,11 @@ final class Usage {
     /// This is a plain constant because an `INFOPLIST_KEY_` for a custom
     /// key is silently dropped by Xcode's generated Info.plist, and
     /// `SecTask` is macOS-only.
-    static let containerID: String? = "iCloud.com.cloudfull.app"
+    ///
+    /// Only the official app (bundle ID `com.cloudfull.app`) uploads. A fork
+    /// with a different bundle ID has no access to this container, and
+    /// `CKContainer(identifier:)` stops the app for a container it cannot use.
+    static let containerID: String? = Bundle.main.bundleIdentifier == "com.cloudfull.app" ? "iCloud.com.cloudfull.app" : nil
 
     /// Called when the app goes to the background. Ends the session,
     /// queues it, and uploads everything queued, off the main actor.
