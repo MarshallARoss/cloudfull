@@ -111,7 +111,9 @@ def main():
     print(f"  keep source photos: doubleTap={C.get('keepSource.photos.doubleTap',0)} rail={C.get('keepSource.photos.rail',0)}   videos: doubleTap={C.get('keepSource.videos.doubleTap',0)} rail={C.get('keepSource.videos.rail',0)}")
     dels = C.get('action.videos.delete',0)+C.get('action.photos.delete',0)
     pulled = C.get('keepPulledFromBin.videos',0)+C.get('keepPulledFromBin.photos',0)
-    print(f"  bin restores (a real tap on Restore): {C.get('bin.restore',0)}   = {pct(C.get('bin.restore',0), dels)} of deletes")
+    restoreByKind = {k[len("bin.restore."):]: n for k,n in C.items() if k.startswith("bin.restore.")}
+    print(f"  bin restores (a real tap on Restore): {C.get('bin.restore',0)}   = {pct(C.get('bin.restore',0), dels)} of deletes"
+          f"   shrunk={restoreByKind.get('shrunk',0)} deleted={restoreByKind.get('deleted',0)}")
     print(f"  keeps that pulled something back out of the bin: {pulled}   = {pct(pulled, dels)} of deletes")
     for m in ("videos","photos"):
         ad = {k: C.get(f"afterDelete.{m}.{k}",0) for k in ("back","swipe","stay")}; t = sum(ad.values())
@@ -266,7 +268,7 @@ def main():
     for lit in _re.findall(r"""C\.get\(f?['"]([^'"]+)['"]""", src): named.add(_re.sub(r"\{[^}]*\}", "*", lit))
     import fnmatch as _fn
     # Key families the script matches with `startswith`, instead of naming each key.
-    scanned = ["setting.", "filterOn.", "filterOff.", "sortChanged.", "shareTarget", "shareTargetRaw.", "shareKind.", "shrink.originalKept.", "notificationTap.", "deleted.videos.res.", "deleted.photos.res.", "video.served.", "daysToFirst.", "settingsLink.", "tip.tapped.", "tip.outcome.", "tip.unavailable."]
+    scanned = ["setting.", "filterOn.", "filterOff.", "sortChanged.", "shareTarget", "shareTargetRaw.", "shareKind.", "shrink.originalKept.", "notificationTap.", "deleted.videos.res.", "deleted.photos.res.", "video.served.", "daysToFirst.", "settingsLink.", "tip.tapped.", "tip.outcome.", "tip.unavailable.", "bin.restore."]
     unread = sorted(k for k in C if k not in named and not any(_fn.fnmatch(k, n) for n in named if "*" in n) and not any(k.startswith(p) for p in scanned))
     if unread: print("  counts not read by this script: " + "  ".join(f"{k}={C[k]}" for k in unread))
     # Lists the facts whose names do not appear in this file. A name

@@ -306,8 +306,15 @@ final class Usage {
         firstEver("binEmpty")
     }
     /// A tap on Restore in the bin. A Keep that pulls an item back out
-    /// does not count here; see `keepPulledFromBin`.
-    func binRestore() { bump("bin.restore") }
+    /// does not count here; see `keepPulledFromBin`. `bin.restore` stays
+    /// the total, for continuity with older data. `shrunkOriginal` also
+    /// splits it into `bin.restore.shrunk` and `bin.restore.deleted`, to
+    /// measure whether people still restore shrunk originals after the
+    /// bin's "Shrunk" section (plan.md #26).
+    func binRestore(shrunkOriginal: Bool) {
+        bump("bin.restore")
+        bump(shrunkOriginal ? "bin.restore.shrunk" : "bin.restore.deleted")
+    }
     /// Counts a Keep on an item that is in the bin queue. The Keep removes
     /// the item from the queue.
     func keepPulledFromBin(mode: Mode) { bump("keepPulledFromBin.\(mode.rawValue)") }

@@ -591,8 +591,11 @@ private struct TrashCell: View {
     /// to this button, not to the cell's `onTapGesture`.
     private var restoreGlyph: some View {
         Button {
+            // Reads `replacementBytes` before the restore call, which
+            // deletes the SwiftData row and can invalidate this object.
+            let shrunkOriginal = entry.replacementBytes > 0
             let restored = trashService.restore(assetID: entry.assetKey)
-            if restored { Usage.shared.binRestore() }
+            if restored { Usage.shared.binRestore(shrunkOriginal: shrunkOriginal) }
             withAnimation { onRestoreResult(restored) }
         } label: {
             Image(systemName: "arrow.uturn.backward.circle.fill")
@@ -682,7 +685,11 @@ private struct TrashPreviewView: View {
             .safeAreaInset(edge: .bottom) {
                 HStack(spacing: 12) {
                     Button("Restore") {
-                        if trashService.restore(assetID: assetKey) { Usage.shared.binRestore() }
+                        // Reads `replacementBytes` before the restore call,
+                        // which deletes the SwiftData row and can
+                        // invalidate the matching entry.
+                        let shrunkOriginal = (trashService.entries.first { $0.assetKey == assetKey }?.replacementBytes ?? 0) > 0
+                        if trashService.restore(assetID: assetKey) { Usage.shared.binRestore(shrunkOriginal: shrunkOriginal) }
                         dismiss()
                     }
                     .buttonStyle(.borderedProminent)
