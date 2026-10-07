@@ -176,13 +176,23 @@ final class SyncObserver: ObservableObject {
     /// decks to recompute their pool counts. In that order, so the
     /// resolver's shield set is current before `TrashService` reads it.
     ///
-    /// (2) and (3) run only when the Liked or Trash row count actually
-    /// changed since the last pass. An import that only touched
+    /// (2) always runs. A row count alone cannot stand in for "the bin
+    /// needs to reload": an import that only fills a `cloudKey` on an
+    /// already-queued row, or merges a remote delete of a row this
+    /// session still holds a stale reference to, changes nothing this
+    /// method could count, and skipping `handleRemoteChange()` would
+    /// leave `TrashService.entries` holding what could be a dead
+    /// `TrashEntry`. `handleRemoteChange()`'s own `load()` rebuilds
+    /// `entriesByLiveKey` from a fresh fetch regardless, so this call is
+    /// never wasted even when nothing actually changed.
+    ///
+    /// (3) runs only when the Liked or Trash row count actually changed
+    /// since the last pass. An import that only touched
     /// `SeenEntry`/`PhotoSeenEntry` rows — the common case while two
-    /// devices are both active — needs neither: `AssetKeyResolver`
-    /// already skips its own `.pending` detour for such an import (see
-    /// `refreshAfterRemoteChange()`), and this check keeps the bin and
-    /// the decks from reloading for no visible change either.
+    /// devices are both active — needs neither the resolver's `.pending`
+    /// detour (see `refreshAfterRemoteChange()`) nor a pool-count
+    /// reload, so this check keeps the decks from reloading for no
+    /// visible change.
     private func refresh() async {
         await AssetKeyResolver.shared.refreshAfterRemoteChange()
 
@@ -193,8 +203,8 @@ final class SyncObserver: ObservableObject {
         lastRefreshedLikedCount = liked
         lastRefreshedTrashCount = trashCount
 
+        trash?.handleRemoteChange()
         if likedOrTrashChanged {
-            trash?.handleRemoteChange()
             deck?.refreshPoolAfterExternalChange()
             PhotoDeck.shared.refreshPoolAfterExternalChange()
         }
