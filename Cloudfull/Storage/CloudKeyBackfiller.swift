@@ -98,10 +98,10 @@ actor CloudKeyBackfiller {
         #if DEBUG
         FetchCounters.swiftData += 4
         #endif
-        let seenRows = (try? modelContext.fetch(seenNilDescriptor)) ?? []
-        let likedRows = (try? modelContext.fetch(likedNilDescriptor)) ?? []
-        let trashRows = (try? modelContext.fetch(trashNilDescriptor)) ?? []
-        let photoSeenRows = (try? modelContext.fetch(photoSeenNilDescriptor)) ?? []
+        var seenRows = (try? modelContext.fetch(seenNilDescriptor)) ?? []
+        var likedRows = (try? modelContext.fetch(likedNilDescriptor)) ?? []
+        var trashRows = (try? modelContext.fetch(trashNilDescriptor)) ?? []
+        var photoSeenRows = (try? modelContext.fetch(photoSeenNilDescriptor)) ?? []
 
         // An asset can appear as both a `SeenEntry` and a `TrashEntry`. One
         // mapping call resolves the key for both rows.
@@ -143,6 +143,13 @@ actor CloudKeyBackfiller {
                 await Task.yield()
             }
         }
+
+        // A remote import can delete a fetched row while the chunk loop
+        // above yields. Drop dead rows before any read or write.
+        seenRows = seenRows.filter { $0.modelContext != nil && !$0.isDeleted }
+        likedRows = likedRows.filter { $0.modelContext != nil && !$0.isDeleted }
+        trashRows = trashRows.filter { $0.modelContext != nil && !$0.isDeleted }
+        photoSeenRows = photoSeenRows.filter { $0.modelContext != nil && !$0.isDeleted }
 
         for row in seenRows {
             if let cloudKey = cloudKeyByLocalID[row.assetKey] { row.cloudKey = cloudKey }
