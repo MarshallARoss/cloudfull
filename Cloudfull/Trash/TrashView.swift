@@ -194,11 +194,19 @@ struct TrashView: View {
     private func grid(for entries: [TrashEntry]) -> some View {
         LazyVGrid(columns: columns, spacing: 2) {
             ForEach(entries, id: \.assetKey) { entry in
+                // `entries` is already `.isLive`-filtered (`deletedEntries`/
+                // `shrunkEntries`), so reading `entry.assetKey` here, at
+                // `ForEach`'s own render time, is safe. The closure below
+                // can fire much later, after a remote import may have
+                // invalidated `entry`; it captures the plain `String`
+                // value instead of the row, so there is nothing left to
+                // read unsafely by then.
+                let assetKey = entry.assetKey
                 TrashCell(
                     entry: entry,
                     trashService: trashService,
                     onRestoreResult: handleRestoreResult,
-                    onPreviewRequested: { Usage.shared.binPreviewOpened(); previewTarget = PreviewTarget(id: entry.assetKey) }
+                    onPreviewRequested: { Usage.shared.binPreviewOpened(); previewTarget = PreviewTarget(id: assetKey) }
                 )
             }
         }
@@ -478,6 +486,26 @@ private struct TrashCell: View {
     /// glyph.
     let onPreviewRequested: () -> Void
 
+    /// Captured once, when this cell is created — `body` below only ever
+    /// builds `cellBody` while `entry.isLive`, so this read is safe. Every
+    /// closure on this cell (`.task`, the tap gesture, the "Preview"
+    /// accessibility action, `restoreGlyph`'s own action) can run after a
+    /// remote import invalidates `entry`, sometimes after its own
+    /// `await`. Reading `entry.assetKey`/`entry.mediaKind` again at that
+    /// point would be a SwiftData fatal error; these plain copies are
+    /// used there instead. See `TrashEntry.isLive`.
+    private let assetKey: String
+    private let mediaKind: String
+
+    init(entry: TrashEntry, trashService: TrashService, onRestoreResult: @escaping (Bool) -> Void, onPreviewRequested: @escaping () -> Void) {
+        self.entry = entry
+        self.trashService = trashService
+        self.onRestoreResult = onRestoreResult
+        self.onPreviewRequested = onPreviewRequested
+        self.assetKey = entry.assetKey
+        self.mediaKind = entry.mediaKind
+    }
+
     @State private var thumbnail: UIImage?
     @State private var durationText = ""
     private let library = PhotoLibraryService.shared
@@ -487,13 +515,13 @@ private struct TrashCell: View {
     /// only after a liveness check confirms the asset is missing.
     /// `entry.dormantSince` only controls when the row leaves the queue.
     private var isDormant: Bool {
-        !trashService.isLive(assetKey: entry.assetKey)
+        !trashService.isLive(assetKey: assetKey)
     }
 
     /// Duration applies only to a video. `PHAsset.duration` reads 0 for a
     /// photo, so the overlay and label skip duration entirely for a photo
     /// row instead of showing "0:00".
-    private var isVideo: Bool { entry.mediaKind != TrashMediaKind.photo.rawValue }
+    private var isVideo: Bool { mediaKind != TrashMediaKind.photo.rawValue }
     private var mediaNoun: String { isVideo ? "Video" : "Photo" }
 
     var body: some View {
@@ -559,7 +587,7 @@ private struct TrashCell: View {
                         .background(.black.opacity(0.55), in: Capsule())
                         .padding(.leading, 4)
                         .padding(.top, 4)
-                        .accessibilityIdentifier("trash_shrunk_\(entry.assetKey)")
+                        .accessibilityIdentifier("trash_shrunk_\(assetKey)")
                         .accessibilityLabel("Shrunk: the original of a video Cloudfull replaced with a smaller copy")
                 }
             }
@@ -572,25 +600,35 @@ private struct TrashCell: View {
                         .padding(.vertical, 3)
                         .background(.black.opacity(0.55), in: Capsule())
                         .padding(.top, 4)
-                        .accessibilityIdentifier("trash_dormant_\(entry.assetKey)")
+                        .accessibilityIdentifier("trash_dormant_\(assetKey)")
                 }
             }
             .contentShape(Rectangle())
             .onTapGesture {
                 // A dormant asset does not resolve, so no preview can
                 // load. The `.task` below skips the thumbnail and
-                // duration fetch for the same reason.
-                guard !isDormant else { return }
+                // duration fetch for the same reason. `entry.isLive` is
+                // checked too: this closure can still fire after a
+                // remote import invalidates `entry`, since it is a
+                // separate `Button`-less gesture SwiftUI can keep
+                // attached to a stale cell for a moment.
+                guard entry.isLive, !isDormant else { return }
                 onPreviewRequested()
             }
             .task {
                 // A dormant row's stored key names nothing right now. Skip
                 // the PhotoKit fetch instead of fetching a thumbnail or
                 // duration that comes back empty.
-                guard !isDormant else { return }
-                thumbnail = await library.thumbnail(for: entry.assetKey, side: 200)
+                guard entry.isLive, !isDormant else { return }
+                thumbnail = await library.thumbnail(for: assetKey, side: 200)
+                // Re-checked after the await: a remote import can
+                // invalidate `entry` while that PhotoKit fetch is in
+                // flight. `assetKey`/`isVideo` below are already the
+                // plain copies, never `entry` itself, so nothing past
+                // this guard reads an unsafe property either way.
+                guard entry.isLive else { return }
                 if isVideo {
-                    durationText = Fmt.duration(library.asset(for: entry.assetKey)?.duration ?? 0)
+                    durationText = Fmt.duration(library.asset(for: assetKey)?.duration ?? 0)
                 }
             }
             // Uses `.accessibilityElement(children: .contain)` so
@@ -598,7 +636,7 @@ private struct TrashCell: View {
             // on this group replaces child identifiers, which hides
             // `trash_restore_<assetKey>` on `restoreGlyph`.
             .accessibilityElement(children: .contain)
-            .accessibilityIdentifier("trash_preview_\(entry.assetKey)")
+            .accessibilityIdentifier("trash_preview_\(assetKey)")
             // No ", shrunk original" suffix here. The restored `Shrunk`
             // badge above is its own accessibility element, with its own
             // longer label ("Shrunk: the original of a video Cloudfull
@@ -616,7 +654,7 @@ private struct TrashCell: View {
             // and VoiceOver cannot reach Restore. A named action gives
             // the preview.
             .accessibilityAction(named: "Preview") {
-                guard !isDormant else { return }
+                guard entry.isLive, !isDormant else { return }
                 onPreviewRequested()
             }
     }
@@ -626,10 +664,15 @@ private struct TrashCell: View {
     /// to this button, not to the cell's `onTapGesture`.
     private var restoreGlyph: some View {
         Button {
-            // Reads `replacementBytes` before the restore call, which
-            // deletes the SwiftData row and can invalidate this object.
+            // This action can fire after a remote import invalidates
+            // `entry`, since SwiftUI can keep a button attached to a
+            // stale cell for a moment. Check `entry.isLive` before any
+            // other read, then read `replacementBytes` before the
+            // restore call, which deletes the SwiftData row and can
+            // invalidate this object too.
+            guard entry.isLive else { return }
             let shrunkOriginal = entry.replacementBytes > 0
-            let restored = trashService.restore(assetID: entry.assetKey)
+            let restored = trashService.restore(assetID: assetKey)
             if restored { Usage.shared.binRestore(shrunkOriginal: shrunkOriginal) }
             withAnimation { onRestoreResult(restored) }
         } label: {
@@ -641,7 +684,7 @@ private struct TrashCell: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityIdentifier("trash_restore_\(entry.assetKey)")
+        .accessibilityIdentifier("trash_restore_\(assetKey)")
         .accessibilityLabel(isDormant
             ? "Restore \(mediaNoun.lowercased()), not available right now"
             : (isVideo ? "Restore \(mediaNoun.lowercased()), \(durationText)" : "Restore \(mediaNoun.lowercased())"))
