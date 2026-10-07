@@ -61,6 +61,42 @@ final class M7Tests: FeedUITestCase {
         )
     }
 
+    // MARK: - Step D: seen matches on cloudKey
+
+    /// Seeds one foreign `SeenEntry` for the newest video, stamped with
+    /// another device's id and that video's cloud key
+    /// (`-cloudfull-seed-foreign-seen`), and proves it keeps that video
+    /// off screen for 10 swipes, the same as a directly-seen video
+    /// would. Remote seen rows apply at the next deal, which a reset
+    /// launch's first deal already is.
+    func testForeignSeenRowCountsAsSeen() throws {
+        app.launchArguments = ["-cloudfull-reset-deck-state", "-cloudfull-local-only", "-cloudfull-seed-foreign-seen"]
+        app.launch()
+        grantPhotoAccessIfAsked()
+
+        XCTAssertTrue(
+            waitFor(timeout: 20) { self.seenForeignCount() == 1 },
+            "Expected seen_foreign_1 (the foreign seen row mapped to a live local id) within 20s; " +
+            "last read \(String(describing: seenForeignCount()))"
+        )
+        guard let targetID = foreignSeenTargetID() else {
+            XCTFail("foreign_seen_target_ probe never published a target id (library may have no video, " +
+                     "or PhotoKit could not map its cloud key)")
+            return
+        }
+
+        guard let start = centeredPage(timeout: 20) else {
+            XCTFail("No centered page_ element found at start")
+            return
+        }
+
+        let pages = recordPages(swipes: 10, from: start)
+        XCTAssertFalse(
+            pages.contains { $0.assetID == targetID },
+            "The foreign-seen target (\(targetID)) appeared on screen within 10 swipes: \(pages)"
+        )
+    }
+
     // MARK: - Probes
 
     /// Reads "trash_rows_<trash>_<dormant>", a `GateProbes` probe backed
@@ -92,5 +128,21 @@ final class M7Tests: FeedUITestCase {
         guard parts.count == 3,
               let seen = Int(parts[0]), let liked = Int(parts[1]), let trash = Int(parts[2]) else { return nil }
         return (seen, liked, trash)
+    }
+
+    /// Reads "seen_foreign_<n>", a `GateProbes` probe backed by
+    /// `SeenForeignProbe`.
+    private func seenForeignCount() -> Int? {
+        guard let identifier = elementSnapshots(withPrefix: "seen_foreign_").first?.identifier else { return nil }
+        return Int(identifier.dropFirst("seen_foreign_".count))
+    }
+
+    /// Reads "foreign_seen_target_<id>", a `GateProbes` probe backed by
+    /// `ForeignSeenSeedProbe`. "none" (no seed has run, or it could not
+    /// find a mappable target) reads as `nil`.
+    private func foreignSeenTargetID() -> String? {
+        guard let identifier = elementSnapshots(withPrefix: "foreign_seen_target_").first?.identifier else { return nil }
+        let value = String(identifier.dropFirst("foreign_seen_target_".count))
+        return value == "none" ? nil : value
     }
 }

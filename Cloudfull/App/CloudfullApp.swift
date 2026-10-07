@@ -60,6 +60,13 @@ struct CloudfullApp: App {
     /// argument in this file.
     static let seedForeignTrashArgument = "-cloudfull-seed-foreign-trash"
 
+    /// Seeds one foreign `SeenEntry` row through `SyncTestHarness`,
+    /// stamped with another device's id and the newest video's cloud
+    /// key. Lets `M7Tests.testForeignSeenRowCountsAsSeen` prove a
+    /// cross-device seen match keeps that video off screen. This is
+    /// DEBUG-only, like every other launch argument in this file.
+    static let seedForeignSeenArgument = "-cloudfull-seed-foreign-seen"
+
     /// Logs `auth_report_<PHAuthorizationStatus>` and exits immediately.
     /// Used by `scripts/gate_all.sh`'s round-start authorization check.
     /// Nothing else checks or restores Photos access between rounds. An
@@ -159,6 +166,13 @@ struct CloudfullApp: App {
         // pass runs.
         if ProcessInfo.processInfo.arguments.contains(Self.seedForeignTrashArgument) {
             SyncTestHarness.seedForeignTrash(container: CloudfullModelContainer.shared)
+        }
+        // Same pattern, for a cross-device seen match instead of a
+        // foreign bin row. This needs the photo library, not only the
+        // store, so it runs here rather than waiting on the backfill
+        // launcher's own authorization gate.
+        if ProcessInfo.processInfo.arguments.contains(Self.seedForeignSeenArgument) {
+            SyncTestHarness.seedForeignSeen(container: CloudfullModelContainer.shared)
         }
         // Rotate the keys here, before any view exists. The rotated rows
         // are then in place before `DeckViewModel.start()` deals the

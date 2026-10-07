@@ -1239,6 +1239,10 @@ final class KeepStore: ObservableObject {
 /// table, `PhotoSeenEntry`, so the two decks' seen memory never mixes.
 @ModelActor
 actor PhotoSeenStore {
+    /// Session cache, mirroring `SeenStore.foreignLocalByCloudKey`: cloud
+    /// key -> the local id it currently maps to.
+    private var foreignLocalByCloudKey: [String: String] = [:]
+
     /// A plain insert, with no fetch first to check the row is not
     /// already there. `PhotoSeenEntry` has no `#Index`, because the model
     /// is CloudKit-shaped. A check fetch scans the full table on each
@@ -1269,6 +1273,9 @@ actor PhotoSeenStore {
     /// This call grows with how much of the library the user has seen, so
     /// nothing may wait on it. `PhotoDeck.scheduleSeenLoad` runs it
     /// alongside the first deal, never before it.
+    ///
+    /// The result is the direct keys union the local ids every foreign
+    /// row's cloud key currently maps to (see `foreignMatches(in:)`).
     func allSeenKeys() -> Set<String> {
         // A fresh, throwaway context, not this actor's long-lived one.
         // The fetch creates one managed object per row, and a
@@ -1280,14 +1287,55 @@ actor PhotoSeenStore {
         // plain `Set<String>` survives.
         let context = ModelContext(modelContainer)
         let all = (try? context.fetch(FetchDescriptor<PhotoSeenEntry>())) ?? []
-        return Set(all.map(\.assetKey))
+        var result = Set(all.map(\.assetKey))
+        result.formUnion(foreignMatches(in: context).map(\.localID))
+        return result
     }
 
-    /// One batch delete, not a fetch-then-delete loop. At a cycle seam
-    /// this table holds one row per photo in the pool, so a fetch of
-    /// every row before the delete costs O(library).
+    /// Replaces the old single batch `delete(model:)` with a
+    /// fetch-limited loop: batch deletes are not reliably mirrored to
+    /// CloudKit. At a cycle seam this table can hold one row per photo
+    /// in the pool, so each pass only fetches up to 500 rows at a time,
+    /// not the whole table at once.
     func clearAllSeen() {
-        try? modelContext.delete(model: PhotoSeenEntry.self)
-        try? modelContext.save()
+        while true {
+            var descriptor = FetchDescriptor<PhotoSeenEntry>()
+            descriptor.fetchLimit = 500
+            guard let rows = try? modelContext.fetch(descriptor), !rows.isEmpty else { break }
+            for row in rows { modelContext.delete(row) }
+            try? modelContext.save()
+        }
+    }
+
+    /// The photo-side twin of `SeenStore.foreignMatches()`. Takes its
+    /// `ModelContext` as a parameter, rather than using this actor's own
+    /// long-lived one, so `allSeenKeys()` can read foreign rows through
+    /// the same throwaway context it already uses for the direct fetch.
+    /// See that method's own comment on why.
+    private func foreignMatches(in context: ModelContext) -> [(row: PhotoSeenEntry, localID: String)] {
+        let me = DeviceIdentity.current
+        let descriptor = FetchDescriptor<PhotoSeenEntry>(predicate: #Predicate {
+            $0.originDeviceID != me && $0.originDeviceID != "" && $0.cloudKey != nil
+        })
+        let rows = (try? context.fetch(descriptor)) ?? []
+        guard !rows.isEmpty else { return [] }
+
+        let uncachedKeys = Array(Set(rows.compactMap(\.cloudKey)).subtracting(foreignLocalByCloudKey.keys))
+        var offset = 0
+        while offset < uncachedKeys.count {
+            let end = min(offset + 200, uncachedKeys.count)
+            let mapped = PhotoLibraryService.localIdentifierMappings(forCloudIdentifiers: Array(uncachedKeys[offset..<end]))
+            foreignLocalByCloudKey.merge(mapped) { _, new in new }
+            offset = end
+        }
+
+        let out = rows.compactMap { row -> (row: PhotoSeenEntry, localID: String)? in
+            guard let cloudKey = row.cloudKey, let localID = foreignLocalByCloudKey[cloudKey] else { return nil }
+            return (row, localID)
+        }
+        #if DEBUG
+        SeenForeignProbe.mapped = out.count
+        #endif
+        return out
     }
 }

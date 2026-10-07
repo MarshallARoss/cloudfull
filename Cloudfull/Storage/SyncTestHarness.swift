@@ -57,5 +57,30 @@ enum SyncTestHarness {
 
         try? context.save()
     }
+
+    /// Backs `-cloudfull-seed-foreign-seen`. Takes the newest video's
+    /// local id, maps it to its cloud key, and inserts one `SeenEntry`
+    /// under a placeholder `assetKey`, stamped with another device's id
+    /// and that cloud key — the shape a real cross-device seen row has.
+    /// Publishes the target's local id through `ForeignSeenSeedProbe`,
+    /// so `M7Tests.testForeignSeenRowCountsAsSeen` can assert that id
+    /// never appears on screen, without hard-coding a fixture asset.
+    ///
+    /// Does nothing if the library has no video, or PhotoKit cannot map
+    /// its local id to a cloud key (no iCloud Photos). Either way, no
+    /// probe is published, and the test this backs would then wait out
+    /// its timeout rather than assert a false positive.
+    @MainActor
+    static func seedForeignSeen(container: ModelContainer) {
+        guard let targetID = PhotoLibraryService.allVideoIDsOffMain().last else { return }
+        let mapped = PhotoLibraryService.cloudIdentifierMappings(forLocalIdentifiers: [targetID])
+        guard let cloudKey = mapped[targetID] else { return }
+
+        let context = ModelContext(container)
+        context.insert(SeenEntry(assetKey: "FOREIGN-\(UUID().uuidString)/L0/001", cloudKey: cloudKey, originDeviceID: "OTHER-DEVICE"))
+        try? context.save()
+
+        ForeignSeenSeedProbe.shared.record(targetID)
+    }
 }
 #endif

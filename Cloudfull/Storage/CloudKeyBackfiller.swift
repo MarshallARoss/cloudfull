@@ -13,11 +13,13 @@ import os
 
 // MARK: - CloudKeyBackfiller
 
-/// Fills `cloudKey` on every `SeenEntry`, `LikedEntry`, and `TrashEntry` row
-/// that still has none. `DeckViewModel` and `TrashService` write these rows
-/// without a synchronous PhotoKit call, so a fresh row starts with
-/// `cloudKey == nil`. Without this backfill, a local-identifier rotation
-/// loses every shield and every queued delete.
+/// Fills `cloudKey` on every `SeenEntry`, `LikedEntry`, `TrashEntry`, and
+/// `PhotoSeenEntry` row that still has none. `DeckViewModel`, `PhotoDeck`,
+/// and `TrashService` write these rows without a synchronous PhotoKit
+/// call, so a fresh row starts with `cloudKey == nil`. Without this
+/// backfill, a local-identifier rotation loses every shield and every
+/// queued delete, and a seen row never cross-matches another device's
+/// copy of the same asset.
 ///
 /// This type uses `@ModelActor`, not a `Task.detached` against the main
 /// context. A `ModelContext` is not `Sendable`. Enumerating the library on
@@ -57,6 +59,7 @@ actor CloudKeyBackfiller {
         let seenNilDescriptor: FetchDescriptor<SeenEntry>
         let likedNilDescriptor: FetchDescriptor<LikedEntry>
         let trashNilDescriptor: FetchDescriptor<TrashEntry>
+        let photoSeenNilDescriptor: FetchDescriptor<PhotoSeenEntry>
         if let keys {
             // `#Predicate` needs an `Array`, and it captures a local
             // `let`, not the parameter itself.
@@ -64,30 +67,34 @@ actor CloudKeyBackfiller {
             seenNilDescriptor = FetchDescriptor<SeenEntry>(predicate: #Predicate { $0.cloudKey == nil && keyList.contains($0.assetKey) })
             likedNilDescriptor = FetchDescriptor<LikedEntry>(predicate: #Predicate { $0.cloudKey == nil && keyList.contains($0.assetKey) })
             trashNilDescriptor = FetchDescriptor<TrashEntry>(predicate: #Predicate { $0.cloudKey == nil && keyList.contains($0.assetKey) })
+            photoSeenNilDescriptor = FetchDescriptor<PhotoSeenEntry>(predicate: #Predicate { $0.cloudKey == nil && keyList.contains($0.assetKey) })
         } else {
             seenNilDescriptor = FetchDescriptor<SeenEntry>(predicate: #Predicate { $0.cloudKey == nil })
             likedNilDescriptor = FetchDescriptor<LikedEntry>(predicate: #Predicate { $0.cloudKey == nil })
             trashNilDescriptor = FetchDescriptor<TrashEntry>(predicate: #Predicate { $0.cloudKey == nil })
+            photoSeenNilDescriptor = FetchDescriptor<PhotoSeenEntry>(predicate: #Predicate { $0.cloudKey == nil })
         }
 
         // Check the row counts first. `fetchCount` does not load any row
         // data, so this step does no real work once every row has a key.
         #if DEBUG
-        FetchCounters.swiftData += 3
+        FetchCounters.swiftData += 4
         #endif
         let seenNilCount = (try? modelContext.fetchCount(seenNilDescriptor)) ?? 0
         let likedNilCount = (try? modelContext.fetchCount(likedNilDescriptor)) ?? 0
         let trashNilCount = (try? modelContext.fetchCount(trashNilDescriptor)) ?? 0
-        guard seenNilCount + likedNilCount + trashNilCount > 0 else {
+        let photoSeenNilCount = (try? modelContext.fetchCount(photoSeenNilDescriptor)) ?? 0
+        guard seenNilCount + likedNilCount + trashNilCount + photoSeenNilCount > 0 else {
             return Result(resolved: 0, pending: 0, total: 0)
         }
 
         #if DEBUG
-        FetchCounters.swiftData += 3
+        FetchCounters.swiftData += 4
         #endif
         let seenRows = (try? modelContext.fetch(seenNilDescriptor)) ?? []
         let likedRows = (try? modelContext.fetch(likedNilDescriptor)) ?? []
         let trashRows = (try? modelContext.fetch(trashNilDescriptor)) ?? []
+        let photoSeenRows = (try? modelContext.fetch(photoSeenNilDescriptor)) ?? []
 
         // An asset can appear as both a `SeenEntry` and a `TrashEntry`. One
         // mapping call resolves the key for both rows.
@@ -95,6 +102,7 @@ actor CloudKeyBackfiller {
         distinctKeys.formUnion(seenRows.map(\.assetKey))
         distinctKeys.formUnion(likedRows.map(\.assetKey))
         distinctKeys.formUnion(trashRows.map(\.assetKey))
+        distinctKeys.formUnion(photoSeenRows.map(\.assetKey))
 
         let keyList = Array(distinctKeys)
         var cloudKeyByLocalID: [String: String] = [:]
@@ -103,6 +111,18 @@ actor CloudKeyBackfiller {
             let end = min(offset + 200, keyList.count)
             let chunk = Array(keyList[offset..<end])
             let mapped = PhotoLibraryService.cloudIdentifierMappings(forLocalIdentifiers: chunk)
+            guard !mapped.isEmpty else {
+                // This chunk's 200 local ids mapped to nothing: the
+                // library almost certainly has no cloud identifiers
+                // available right now (no iCloud Photos). Mapping every
+                // later chunk would cost the same for the same result.
+                // Every row this pass has not already resolved stays
+                // nil and pending; the next launch tries again.
+                #if DEBUG
+                DiagnosticsLog.shared.log("CloudKeyBackfiller", "backfill_stopped_unmapped")
+                #endif
+                break
+            }
             cloudKeyByLocalID.merge(mapped) { _, new in new }
             offset = end
             if offset < keyList.count {
@@ -119,6 +139,9 @@ actor CloudKeyBackfiller {
         for row in trashRows {
             if let cloudKey = cloudKeyByLocalID[row.assetKey] { row.cloudKey = cloudKey }
         }
+        for row in photoSeenRows {
+            if let cloudKey = cloudKeyByLocalID[row.assetKey] { row.cloudKey = cloudKey }
+        }
 
         do {
             try modelContext.save()
@@ -128,7 +151,7 @@ actor CloudKeyBackfiller {
             // fetched row as pending, so the probe and
             // `CloudKeyBackfillLauncher` match what disk actually holds.
             Self.log.error("CloudKeyBackfiller failed to save resolved cloudKeys: \(error.localizedDescription, privacy: .public)")
-            let total = seenRows.count + likedRows.count + trashRows.count
+            let total = seenRows.count + likedRows.count + trashRows.count + photoSeenRows.count
             return Result(resolved: 0, pending: total, total: total)
         }
 
@@ -138,9 +161,11 @@ actor CloudKeyBackfiller {
         let resolved = seenRows.lazy.filter { $0.cloudKey != nil }.count
             + likedRows.lazy.filter { $0.cloudKey != nil }.count
             + trashRows.lazy.filter { $0.cloudKey != nil }.count
+            + photoSeenRows.lazy.filter { $0.cloudKey != nil }.count
         let pending = seenRows.lazy.filter { $0.cloudKey == nil }.count
             + likedRows.lazy.filter { $0.cloudKey == nil }.count
             + trashRows.lazy.filter { $0.cloudKey == nil }.count
+            + photoSeenRows.lazy.filter { $0.cloudKey == nil }.count
 
         return Result(resolved: resolved, pending: pending, total: resolved + pending)
     }

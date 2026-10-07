@@ -320,6 +320,52 @@ final class RotationProbe: ObservableObject {
     }
 }
 
+/// A DEBUG-read mirror of how many `SeenEntry`/`PhotoSeenEntry` rows
+/// another device inserted that currently map to a live local id on
+/// this device. `SeenStore.foreignMatches()` and `PhotoSeenStore`'s own
+/// twin each write `mapped` after every lookup. This is the same
+/// pattern `RowCountProbe.lastReclaimed` uses: a bare static mutation is
+/// invisible to SwiftUI, so this type copies it into a `@Published`
+/// property on a timer for `GateProbes` to read.
+@MainActor
+final class SeenForeignProbe: ObservableObject {
+    static let shared = SeenForeignProbe()
+
+    nonisolated(unsafe) static var mapped: Int = 0
+
+    @Published private(set) var count = 0
+
+    private var timer: Timer?
+
+    private init() {
+        timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.refresh() }
+        }
+        if let timer { RunLoop.main.add(timer, forMode: .common) }
+    }
+
+    private func refresh() {
+        if count != Self.mapped { count = Self.mapped }
+    }
+}
+
+/// Publishes the local id `SyncTestHarness.seedForeignSeen` just seeded
+/// a foreign `SeenEntry` row for, so `M7Tests.testForeignSeenRowCountsAsSeen`
+/// can assert that id never appears on screen without hard-coding a
+/// fixture asset. `GateProbes` renders it as `foreign_seen_target_`.
+@MainActor
+final class ForeignSeenSeedProbe: ObservableObject {
+    static let shared = ForeignSeenSeedProbe()
+
+    @Published private(set) var targetLocalID: String?
+
+    private init() {}
+
+    func record(_ localID: String) {
+        targetLocalID = localID
+    }
+}
+
 /// Store-derived probe values. Reads
 /// `CloudfullModelContainer.shared.mainContext` directly, so it works in
 /// every authorization state, including `.limited` and `.denied`, where
@@ -462,6 +508,8 @@ struct GateProbes: View {
     @ObservedObject private var counters = CounterProbe.shared
     @ObservedObject private var rows = RowCountProbe.shared
     @ObservedObject private var resolver = AssetKeyResolver.shared
+    @ObservedObject private var seenForeign = SeenForeignProbe.shared
+    @ObservedObject private var foreignSeenSeed = ForeignSeenSeedProbe.shared
 
     var body: some View {
         ZStack {
@@ -475,6 +523,8 @@ struct GateProbes: View {
             probe("space_probe_\(rows.pendingBytes)_\(rows.reclaimedBytes)")
             probe("trash_rows_\(rows.trash)_\(rows.dormantCount)")
             probe("trash_foreign_\(rows.foreignTrash)")
+            probe("seen_foreign_\(seenForeign.count)")
+            probe("foreign_seen_target_\(foreignSeenSeed.targetLocalID ?? "none")")
             // `RootView` removes `FeedView` in `.photos` mode. A
             // `main_stalls_` probe in `FeedView` is then unreachable. This
             // view keeps its own watchdog observation, so a stall does not
