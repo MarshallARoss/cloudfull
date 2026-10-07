@@ -89,8 +89,11 @@ enum CloudfullModelContainer {
         // Must run before either `ModelContainer` below opens
         // `syncedStoreURL`. See `StoreSplitMigrator` for why the order
         // matters: a 1.0 file still carries the local models' rows until
-        // this call moves them out.
-        StoreSplitMigrator.runIfNeeded()
+        // this call moves them out. `splitOK == false` means this
+        // attempt threw partway through, so the CloudKit branch below
+        // must not run this launch: the safety argument only holds once
+        // the split has actually finished.
+        let splitOK = StoreSplitMigrator.runIfNeeded()
 
         let syncedSchema = Schema(syncedModels)
         let localSchema = Schema(localModels)
@@ -103,7 +106,7 @@ enum CloudfullModelContainer {
         // passes both `schema:` and `cloudKitDatabase:` explicitly.
         let local = ModelConfiguration("local", schema: localSchema, url: localStoreURL, cloudKitDatabase: .none)
 
-        if useCloud, let containerID = cloudContainerID {
+        if splitOK, useCloud, let containerID = cloudContainerID {
             // `.automatic` reads the entitlement itself, so the container id
             // above acts as a gate, not a parameter.
             let synced = ModelConfiguration("default", schema: syncedSchema, url: syncedStoreURL, cloudKitDatabase: .automatic)
@@ -117,7 +120,9 @@ enum CloudfullModelContainer {
 
         let synced = ModelConfiguration("default", schema: syncedSchema, url: syncedStoreURL, cloudKitDatabase: .none)
         mode = .localOnly
-        if cloudContainerID == nil {
+        if !splitOK {
+            log.error("SwiftData store mode: local-only — the 1.0 store split did not finish this launch; retrying next launch")
+        } else if cloudContainerID == nil {
             log.notice("SwiftData store mode: local-only (no CloudKit container declared)")
         }
         do {

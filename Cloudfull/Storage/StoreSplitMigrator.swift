@@ -9,6 +9,7 @@
 import Foundation
 import SwiftData
 import Photos
+import os
 
 /// Moves the four local-only models (`DeckState`, `DeckOrder`,
 /// `PhotoDeckState`, `PhotoMetaRecord`) out of the 1.0 file
@@ -17,6 +18,13 @@ import Photos
 /// calls `runIfNeeded()` before it opens either file, so a device
 /// upgrading from 1.0 never exports a deck row or a cache row to
 /// CloudKit.
+///
+/// `runIfNeeded()` returns `false` if this launch's attempt threw
+/// partway through. `make()` must then open both configs `.none` for
+/// this launch (mode `.localOnly`), never CloudKit, however this build
+/// is declared: the safety argument above only holds once this pass has
+/// actually finished. The flag stays false, so the next launch retries
+/// from scratch.
 ///
 /// Why this order is safe: the CloudKit config only ever sees
 /// `default.store` after step 3g below has emptied the four local
@@ -30,14 +38,22 @@ import Photos
 enum StoreSplitMigrator {
 
     private static let flagKey = "storage.splitV1Done"
+    private static let log = Logger(subsystem: "com.cloudfull.app", category: "Storage")
 
-    static func runIfNeeded() {
-        if UserDefaults.standard.bool(forKey: flagKey) { return }
+    /// Returns `true` once the 1.0 file is safe for `make()` to open with
+    /// the narrower, synced-only schema — whether that is because this
+    /// call just finished the split, a prior launch already did, or this
+    /// is a fresh install with no 1.0 file to move rows out of. Returns
+    /// `false` only when this attempt threw partway through; see this
+    /// type's doc comment for what the caller must do then.
+    @discardableResult
+    static func runIfNeeded() -> Bool {
+        if UserDefaults.standard.bool(forKey: flagKey) { return true }
 
         guard FileManager.default.fileExists(atPath: CloudfullModelContainer.syncedStoreURL.path) else {
             // Fresh install. There is no 1.0 file to migrate rows out of.
             UserDefaults.standard.set(true, forKey: flagKey)
-            return
+            return true
         }
 
         let start = Date()
@@ -84,10 +100,14 @@ enum StoreSplitMigrator {
                 try legacyContext.save()
             }
         } catch {
+            // Logged in every build, not only DEBUG: `make()` reacts to
+            // this failure by forcing local-only for the launch, which a
+            // release build must still be able to diagnose.
+            log.error("store_split_failed_\(error.localizedDescription, privacy: .public)")
             #if DEBUG
             DiagnosticsLog.shared.log("Storage", "store_split_failed_\(error.localizedDescription)")
             #endif
-            return   // Flag stays false. The next launch retries from scratch.
+            return false   // Flag stays false. The next launch retries from scratch.
         }
 
         UserDefaults.standard.set(true, forKey: flagKey)
@@ -98,6 +118,7 @@ enum StoreSplitMigrator {
             "store_split_done_\(ms)_\(deckCopied ? 1 : 0)_\(orderCopied ? 1 : 0)_\(photoDeckCopied ? 1 : 0)"
         )
         #endif
+        return true
     }
 
     // MARK: - Deck-state copy (step 3c)
@@ -195,7 +216,14 @@ enum StoreSplitMigrator {
         var keys = Set<String>()
         keys.formUnion(trashRows.map(\.assetKey))
         keys.formUnion(likedRows.map(\.assetKey))
-        let keyList = Array(keys)
+        // Caps the main-thread PhotoKit round trip at 2,000 rows. This
+        // runs before the first frame, inside `CloudfullModelContainer`'s
+        // static initializer; an unexpectedly large bin or keep table
+        // here could otherwise trip `MainThreadWatchdog` or crash-loop
+        // the launch. A row this cap leaves out keeps `cloudKey == nil`
+        // and stays pending: `CloudKeyBackfiller` does the same mapping
+        // off the main actor on this and every later launch.
+        let keyList = Array(keys.prefix(2000))
 
         var cloudKeyByLocalID: [String: String] = [:]
         var offset = 0
