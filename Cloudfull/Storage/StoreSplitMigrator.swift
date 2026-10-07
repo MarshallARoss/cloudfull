@@ -73,15 +73,6 @@ enum StoreSplitMigrator {
             return true
         }
 
-        // A partial earlier attempt can have already written some of
-        // `local.store` before this launch's own process died or threw.
-        // Left in place, `copy*IfNeeded`'s "does the destination already
-        // have a row" check would treat a stale, or only partially
-        // committed, write as "already copied" and skip copying this
-        // device's own real deck rows out of the 1.0 file. Every attempt
-        // starts from a clean slate instead.
-        deleteLocalStoreIfExists()
-
         let start = Date()
         var deckCopied = false, orderCopied = false, photoDeckCopied = false
 
@@ -105,6 +96,17 @@ enum StoreSplitMigrator {
                 )
                 let legacy = try ModelContainer(for: fullSchema, configurations: legacyConfig)
                 let legacyContext = ModelContext(legacy)
+
+                // A partial earlier attempt can have already written some of
+                // `local.store`. Left in place, `copy*IfNeeded`'s "does the
+                // destination already have a row" check would skip copying
+                // this device's real deck rows. But wipe it ONLY while the
+                // 1.0 file still holds deck rows: if an earlier attempt's
+                // step 3g already committed (and only the done flag was
+                // lost), `local.store` holds the only copy of them.
+                if try legacyHoldsDeckRows(legacyContext) {
+                    deleteLocalStoreIfExists()
+                }
 
                 let localConfig = ModelConfiguration(
                     "local", schema: localSchema, url: CloudfullModelContainer.localStoreURL, cloudKitDatabase: .none
@@ -319,6 +321,14 @@ enum StoreSplitMigrator {
     /// "already copied" and never be replaced with a fresh copy from
     /// `default.store`. Each candidate not existing is the common case
     /// (no prior partial attempt) and not an error.
+    /// True while the 1.0 file still holds any deck-model row, which
+    /// means no earlier attempt got as far as committing step 3g.
+    private static func legacyHoldsDeckRows(_ context: ModelContext) throws -> Bool {
+        try context.fetchCount(FetchDescriptor<DeckState>()) > 0
+            || context.fetchCount(FetchDescriptor<DeckOrder>()) > 0
+            || context.fetchCount(FetchDescriptor<PhotoDeckState>()) > 0
+    }
+
     private static func deleteLocalStoreIfExists() {
         let base = CloudfullModelContainer.localStoreURL.path
         for suffix in ["", "-shm", "-wal"] {

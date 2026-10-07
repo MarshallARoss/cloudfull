@@ -73,11 +73,17 @@ enum DeviceIdentity {
     private static var cachedID: String?
     private static let cacheLock = NSLock()
 
+    /// When the last failed read happened. A bulk insert of seen rows
+    /// calls `currentIfAvailable` once per row; this keeps a locked
+    /// Keychain from being read (and logged) once per row.
+    private static var lastFailureAt: Date?
+
     /// This device's id, or `nil` if the Keychain cannot currently be
     /// read — for example `errSecInteractionNotAllowed`, before the
     /// device's first unlock this boot. A failed read is never cached:
     /// the next access tries the Keychain again from scratch, instead of
-    /// being stuck behind a cached failure for the rest of the process.
+    /// being stuck behind a cached failure for the rest of the process
+    /// (after a 2 s pause, see `lastFailureAt`).
     static var currentIfAvailable: String? {
         #if DEBUG
         if let debugOverride { return debugOverride }
@@ -85,6 +91,7 @@ enum DeviceIdentity {
         cacheLock.lock()
         defer { cacheLock.unlock() }
         if let cachedID { return cachedID }
+        if let lastFailureAt, Date().timeIntervalSince(lastFailureAt) < 2 { return nil }
 
         let (existing, status) = readFromKeychain()
         if let existing {
@@ -99,7 +106,8 @@ enum DeviceIdentity {
             // this process inserts in the meantime would carry an id no
             // later launch can ever recognize as its own. Cache nothing,
             // so the next access tries the real read again from scratch.
-            log.error("DeviceIdentity Keychain read failed, status \(status, privacy: .public); will retry on next access")
+            log.error("DeviceIdentity Keychain read failed, status \(status, privacy: .public); will retry in 2 s")
+            lastFailureAt = Date()
             return nil
         }
         let created = UUID().uuidString
