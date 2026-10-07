@@ -52,6 +52,14 @@ struct CloudfullApp: App {
     /// no release binary carries a way to corrupt its own store this way.
     static let rotateKeysArgument = "-cloudfull-rotate-keys"
 
+    /// Seeds two `TrashEntry` rows through `SyncTestHarness`: one stamped
+    /// with another device's id, one with this device's own. Lets
+    /// `M7Tests.testReconcileKeepsAnotherDevicesBinRow` prove that
+    /// `TrashService.reconcileWithLibrary` never marks or deletes
+    /// another device's row. This is DEBUG-only, like every other launch
+    /// argument in this file.
+    static let seedForeignTrashArgument = "-cloudfull-seed-foreign-trash"
+
     /// Logs `auth_report_<PHAuthorizationStatus>` and exits immediately.
     /// Used by `scripts/gate_all.sh`'s round-start authorization check.
     /// Nothing else checks or restores Photos access between rounds. An
@@ -144,6 +152,13 @@ struct CloudfullApp: App {
             // flag's contract across the relaunch: with the reset flag,
             // the process shows only the feed, also after a relaunch.
             UserDefaults.standard.set(true, forKey: OnboardingGate.storageKey)
+        }
+        // Seed the foreign-bin-row fixture here, before any view exists,
+        // the same pattern `KeyRotationHarness` uses below. The rows are
+        // then in place before `TrashService.start()`'s own reconcile
+        // pass runs.
+        if ProcessInfo.processInfo.arguments.contains(Self.seedForeignTrashArgument) {
+            SyncTestHarness.seedForeignTrash(container: CloudfullModelContainer.shared)
         }
         // Rotate the keys here, before any view exists. The rotated rows
         // are then in place before `DeckViewModel.start()` deals the

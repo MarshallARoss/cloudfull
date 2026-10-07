@@ -41,6 +41,11 @@ actor SeenStore {
         guard existing.isEmpty else { return }
         modelContext.insert(SeenEntry(assetKey: assetKey))
         try? modelContext.save()
+        // This actor is not the main actor, and `CloudKeyBackfillLauncher`
+        // is. Hop over to resolve this row's cloudKey within seconds.
+        Task { @MainActor in
+            CloudKeyBackfillLauncher.shared.noteNewRow(assetKey)
+        }
     }
 
     /// Returns every stored seen key that is also in `ids`.

@@ -40,9 +40,35 @@ actor CloudKeyBackfiller {
     /// The backfiller tries the row again on the next launch. This method
     /// never deletes or changes such a row.
     func run() async -> Result {
-        let seenNilDescriptor = FetchDescriptor<SeenEntry>(predicate: #Predicate { $0.cloudKey == nil })
-        let likedNilDescriptor = FetchDescriptor<LikedEntry>(predicate: #Predicate { $0.cloudKey == nil })
-        let trashNilDescriptor = FetchDescriptor<TrashEntry>(predicate: #Predicate { $0.cloudKey == nil })
+        await runBackfill(onlyAssetKeys: nil)
+    }
+
+    /// Same as `run()`, but only considers a nil-cloudKey row whose
+    /// `assetKey` is in `keys`. `CloudKeyBackfillLauncher.noteNewRow`
+    /// uses this to resolve a just-inserted row within seconds, instead
+    /// of waiting for the next full-table pass.
+    func run(onlyAssetKeys keys: Set<String>) async -> Result {
+        await runBackfill(onlyAssetKeys: keys)
+    }
+
+    /// The shared body behind `run()` and `run(onlyAssetKeys:)`. `nil`
+    /// means every nil-cloudKey row, matching `run()`'s own contract.
+    private func runBackfill(onlyAssetKeys keys: Set<String>?) async -> Result {
+        let seenNilDescriptor: FetchDescriptor<SeenEntry>
+        let likedNilDescriptor: FetchDescriptor<LikedEntry>
+        let trashNilDescriptor: FetchDescriptor<TrashEntry>
+        if let keys {
+            // `#Predicate` needs an `Array`, and it captures a local
+            // `let`, not the parameter itself.
+            let keyList = Array(keys)
+            seenNilDescriptor = FetchDescriptor<SeenEntry>(predicate: #Predicate { $0.cloudKey == nil && keyList.contains($0.assetKey) })
+            likedNilDescriptor = FetchDescriptor<LikedEntry>(predicate: #Predicate { $0.cloudKey == nil && keyList.contains($0.assetKey) })
+            trashNilDescriptor = FetchDescriptor<TrashEntry>(predicate: #Predicate { $0.cloudKey == nil && keyList.contains($0.assetKey) })
+        } else {
+            seenNilDescriptor = FetchDescriptor<SeenEntry>(predicate: #Predicate { $0.cloudKey == nil })
+            likedNilDescriptor = FetchDescriptor<LikedEntry>(predicate: #Predicate { $0.cloudKey == nil })
+            trashNilDescriptor = FetchDescriptor<TrashEntry>(predicate: #Predicate { $0.cloudKey == nil })
+        }
 
         // Check the row counts first. `fetchCount` does not load any row
         // data, so this step does no real work once every row has a key.
@@ -137,6 +163,12 @@ final class CloudKeyBackfillLauncher {
 
     private var didRun = false
 
+    /// Keys `noteNewRow` has collected since the last narrow pass ran.
+    private var pendingNewRowKeys: Set<String> = []
+    /// Non-nil while a narrow pass's 2-second wait is in flight. Keeps a
+    /// burst of `noteNewRow` calls from starting more than one task.
+    private var pendingNewRowTask: Task<Void, Never>?
+
     private init() {}
 
     func runIfNeeded(container: ModelContainer) async {
@@ -188,6 +220,43 @@ final class CloudKeyBackfillLauncher {
         let backfiller = CloudKeyBackfiller(modelContainer: container)
         let result = await backfiller.run()
         BackfillProbe.shared.finish(result)
+    }
+
+    /// Called after a successful insert of a `SeenEntry`, `LikedEntry`,
+    /// `TrashEntry`, or `PhotoSeenEntry` row whose `cloudKey` is still
+    /// nil. Without this, that row waits for the next launch's full-table
+    /// pass before it can shield, queue, or cross-device-match through
+    /// its cloud key. Adds `assetKey` to a pending set, and starts, if
+    /// none is already running, a task that sleeps 2 s, takes the set,
+    /// and runs a narrow `CloudKeyBackfiller` pass against exactly those
+    /// keys.
+    ///
+    /// A no-op before `runIfNeeded()`'s initial pass has actually run
+    /// (`didRun == false`, which also covers "access not yet
+    /// `.authorized`"): that pass sees every unresolved row anyway, this
+    /// one included.
+    func noteNewRow(_ assetKey: String) {
+        guard didRun else { return }
+        #if DEBUG
+        // `M4Tests.testCloudKeyBackfillAccountsForEveryRow`'s seeding
+        // launch needs every row it writes to still read `cloudKey ==
+        // nil` when the process terminates. See the identical guard in
+        // `runIfNeeded()`.
+        if ProcessInfo.processInfo.arguments.contains(CloudfullApp.suppressBackfillArgument) {
+            return
+        }
+        #endif
+        pendingNewRowKeys.insert(assetKey)
+        guard pendingNewRowTask == nil else { return }
+        pendingNewRowTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(2))
+            guard let self else { return }
+            let keys = self.pendingNewRowKeys
+            self.pendingNewRowKeys = []
+            self.pendingNewRowTask = nil
+            guard !keys.isEmpty else { return }
+            _ = await CloudKeyBackfiller(modelContainer: CloudfullModelContainer.shared).run(onlyAssetKeys: keys)
+        }
     }
 }
 

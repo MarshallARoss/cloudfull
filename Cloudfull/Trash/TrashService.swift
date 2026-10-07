@@ -247,6 +247,10 @@ final class TrashService: ObservableObject {
         }
         load()
         resolver.noteQueued(assetKey: assetID, cloudKey: entry.cloudKey)
+        // Resolves this row's cloudKey within seconds instead of waiting
+        // for the next launch's backfill pass. `entry.cloudKey` is nil
+        // here (see the comment above), so this is never a no-op call.
+        CloudKeyBackfillLauncher.shared.noteNewRow(assetID)
         onQueued?(assetID)
         // The row already reads as live: `confirmedDeadIDs` starts every
         // fresh entry absent, which is the optimistic default `isLive`
@@ -626,6 +630,12 @@ final class TrashService: ObservableObject {
             guard preAwaitKeys.contains(entry.assetKey) else { continue } // queued mid-await, skipped
             let resolves = liveIdentifier(for: entry, found: idsSet, resolvedByCloudKey: resolvedByCloudKey) != nil
             if !resolves { deadNow.insert(entry.assetKey) }
+
+            // Another device's row: never mark, never delete. It still
+            // shows "not available" through `confirmedDeadIDs` above,
+            // and the user can still restore or empty it by hand. Only
+            // the background two-strike delete below is off-limits.
+            guard entry.originDeviceID == DeviceIdentity.current else { continue }
 
             if resolves {
                 if entry.dormantSince != nil {

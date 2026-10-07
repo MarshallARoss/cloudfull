@@ -95,10 +95,14 @@ final class SeenEntry {
     /// fallback that lets a row survive that. The field is optional and
     /// defaulted, so adding it needs no live-container migration.
     var cloudKey: String? = nil
+    /// `DeviceIdentity.current` of the device that inserted the row.
+    /// `""` = a 1.0 row.
+    var originDeviceID: String = ""
 
-    init(assetKey: String, cloudKey: String? = nil) {
+    init(assetKey: String, cloudKey: String? = nil, originDeviceID: String = DeviceIdentity.current) {
         self.assetKey = assetKey
         self.cloudKey = cloudKey
+        self.originDeviceID = originDeviceID
     }
 }
 
@@ -165,6 +169,11 @@ final class TrashEntry {
     /// a video. The bin held only videos before photos gained their own
     /// delete path into this same shared queue.
     var mediaKind: String = TrashMediaKind.video.rawValue
+    /// `DeviceIdentity.current` of the device that inserted the row.
+    /// `""` = a 1.0 row. `TrashService.reconcileWithLibrary` reads this
+    /// to never mark or delete another device's row; see that method's
+    /// own comment.
+    var originDeviceID: String = ""
 
     init(
         assetKey: String,
@@ -172,7 +181,8 @@ final class TrashEntry {
         isEstimatedBytes: Bool = false,
         cloudKey: String? = nil,
         replacementBytes: Int64 = 0,
-        mediaKind: TrashMediaKind = .video
+        mediaKind: TrashMediaKind = .video,
+        originDeviceID: String = DeviceIdentity.current
     ) {
         self.assetKey = assetKey
         self.bytes = bytes
@@ -180,5 +190,6 @@ final class TrashEntry {
         self.cloudKey = cloudKey
         self.replacementBytes = replacementBytes
         self.mediaKind = mediaKind.rawValue
+        self.originDeviceID = originDeviceID
     }
 }

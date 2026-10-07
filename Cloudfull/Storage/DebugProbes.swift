@@ -347,6 +347,11 @@ final class RowCountProbe: ObservableObject {
     @Published private(set) var pendingBytes: Int64 = 0
     @Published private(set) var dormantCount = 0
     @Published private(set) var newestEntry: (key: String, bytes: Int64, replacement: Int64)?
+    /// `TrashEntry` rows whose `originDeviceID` names another device.
+    /// `TrashService.reconcileWithLibrary` never marks or deletes one of
+    /// these. `M7Tests.testReconcileKeepsAnotherDevicesBinRow` reads this
+    /// through the `trash_foreign_` probe to prove that row survives.
+    @Published private(set) var foreignTrash = 0
 
     /// Bytes a completed `TrashService.emptyBin()` freed this session.
     /// This is session state with no row of its own, so `refresh()` has
@@ -406,6 +411,7 @@ final class RowCountProbe: ObservableObject {
         pendingBytes = trashAll.reduce(Int64(0)) { $0 + max($1.bytes - $1.replacementBytes, 0) }
         dormantCount = trashAll.filter { $0.dormantSince != nil }.count
         newestEntry  = trashAll.first.map { ($0.assetKey, $0.bytes, $0.replacementBytes) }
+        foreignTrash = trashAll.filter { $0.originDeviceID != DeviceIdentity.current }.count
 
         if reclaimedBytes != Self.lastReclaimed { reclaimedBytes = Self.lastReclaimed }
     }
@@ -468,6 +474,7 @@ struct GateProbes: View {
             probe(launchProbeIdentifier)
             probe("space_probe_\(rows.pendingBytes)_\(rows.reclaimedBytes)")
             probe("trash_rows_\(rows.trash)_\(rows.dormantCount)")
+            probe("trash_foreign_\(rows.foreignTrash)")
             // `RootView` removes `FeedView` in `.photos` mode. A
             // `main_stalls_` probe in `FeedView` is then unreachable. This
             // view keeps its own watchdog observation, so a stall does not

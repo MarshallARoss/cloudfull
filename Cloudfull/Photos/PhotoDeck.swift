@@ -1189,6 +1189,11 @@ final class KeepStore: ObservableObject {
         modelContext.insert(LikedEntry(assetKey: assetID, cloudKey: cloudKey))
         try? modelContext.save()
         resolver.noteLiked(assetKey: assetID, cloudKey: cloudKey)
+        // Only when no cloud key was already known. See
+        // `DeckViewModel.like`'s identical call.
+        if cloudKey == nil {
+            CloudKeyBackfillLauncher.shared.noteNewRow(assetID)
+        }
         return true
     }
 
@@ -1247,6 +1252,11 @@ actor PhotoSeenStore {
     func markSeen(_ assetKey: String) {
         modelContext.insert(PhotoSeenEntry(assetKey: assetKey))
         try? modelContext.save()
+        // This actor is not the main actor, and `CloudKeyBackfillLauncher`
+        // is. Hop over to resolve this row's cloudKey within seconds.
+        Task { @MainActor in
+            CloudKeyBackfillLauncher.shared.noteNewRow(assetKey)
+        }
     }
 
     /// Every seen key, with no library id set to intersect against. The
