@@ -82,5 +82,37 @@ enum SyncTestHarness {
 
         ForeignSeenSeedProbe.shared.record(targetID)
     }
+
+    /// Backs `-cloudfull-simulate-remote-keep`. `SyncObserver.attach()`
+    /// calls this once, 3 seconds after it runs, so the session's own
+    /// services are wired first. Takes the newest `TrashEntry`, inserts
+    /// a `LikedEntry` for the same asset, and asks `SyncObserver` to
+    /// refresh — the same shape a real CloudKit import takes.
+    @MainActor
+    static func simulateRemoteKeepAfterDelay() {
+        Task {
+            try? await Task.sleep(for: .seconds(3))
+            simulateRemoteKeep()
+        }
+    }
+
+    @MainActor
+    private static func simulateRemoteKeep() {
+        // A real CloudKit import also writes outside this process's own
+        // main context, through Core Data's background import context.
+        // A fresh `ModelContext` here, rather than
+        // `CloudfullModelContainer.shared.mainContext`, reproduces that.
+        let readContext = ModelContext(CloudfullModelContainer.shared)
+        let newestTrash = FetchDescriptor<TrashEntry>(sortBy: [SortDescriptor(\.queuedAt, order: .reverse)])
+        guard let newest = (try? readContext.fetch(newestTrash))?.first else { return }
+        let assetKey = newest.assetKey
+        let cloudKey = newest.cloudKey
+
+        let remoteContext = ModelContext(CloudfullModelContainer.shared)
+        remoteContext.insert(LikedEntry(assetKey: assetKey, cloudKey: cloudKey))
+        try? remoteContext.save()
+
+        SyncObserver.shared.scheduleRefresh()
+    }
 }
 #endif

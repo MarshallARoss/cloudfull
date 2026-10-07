@@ -299,6 +299,42 @@ final class TrashService: ObservableObject {
         return true
     }
 
+    /// Drops any queued entry a shield (a `LikedEntry`, local or just
+    /// landed through a remote CloudKit import) now covers. Returns
+    /// `true` if it dropped any entry. The caller decides whether to
+    /// `load()` afterward; this method does not, so `handleRemoteChange()`
+    /// can skip the reload when nothing changed.
+    ///
+    /// Without the `resolver.noteUnqueued` call below, the row-deleting
+    /// path here would bypass the resolver's incremental maintenance and
+    /// leave the key in `queuedIDs` for the rest of the session.
+    /// `isQueued`, `RailState.queued`, and `trashIconName` would keep
+    /// reporting "Queued" for an asset no longer in the bin.
+    @discardableResult
+    private func dropShieldedEntries() -> Bool {
+        let shielded = entries.filter { resolver.isShielded($0.assetKey) || resolver.isShielded(resolver.exclusionKey(assetKey: $0.assetKey, cloudKey: $0.cloudKey)) }
+        guard !shielded.isEmpty else { return false }
+        for entry in shielded {
+            let (assetKey, cloudKey) = (entry.assetKey, entry.cloudKey)
+            modelContext.delete(entry)
+            resolver.noteUnqueued(assetKey: assetKey, cloudKey: cloudKey)
+        }
+        _ = saveContext()
+        return true
+    }
+
+    /// Called by `SyncObserver.refresh()` after a CloudKit import lands.
+    /// Shield beats trash: a remote Keep on an asset already queued here
+    /// must pull it back out of the bin, the same as a local Keep does
+    /// in `DeckViewModel.onLiked`. The reconciliation this schedules
+    /// then catches a remote Bin row (or a remote delete) the normal
+    /// way, through the existing two-strike path.
+    func handleRemoteChange() {
+        load()
+        if dropShieldedEntries() { load() }   // shield beats trash
+        scheduleReconciliation()
+    }
+
     /// Deletes every queued asset from the photo library in one PhotoKit
     /// request, which shows exactly one system confirmation for the whole
     /// batch. Returns the ids actually deleted.
@@ -326,25 +362,10 @@ final class TrashService: ObservableObject {
         struct EmptiedFacts { let assetKey: String; let queuedAt: Date; let bytes: Int64; let replacementBytes: Int64; let isEstimatedBytes: Bool; let mediaKind: String }
         let entriesBeingEmptied = entries.map { EmptiedFacts(assetKey: $0.assetKey, queuedAt: $0.queuedAt, bytes: $0.bytes, replacementBytes: $0.replacementBytes, isEstimatedBytes: $0.isEstimatedBytes, mediaKind: $0.mediaKind) }
         // Do not delete a liked asset. `DeckViewModel.like(assetID:)`
-        // removes the matching entry, but a sync conflict can bring it
-        // back. This is the last step before an irreversible delete, so
-        // check again. Drop the entry, and keep the asset. Check the
-        // resolved key too, so a rotated row is still found.
-        let shielded = entries.filter { resolver.isShielded($0.assetKey) || resolver.isShielded(resolver.exclusionKey(assetKey: $0.assetKey, cloudKey: $0.cloudKey)) }
-        if !shielded.isEmpty {
-            // Without this, the row-deleting path would bypass the
-            // resolver's incremental maintenance and leave the key in
-            // `queuedIDs` for the rest of the session. `isQueued`,
-            // `RailState.queued`, and `trashIconName` would keep
-            // reporting "Queued" for an asset no longer in the bin.
-            for entry in shielded {
-                let (assetKey, cloudKey) = (entry.assetKey, entry.cloudKey)
-                modelContext.delete(entry)
-                resolver.noteUnqueued(assetKey: assetKey, cloudKey: cloudKey)
-            }
-            _ = saveContext()
-            load()
-        }
+        // removes the matching entry, but a sync conflict, or a remote
+        // Keep landing through CloudKit, can bring it back. This is the
+        // last step before an irreversible delete, so check again.
+        if dropShieldedEntries() { load() }
 
         // Resolve each entry to its current local id. Skip an entry that
         // does not resolve, and keep its row. Try the resolver first. If
@@ -359,7 +380,7 @@ final class TrashService: ObservableObject {
             })
             if deadNow != confirmedDeadIDs { confirmedDeadIDs = deadNow }
         }
-        let targets: [(entry: TrashEntry, liveID: String)] = entries.compactMap { entry in
+        var targets: [(entry: TrashEntry, liveID: String)] = entries.compactMap { entry in
             if let live = resolver.currentLocalIdentifier(assetKey: entry.assetKey, cloudKey: entry.cloudKey) {
                 return (entry, live)
             }
@@ -370,12 +391,23 @@ final class TrashService: ObservableObject {
         }
         guard !targets.isEmpty else { return [] }
 
-        let liveIDs = targets.map(\.liveID)
+        var liveIDs = targets.map(\.liveID)
         // `TrashView` calls `restore(assetID:)` with the stored
         // `assetKey`, not the live id. Put both forms in the set so the
         // restore guard matches either one.
         pendingEmptyIDs = Set(liveIDs).union(targets.map { $0.entry.assetKey })
         defer { pendingEmptyIDs = [] }
+
+        // A remote Keep can land between the shield re-check above and
+        // this point, through the same coalesced CloudKit import
+        // `SyncObserver` reacts to elsewhere. Re-check immediately
+        // before the irreversible call: this is the last point that can
+        // stop it.
+        guard resolver.isDestructiveActionSafe else { return nil }
+        targets = targets.filter { !resolver.isShielded($0.liveID) && !resolver.isShielded($0.entry.assetKey) }
+        guard !targets.isEmpty else { return [] }
+        liveIDs = targets.map(\.liveID)
+        pendingEmptyIDs = Set(liveIDs).union(targets.map { $0.entry.assetKey })
 
         guard let deletedLiveIDs = await library.deleteAssets(ids: liveIDs) else {
             // Cancelled or errored. Nothing changed. The queue stays

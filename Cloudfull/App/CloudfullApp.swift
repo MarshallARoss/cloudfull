@@ -67,6 +67,15 @@ struct CloudfullApp: App {
     /// DEBUG-only, like every other launch argument in this file.
     static let seedForeignSeenArgument = "-cloudfull-seed-foreign-seen"
 
+    /// Simulates a remote Keep landing through CloudKit, 3 seconds after
+    /// `SyncObserver.attach(trash:deck:)` runs: see
+    /// `SyncTestHarness.simulateRemoteKeepAfterDelay()`. Lets
+    /// `M7Tests.testRemoteKeepPullsRowFromBin` prove `TrashService`
+    /// pulls a row out of the bin when a `LikedEntry` for it lands from
+    /// outside this process's own main context. This is DEBUG-only,
+    /// like every other launch argument in this file.
+    static let simulateRemoteKeepArgument = "-cloudfull-simulate-remote-keep"
+
     /// Logs `auth_report_<PHAuthorizationStatus>` and exits immediately.
     /// Used by `scripts/gate_all.sh`'s round-start authorization check.
     /// Nothing else checks or restores Photos access between rounds. An

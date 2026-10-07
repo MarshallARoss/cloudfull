@@ -97,7 +97,55 @@ final class M7Tests: FeedUITestCase {
         )
     }
 
+    // MARK: - Step E: remote changes
+
+    /// Queues one video, relaunches without resetting the store, and
+    /// fires `-cloudfull-simulate-remote-keep`, which inserts a
+    /// `LikedEntry` for that same video through a context outside the
+    /// main one — the shape a real CloudKit import takes — 3 seconds
+    /// after `SyncObserver` attaches. Proves the remote Keep pulls the
+    /// row back out of the bin: shield beats trash.
+    func testRemoteKeepPullsRowFromBin() throws {
+        launch(resettingState: true)
+
+        guard let current = centeredPage(timeout: 20) else {
+            XCTFail("No centered page_ element found at start")
+            return
+        }
+        guard advance(from: current, afterPerforming: { self.app.buttons["rail_trash"].tap() }) != nil else {
+            XCTFail("Pager did not advance after tapping rail_trash")
+            return
+        }
+
+        app.terminate()
+        XCTAssertEqual(app.state, .notRunning, "App did not terminate before the remote-keep relaunch")
+
+        app.launchArguments = ["-cloudfull-local-only", "-cloudfull-simulate-remote-keep"]
+        app.launch()
+        grantPhotoAccessIfAsked()
+
+        XCTAssertTrue(
+            waitFor(timeout: 15) {
+                self.trashRowCount() == 0 && self.rowCountReading()?.liked == 1 && self.rowCountReading()?.trash == 0
+            },
+            "Expected trash_rows_0_0 and rowcount_*_1_0 (the remote Keep pulled the queued row out of " +
+            "the bin) within 15s; last read trash_rows=\(String(describing: trashRowCount())), " +
+            "rowcount=\(String(describing: rowCountReading()))"
+        )
+    }
+
     // MARK: - Probes
+
+    /// Reads "rowcount_<seen>_<liked>_<trash>", a `GateProbes` probe
+    /// backed by `RowCountProbe`'s direct store counts.
+    private func rowCountReading() -> (seen: Int, liked: Int, trash: Int)? {
+        guard let identifier = elementSnapshots(withPrefix: "rowcount_").first?.identifier else { return nil }
+        let body = identifier.dropFirst("rowcount_".count)
+        let parts = body.split(separator: "_")
+        guard parts.count == 3,
+              let seen = Int(parts[0]), let liked = Int(parts[1]), let trash = Int(parts[2]) else { return nil }
+        return (seen, liked, trash)
+    }
 
     /// Reads "trash_rows_<trash>_<dormant>", a `GateProbes` probe backed
     /// directly by `RowCountProbe`. Returns only the row count; the

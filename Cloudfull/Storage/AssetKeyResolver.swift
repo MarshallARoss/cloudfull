@@ -304,6 +304,64 @@ final class AssetKeyResolver: ObservableObject {
         for handler in resolutionLandedHandlers { handler(newlyExcluded) }
     }
 
+    /// Re-resolves shield and queue membership after a CloudKit import
+    /// or an account change. `SyncObserver.refresh()` calls this first,
+    /// before it tells `TrashService` or the decks about the change: a
+    /// remote `LikedEntry` or `TrashEntry` row can need a rotation
+    /// resolution this session never primed against.
+    ///
+    /// - `.unprimed`: nothing has dealt yet. The next `primeSynchronously`
+    ///   call starts from the store as it now stands; there is nothing
+    ///   to refresh early.
+    /// - `.partial`: Limited access. No resolution runs under Limited;
+    ///   only the raw-key membership is worth re-reading.
+    /// - `.pending`: a resolution this resolver started is already in
+    ///   flight. This call is a no-op; `SyncObserver` re-requests once
+    ///   more after its own 2-second wait, which is enough time for an
+    ///   ordinary resolution to land.
+    /// - `.clean`/`.resolved`: the normal path below.
+    func refreshAfterRemoteChange() async {
+        switch state {
+        case .unprimed:
+            return
+        case .partial:
+            rebuildFromStore(resolvingWithCache: true)
+            recompute()
+            return
+        case .pending:
+            return
+        case .clean, .resolved:
+            break
+        }
+
+        // Setting `.pending` here, before the `await` below, is what
+        // makes `isDestructiveActionSafe` false for the duration of this
+        // refresh. No delete may run while a remote row's shield status
+        // is still being resolved.
+        let before = excludedLive
+        state = .pending
+        recompute()
+
+        let candidates = collectRotationCandidates()
+        // Map only the cloud keys this resolver does not already know,
+        // the same restraint `resolveCandidates` applies to its own
+        // caller-supplied candidate list.
+        let newKeys = Array(Set(candidates.map(\.cloudKey)).subtracting(cloudToLocal.keys))
+        if !newKeys.isEmpty {
+            let mapping = await Task.detached(priority: .userInitiated) {
+                PhotoLibraryService.localIdentifierMappings(forCloudIdentifiers: newKeys)
+            }.value
+            cloudToLocal.merge(mapping) { _, new in new }
+        }
+
+        rebuildFromStore(resolvingWithCache: true)
+        state = .resolved
+        recompute()
+
+        let newlyExcluded = Array(excludedLive.subtracting(before))
+        for handler in resolutionLandedHandlers { handler(newlyExcluded) }
+    }
+
     // MARK: - Incremental maintenance
 
     func noteLiked(assetKey: String, cloudKey: String?) {
