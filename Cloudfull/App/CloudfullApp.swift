@@ -204,7 +204,12 @@ struct CloudfullApp: App {
     private static func eraseLocalStore() {
         let fileManager = FileManager.default
         guard let support = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return }
-        for name in ["default.store", "default.store-shm", "default.store-wal"] {
+        // "default.store" is the synced store; "local.store" (new in M7)
+        // holds deck position and the metadata cache. Both must go, or a
+        // reset launch would resume from the old deck position on a
+        // store that otherwise looks fresh.
+        for name in ["default.store", "default.store-shm", "default.store-wal",
+                     "local.store", "local.store-shm", "local.store-wal"] {
             try? fileManager.removeItem(at: support.appendingPathComponent(name))
         }
     }

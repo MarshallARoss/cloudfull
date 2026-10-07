@@ -373,8 +373,9 @@ final class RowCountProbe: ObservableObject {
         //
         // Note: a Photos access change makes `tccd` stop the app. The
         // relaunch can replay `-cloudfull-reset-deck-state`, which deletes
-        // `default.store`. A test that causes this relaunch must expect an
-        // empty store.
+        // both `default.store` (synced) and `local.store` (deck position
+        // and the metadata cache, new in M7). A test that causes this
+        // relaunch must expect an empty store.
         context = CloudfullModelContainer.shared.mainContext
         timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in self?.refresh() }
