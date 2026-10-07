@@ -118,13 +118,32 @@ enum CloudfullModelContainer {
             log.error("SwiftData store mode: local-only — CloudKit container \(containerID, privacy: .public) declared but failed to open")
         }
 
-        let synced = ModelConfiguration("default", schema: syncedSchema, url: syncedStoreURL, cloudKitDatabase: .none)
         mode = .localOnly
         if !splitOK {
-            log.error("SwiftData store mode: local-only — the 1.0 store split did not finish this launch; retrying next launch")
-        } else if cloudContainerID == nil {
+            // The split threw partway through, so `syncedStoreURL` can
+            // still physically hold the 4 local models' tables (step 3g,
+            // which empties them, never ran). Opening it with the
+            // narrower `syncedSchema` here, as the normal path below
+            // does, would make SwiftData's inferred migration drop
+            // those tables as "not in this config's schema" — exactly
+            // the data loss this fallback exists to avoid. Open ONE
+            // configuration with `fullSchema` (all 8 models) at
+            // `syncedStoreURL` instead, so every table survives, and
+            // skip `local.store` entirely this launch: every model
+            // already lives in this one file. `StoreSplitMigrator`
+            // retries the split from scratch next launch.
+            log.error("SwiftData store mode: local-only — the 1.0 store split did not finish; opening the full schema at the synced store so no table is lost, and retrying the split next launch")
+            let fallback = ModelConfiguration("default", schema: fullSchema, url: syncedStoreURL, cloudKitDatabase: .none)
+            do {
+                return try ModelContainer(for: fullSchema, configurations: fallback)
+            } catch {
+                fatalError("Cloudfull cannot open its local SwiftData store: \(error)")
+            }
+        }
+        if cloudContainerID == nil {
             log.notice("SwiftData store mode: local-only (no CloudKit container declared)")
         }
+        let synced = ModelConfiguration("default", schema: syncedSchema, url: syncedStoreURL, cloudKitDatabase: .none)
         do {
             return try ModelContainer(for: fullSchema, configurations: synced, local)
         } catch {
