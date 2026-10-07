@@ -83,7 +83,11 @@ final class PhotoSeenEntry {
 /// lasts for the current run. This table holds the half that survives a
 /// relaunch. `PhotoMetaStore` in Cloudfull/Storage/PhotoMetaStore.swift is
 /// the `@ModelActor` that reads and writes it off the main actor.
-/// One row exists per asset that has loaded tier 1 at least once.
+/// One row exists per asset that has loaded tier 1 at least once. That
+/// invariant is kept by `PhotoMetaStore.fetchOrCreate` (single actor,
+/// fetch-before-insert), not by a `.unique` attribute on `assetID`: a
+/// CloudKit-backed store rejects `.unique`. Do not insert
+/// `PhotoMetaRecord` anywhere else.
 /// `modificationDate` mirrors `PHAsset.modificationDate` at write time. An
 /// edit is the most common reason an asset changes. Then
 /// `PhotoMetaStore.fetchIfFresh` returns nil for a stale row, so the
@@ -93,7 +97,7 @@ final class PhotoSeenEntry {
 /// first case is a real cache hit.
 @Model
 final class PhotoMetaRecord {
-    @Attribute(.unique) var assetID: String = ""
+    var assetID: String = ""
     var modificationDate: Date?
     var fetchedAt: Date = Date()
 
