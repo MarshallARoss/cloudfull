@@ -140,13 +140,25 @@ final class AssetKeyResolver: ObservableObject {
     /// in flight can take longer than any one guess at its duration.
     private var needsRemoteRefresh = false
 
-    /// Bumped every time `refreshAfterRemoteChange()` takes ownership of
-    /// the pending phase, just before its `await`. Checked again after
-    /// that `await`: `state == .pending` alone cannot tell this call's
-    /// own pending phase apart from a newer one. If an unrelated re-prime
-    /// moved `state` on and back to `.pending` while this call was still
-    /// suspended, a newer call became the owner, and this call must not
-    /// overwrite its result with a now-stale one.
+    /// Bumped every time `primeSynchronously` runs, and every time
+    /// `refreshAfterRemoteChange()` takes ownership of the pending
+    /// phase, just before its `await`. `resolveCandidates(_:)` and
+    /// `refreshAfterRemoteChange()` each capture this value before their
+    /// own `await` and check it again afterward: `state == .pending`
+    /// alone cannot tell a call's own pending phase apart from a newer
+    /// one. Without the bump in `primeSynchronously`, nothing but
+    /// `refreshAfterRemoteChange()` itself ever changed this value, so
+    /// the only way to reach a mismatched generation was a second
+    /// `refreshAfterRemoteChange()` call taking over — which the
+    /// `.pending` case at this method's own top already redirects into
+    /// `needsRemoteRefresh` before it can bump anything. That made the
+    /// check dead: it could never actually catch a stale call. A
+    /// re-prime does not share that guard, and can set `state` back to
+    /// `.pending` with entirely new candidates while an older
+    /// `resolveCandidates(_:)` or `refreshAfterRemoteChange()` call is
+    /// still suspended on its own PhotoKit round trip; bumping here is
+    /// what makes the later check actually catch that case instead of
+    /// overwriting the re-prime's result with a now-stale mapping.
     private var refreshGeneration = 0
 
     /// The time limit, in nanoseconds (1.5 s), for the background
@@ -244,6 +256,15 @@ final class AssetKeyResolver: ObservableObject {
         authStatus: PHAuthorizationStatus,
         modelContext: ModelContext
     ) -> [RotationCandidate] {
+        // Every re-prime invalidates any resolution already in flight
+        // from an earlier prime or `refreshAfterRemoteChange()` call,
+        // whatever `state` this call ends up setting below. Without
+        // this, a `resolveCandidates(_:)` or `refreshAfterRemoteChange()`
+        // call suspended at its own `await` can resume, find `state ==
+        // .pending` only by coincidence — this call's own, newer pending
+        // phase — and overwrite it with its now-stale mapping. See
+        // `refreshGeneration`'s own comment.
+        refreshGeneration += 1
         self.modelContext = modelContext
         self.libraryIDs = ids
         // `resolvingWithCache` mirrors `refreshLibrarySnapshot`. Once the
@@ -308,12 +329,19 @@ final class AssetKeyResolver: ObservableObject {
     /// fresher prime superseded it.
     func resolveCandidates(_ candidates: [RotationCandidate]) async {
         guard !candidates.isEmpty else { return }
+        // Captured before the `await` below, the same way
+        // `refreshAfterRemoteChange()` captures `myGeneration`. A re-prime
+        // that lands while this call is suspended bumps
+        // `refreshGeneration`, so the check below tells this call's own
+        // pending phase apart from a newer one that happens to also read
+        // `.pending`.
+        let myGeneration = refreshGeneration
         let keys = Array(Set(candidates.map(\.cloudKey)))
         let mapping = await Task.detached(priority: .userInitiated) {
             PhotoLibraryService.localIdentifierMappings(forCloudIdentifiers: keys)
         }.value
 
-        guard state == .pending else { return }
+        guard state == .pending, myGeneration == refreshGeneration else { return }
         let before = excludedLive
         cloudToLocal.merge(mapping) { _, new in new }
         rebuildFromStore(resolvingWithCache: true)
