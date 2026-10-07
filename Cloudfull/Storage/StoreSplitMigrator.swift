@@ -20,11 +20,15 @@ import os
 /// CloudKit.
 ///
 /// `runIfNeeded()` returns `false` if this launch's attempt threw
-/// partway through. `make()` must then open both configs `.none` for
-/// this launch (mode `.localOnly`), never CloudKit, however this build
-/// is declared: the safety argument above only holds once this pass has
-/// actually finished. The flag stays false, so the next launch retries
-/// from scratch.
+/// partway through. `make()` must then open ONE configuration, with the
+/// full 8-model schema, at `syncedStoreURL` only — `.none`, mode
+/// `.localOnly`, never CloudKit however this build is declared, and not
+/// `local.store` at all this launch — so that a local model's table,
+/// still physically in the 1.0 file because step 3g never ran, is not
+/// read with a narrower schema that would make SwiftData's inferred
+/// migration drop it. The safety argument above only holds once this
+/// pass has actually finished. The flag stays false, so the next launch
+/// retries from scratch.
 ///
 /// Why this order is safe: the CloudKit config only ever sees
 /// `default.store` after step 3g below has emptied the four local
@@ -38,6 +42,13 @@ import os
 enum StoreSplitMigrator {
 
     private static let flagKey = "storage.splitV1Done"
+    /// Separate from `flagKey`: the origin-stamp step (3e) alone can be
+    /// deferred past the rest of the split, when this device's id could
+    /// not be read reliably at the time (see `DeviceIdentity.isReliable`
+    /// and `stampOriginDeviceID`'s own comment). `flagKey` still becomes
+    /// true once the rest of the split finishes, so this needs its own
+    /// flag to know whether a later, reliable launch still owes a retry.
+    private static let originStampDoneKey = "storage.originStampDone"
     private static let log = Logger(subsystem: "com.cloudfull.app", category: "Storage")
 
     /// Returns `true` once the 1.0 file is safe for `make()` to open with
@@ -48,7 +59,15 @@ enum StoreSplitMigrator {
     /// type's doc comment for what the caller must do then.
     @discardableResult
     static func runIfNeeded() -> Bool {
-        if UserDefaults.standard.bool(forKey: flagKey) { return true }
+        if UserDefaults.standard.bool(forKey: flagKey) {
+            // The split itself is done. Only the origin-stamp step can
+            // still be outstanding, if this device's id was unreliable
+            // on every launch so far. Cheap when there is nothing to
+            // retry: both checks below are in-memory reads, with no
+            // store opened unless a retry is actually due.
+            retryOriginStampIfNeeded()
+            return true
+        }
 
         guard FileManager.default.fileExists(atPath: CloudfullModelContainer.syncedStoreURL.path) else {
             // Fresh install. There is no 1.0 file to migrate rows out of.
@@ -58,6 +77,7 @@ enum StoreSplitMigrator {
 
         let start = Date()
         var deckCopied = false, orderCopied = false, photoDeckCopied = false
+        var originStamped = false
 
         do {
             // Both containers, and the Core Data stack each one opens
@@ -91,7 +111,20 @@ enum StoreSplitMigrator {
                 photoDeckCopied = try copyPhotoDeckStateIfNeeded(from: legacyContext, to: localContext)
                 try localContext.save()
 
-                try stampOriginDeviceID(in: legacyContext)
+                // Skip the stamp while this device's id is unreliable
+                // (see `DeviceIdentity.isReliable`): writing the id
+                // would stamp every pre-M7 row with a sentinel this
+                // device itself will never recognize again once its
+                // real id becomes readable. `originStamped` stays
+                // false, so `originStampDoneKey` is not set below, and
+                // `retryOriginStampIfNeeded()` tries again on a later,
+                // reliable launch.
+                if DeviceIdentity.isReliable {
+                    try stampOriginDeviceID(in: legacyContext)
+                    originStamped = true
+                } else {
+                    log.error("store_split_stamp_skipped_unreliable_device_id")
+                }
                 try backfillCloudKeysIfAuthorized(in: legacyContext)
 
                 // This store is `.none` here, so a batch delete is fine:
@@ -111,6 +144,9 @@ enum StoreSplitMigrator {
         }
 
         UserDefaults.standard.set(true, forKey: flagKey)
+        if originStamped {
+            UserDefaults.standard.set(true, forKey: originStampDoneKey)
+        }
         #if DEBUG
         let ms = Int(Date().timeIntervalSince(start) * 1000)
         DiagnosticsLog.shared.log(
@@ -191,11 +227,45 @@ enum StoreSplitMigrator {
     /// pre-M7 row this device's own from the start. `DeviceIdentity` is
     /// itself new in M7 (Step C); nothing before this migration ever
     /// read or wrote it.
+    ///
+    /// The caller skips this entirely while `DeviceIdentity.isReliable`
+    /// is false, and `retryOriginStampIfNeeded()` below calls it again,
+    /// against the already-split synced store, once a later launch's id
+    /// is reliable. Both callers share this one predicate, so either
+    /// one picks up a row the other left at `""`.
     private static func stampOriginDeviceID(in legacy: ModelContext) throws {
         let rows = try legacy.fetch(FetchDescriptor<TrashEntry>(predicate: #Predicate { $0.originDeviceID == "" }))
         guard !rows.isEmpty else { return }
         let current = DeviceIdentity.current
         for row in rows { row.originDeviceID = current }
+    }
+
+    /// Catches up the origin-stamp step (3e) on a launch after the one
+    /// where the main split ran, when that earlier launch's
+    /// `DeviceIdentity` read was unreliable and skipped it (see
+    /// `stampOriginDeviceID`'s own comment). A no-op, opening no store,
+    /// while `originStampDoneKey` is already set or the id is still
+    /// unreliable. Opens the synced store alone, `.none`, the same way
+    /// the main split's `legacy` container does, and releases it before
+    /// `CloudfullModelContainer.make()` opens the real container.
+    private static func retryOriginStampIfNeeded() {
+        guard !UserDefaults.standard.bool(forKey: originStampDoneKey) else { return }
+        guard DeviceIdentity.isReliable else { return }
+        do {
+            try autoreleasepool {
+                let syncedSchema = Schema(CloudfullModelContainer.syncedModels)
+                let config = ModelConfiguration(
+                    "default", schema: syncedSchema, url: CloudfullModelContainer.syncedStoreURL, cloudKitDatabase: .none
+                )
+                let container = try ModelContainer(for: syncedSchema, configurations: config)
+                let context = ModelContext(container)
+                try stampOriginDeviceID(in: context)
+                try context.save()
+            }
+            UserDefaults.standard.set(true, forKey: originStampDoneKey)
+        } catch {
+            log.error("store_split_origin_stamp_retry_failed_\(error.localizedDescription, privacy: .public)")
+        }
     }
 
     /// Fills `cloudKey` on every `TrashEntry` and `LikedEntry` row that
@@ -213,9 +283,23 @@ enum StoreSplitMigrator {
         let likedRows = try legacy.fetch(FetchDescriptor<LikedEntry>(predicate: #Predicate { $0.cloudKey == nil }))
         guard !trashRows.isEmpty || !likedRows.isEmpty else { return }
 
-        var keys = Set<String>()
-        keys.formUnion(trashRows.map(\.assetKey))
-        keys.formUnion(likedRows.map(\.assetKey))
+        // Liked (shield) rows first, then Trash rows, then whatever is
+        // left over past the cap below. A `Set` has no order, so
+        // building the ordered list by hand, instead of a `Set` union,
+        // is what makes the cap actually drop the least important rows
+        // first: a Liked row's `cloudKey` protects it from a rotation
+        // mistakenly reading it as eligible for deletion, which matters
+        // more than a Trash row's.
+        var orderedKeys: [String] = []
+        var seenKeys = Set<String>()
+        for key in likedRows.map(\.assetKey) where !seenKeys.contains(key) {
+            orderedKeys.append(key)
+            seenKeys.insert(key)
+        }
+        for key in trashRows.map(\.assetKey) where !seenKeys.contains(key) {
+            orderedKeys.append(key)
+            seenKeys.insert(key)
+        }
         // Caps the main-thread PhotoKit round trip at 2,000 rows. This
         // runs before the first frame, inside `CloudfullModelContainer`'s
         // static initializer; an unexpectedly large bin or keep table
@@ -223,7 +307,7 @@ enum StoreSplitMigrator {
         // the launch. A row this cap leaves out keeps `cloudKey == nil`
         // and stays pending: `CloudKeyBackfiller` does the same mapping
         // off the main actor on this and every later launch.
-        let keyList = Array(keys.prefix(2000))
+        let keyList = Array(orderedKeys.prefix(2000))
 
         var cloudKeyByLocalID: [String: String] = [:]
         var offset = 0
