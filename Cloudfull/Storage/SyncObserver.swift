@@ -161,6 +161,13 @@ final class SyncObserver: ObservableObject {
     /// decks to recompute their pool counts. In that order, so the
     /// resolver's shield set is current before `TrashService` reads it.
     private func refresh() async {
+        // M7-QUESTION: the spec says only "SyncObserver re-requests once
+        // after 2 s" for the `.pending` case, not the exact mechanism.
+        // Conservative reading: detect that `refreshAfterRemoteChange()`
+        // took its no-op `.pending` branch (state is still `.pending`
+        // after it returns, since every other branch leaves state
+        // `.resolved`, `.clean`, `.partial`, or unchanged at `.unprimed`),
+        // then wait 2 s and ask exactly once more.
         await AssetKeyResolver.shared.refreshAfterRemoteChange()
         if AssetKeyResolver.shared.state == .pending {
             // `refreshAfterRemoteChange()` found a resolution already in

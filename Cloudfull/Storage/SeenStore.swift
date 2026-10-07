@@ -135,6 +135,13 @@ actor SeenStore {
             return (row, localID)
         }
         #if DEBUG
+        // M7-QUESTION: the spec names one shared `SeenForeignProbe.mapped`
+        // "set by both stores", not two separate counts. Conservative
+        // reading: each store overwrites it with its own latest count,
+        // so `seen_foreign_` reflects whichever of `SeenStore`/
+        // `PhotoSeenStore` computed last, not a true video+photo total.
+        // `M7Tests` only ever seeds one foreign video-seen row per run,
+        // so this never shows up there.
         SeenForeignProbe.mapped = out.count
         #endif
         return out
