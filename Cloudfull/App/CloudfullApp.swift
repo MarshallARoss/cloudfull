@@ -107,6 +107,14 @@ struct CloudfullApp: App {
     /// for every other `-cloudfull-*` argument.
     static let reportPoolArgument = "-cloudfull-report-pool"
 
+    /// Logs one line with every row count
+    /// `scripts/m7_upgrade_check.sh` needs —
+    /// `store_report_<mode>_<seen>_<liked>_<trash>_<photoSeen>_<deckState>_<deckOrder>_<photoDeck>_<meta>_<trashOwned>`
+    /// — then exits. Read in `init()`, after the container has opened
+    /// (so `StoreSplitMigrator` has already run). Needs no view, no
+    /// authorized session, and no photo access.
+    static let reportStoreArgument = "-cloudfull-report-store"
+
     /// Writes the shrink replacement of `$CLOUDFULL_HDR_ORIGINAL_ID` to
     /// `Documents/hdr_probe.mov` and exits. Fired from
     /// `CloudKeyBackfillLauncher.runIfNeeded`, once photo authorization
@@ -224,6 +232,25 @@ struct CloudfullApp: App {
             }
             Logger(subsystem: Bundle.main.bundleIdentifier ?? "com.cloudfull.app", category: "AuthReport")
                 .log("auth_report_\(name, privacy: .public)")
+            exit(0)
+        }
+        // Opens the container — running `StoreSplitMigrator` if this is
+        // the first launch after an upgrade — then reports one line
+        // with every row count `scripts/m7_upgrade_check.sh` checks,
+        // and exits. Needs no view and no authorized session.
+        if ProcessInfo.processInfo.arguments.contains(Self.reportStoreArgument) {
+            let context = ModelContext(CloudfullModelContainer.shared)
+            let seen = (try? context.fetchCount(FetchDescriptor<SeenEntry>())) ?? 0
+            let liked = (try? context.fetchCount(FetchDescriptor<LikedEntry>())) ?? 0
+            let trashRows = (try? context.fetch(FetchDescriptor<TrashEntry>())) ?? []
+            let photoSeen = (try? context.fetchCount(FetchDescriptor<PhotoSeenEntry>())) ?? 0
+            let deckState = (try? context.fetchCount(FetchDescriptor<DeckState>())) ?? 0
+            let deckOrder = (try? context.fetchCount(FetchDescriptor<DeckOrder>())) ?? 0
+            let photoDeck = (try? context.fetchCount(FetchDescriptor<PhotoDeckState>())) ?? 0
+            let meta = (try? context.fetchCount(FetchDescriptor<PhotoMetaRecord>())) ?? 0
+            let trashOwned = trashRows.filter { $0.originDeviceID == DeviceIdentity.current }.count
+            Logger(subsystem: Bundle.main.bundleIdentifier ?? "com.cloudfull.app", category: "StoreReport")
+                .log("store_report_\(CloudfullModelContainer.mode.rawValue)_\(seen)_\(liked)_\(trashRows.count)_\(photoSeen)_\(deckState)_\(deckOrder)_\(photoDeck)_\(meta)_\(trashOwned)")
             exit(0)
         }
         #endif
