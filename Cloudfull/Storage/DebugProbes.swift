@@ -457,7 +457,7 @@ final class RowCountProbe: ObservableObject {
         pendingBytes = trashAll.reduce(Int64(0)) { $0 + max($1.bytes - $1.replacementBytes, 0) }
         dormantCount = trashAll.filter { $0.dormantSince != nil }.count
         newestEntry  = trashAll.first.map { ($0.assetKey, $0.bytes, $0.replacementBytes) }
-        foreignTrash = trashAll.filter { $0.originDeviceID != DeviceIdentity.current }.count
+        foreignTrash = trashAll.filter { $0.originDeviceID != DeviceIdentity.currentIfAvailable }.count
 
         if reclaimedBytes != Self.lastReclaimed { reclaimedBytes = Self.lastReclaimed }
     }

@@ -28,76 +28,85 @@ import os
 ///
 /// A `UserDefaults` value under the old key (`sync.deviceID`), from an
 /// earlier build of this branch, is ignored. 1.0 never wrote one.
+///
+/// `currentIfAvailable` is this type's only entry point. There is no
+/// once-per-process `current` sentinel. The Keychain item sits in the
+/// same availability class (`ThisDeviceOnly`) as the SwiftData store
+/// file's own default protection (`completeUntilFirstUserAuthentication`),
+/// so a row is only ever inserted by a user action that needs an
+/// unlocked, foreground UI — by the time any caller needs an id to stamp
+/// or compare, the Keychain is reachable too. A `nil` result is the
+/// impossible-in-practice case, returned instead of a random per-process
+/// sentinel: minting and stamping a row with such a sentinel would make
+/// that row look permanently foreign once a later, reliable launch mints
+/// or reads the real id, since the sentinel is random and never
+/// persisted. Every caller treats `nil` as "foreign for now" (a stamp of
+/// `""`, or "not my row this pass") and simply retries on its next
+/// access instead.
 enum DeviceIdentity {
     private static let service = "com.cloudfull.app.deviceID"
     private static let account = "sync.deviceID"
     private static let log = Logger(subsystem: "com.cloudfull.app", category: "Storage")
 
-    /// The outcome of resolving this device's id, computed once per
-    /// process and cached by the `static let` below. `current` and
-    /// `isReliable` both read this one resolution, so a Keychain read
-    /// that cannot run never mints two different per-process sentinels
-    /// across two callers.
-    private struct Resolution { let id: String; let reliable: Bool }
-
-    private static let resolution: Resolution = {
-        #if DEBUG
-        // `-cloudfull-device-id <value>` takes the value as the next
-        // launch argument, the same shape as `-cloudfull-slow-load`.
-        // Lets a UI test simulate a second device without a second
-        // simulator. The value is used as-is and never stored, so a
-        // later launch without the argument never inherits it.
+    #if DEBUG
+    // `-cloudfull-device-id <value>` takes the value as the next launch
+    // argument, the same shape as `-cloudfull-slow-load`. Lets a UI test
+    // simulate a second device without a second simulator. The value is
+    // used as-is and never stored, so a later launch without the
+    // argument never inherits it.
+    private static let debugOverride: String? = {
         let arguments = ProcessInfo.processInfo.arguments
-        if let flagIndex = arguments.firstIndex(of: "-cloudfull-device-id"), flagIndex + 1 < arguments.count {
-            return Resolution(id: arguments[flagIndex + 1], reliable: true)
+        guard let flagIndex = arguments.firstIndex(of: "-cloudfull-device-id"), flagIndex + 1 < arguments.count else {
+            return nil
         }
+        return arguments[flagIndex + 1]
+    }()
+    #endif
+
+    /// Set once resolution has actually worked: a real Keychain read, or
+    /// a freshly minted id on this device's first-ever access
+    /// (`errSecItemNotFound`). Never set for any other failing status —
+    /// see `currentIfAvailable`. `cacheLock` guards every read and write,
+    /// since this runs from the main actor and from every `@ModelActor`
+    /// background actor that can insert a synced row (`SeenStore`,
+    /// `PhotoSeenStore`, `StoreSplitMigrator`'s own contexts).
+    private static var cachedID: String?
+    private static let cacheLock = NSLock()
+
+    /// This device's id, or `nil` if the Keychain cannot currently be
+    /// read — for example `errSecInteractionNotAllowed`, before the
+    /// device's first unlock this boot. A failed read is never cached:
+    /// the next access tries the Keychain again from scratch, instead of
+    /// being stuck behind a cached failure for the rest of the process.
+    static var currentIfAvailable: String? {
+        #if DEBUG
+        if let debugOverride { return debugOverride }
         #endif
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        if let cachedID { return cachedID }
+
         let (existing, status) = readFromKeychain()
         if let existing {
-            return Resolution(id: existing, reliable: true)
+            cachedID = existing
+            return existing
         }
         guard status == errSecItemNotFound else {
-            // Any failure other than "no item yet" — for example
-            // `errSecInteractionNotAllowed`, before the device's first
-            // unlock this boot — means this read cannot tell whether a
-            // real id already exists. Minting and persisting one here
-            // could silently orphan the real id once the Keychain
-            // becomes reachable again, and every row this process
-            // inserts in the meantime would carry an id no later launch
-            // can ever recognize as its own. Return a per-process
-            // sentinel instead: random, so it matches no stored row,
-            // and never written to the Keychain, so the next launch
-            // tries the real read again from scratch.
-            log.error("DeviceIdentity Keychain read failed, status \(status, privacy: .public); using an unreliable per-process id")
-            return Resolution(id: "unreliable-\(UUID().uuidString)", reliable: false)
+            // Any failure other than "no item yet" means this read
+            // cannot tell whether a real id already exists. Minting and
+            // persisting one here could silently orphan the real id
+            // once the Keychain becomes reachable again, and every row
+            // this process inserts in the meantime would carry an id no
+            // later launch can ever recognize as its own. Cache nothing,
+            // so the next access tries the real read again from scratch.
+            log.error("DeviceIdentity Keychain read failed, status \(status, privacy: .public); will retry on next access")
+            return nil
         }
         let created = UUID().uuidString
         writeToKeychain(created)
-        return Resolution(id: created, reliable: true)
-    }()
-
-    static var current: String { resolution.id }
-
-    /// False when `current` is this process's unreliable sentinel, not
-    /// this device's real, Keychain-persisted id — see `resolution`.
-    /// `StoreSplitMigrator` must not stamp `TrashEntry.originDeviceID`
-    /// with an unreliable id, and a new synced row must insert with
-    /// `stampForNewRow` instead of `current` directly.
-    static var isReliable: Bool { resolution.reliable }
-
-    /// The value a newly inserted synced row's `originDeviceID` should
-    /// stamp. Equal to `current` while reliable. `""` ("not yet
-    /// stamped", same as a 1.0 row) while not: writing the unreliable
-    /// sentinel would make this device's own row look permanently
-    /// foreign once a later, reliable launch mints the real id — the
-    /// sentinel is random and never persisted, so it could never match
-    /// again. `""` is safe meanwhile: `TrashService.reconcileWithLibrary`'s
-    /// `== DeviceIdentity.current` check already treats it as another
-    /// device's row and never auto-deletes it, `SeenStore`/`PhotoDeck`'s
-    /// foreign-match checks already treat `""` as this device's own, and
-    /// `StoreSplitMigrator`'s origin-stamp step finds and re-stamps any
-    /// `""` `TrashEntry` row once this device's id is reliable again.
-    static var stampForNewRow: String { isReliable ? current : "" }
+        cachedID = created
+        return created
+    }
 
     private static func keychainQuery() -> [String: Any] {
         [kSecClass as String: kSecClassGenericPassword,
@@ -125,7 +134,7 @@ enum DeviceIdentity {
         var query = keychainQuery()
         query[kSecValueData as String] = Data(value.utf8)
         query[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        // A failed write leaves `current` holding this launch's freshly
+        // A failed write leaves `cachedID` holding this launch's freshly
         // minted id in memory, but nothing on the Keychain to read back
         // next launch; the next launch mints another id the same way.
         // Not destructive either way: at worst, two launches of the same

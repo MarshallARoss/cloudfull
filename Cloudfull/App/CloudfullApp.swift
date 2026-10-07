@@ -248,7 +248,7 @@ struct CloudfullApp: App {
             let deckOrder = (try? context.fetchCount(FetchDescriptor<DeckOrder>())) ?? 0
             let photoDeck = (try? context.fetchCount(FetchDescriptor<PhotoDeckState>())) ?? 0
             let meta = (try? context.fetchCount(FetchDescriptor<PhotoMetaRecord>())) ?? 0
-            let trashOwned = trashRows.filter { $0.originDeviceID == DeviceIdentity.current }.count
+            let trashOwned = trashRows.filter { $0.originDeviceID == DeviceIdentity.currentIfAvailable }.count
             Logger(subsystem: Bundle.main.bundleIdentifier ?? "com.cloudfull.app", category: "StoreReport")
                 .log("store_report_\(CloudfullModelContainer.mode.rawValue, privacy: .public)_\(seen)_\(liked)_\(trashRows.count)_\(photoSeen)_\(deckState)_\(deckOrder)_\(photoDeck)_\(meta)_\(trashOwned)")
             exit(0)

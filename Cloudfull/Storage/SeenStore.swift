@@ -117,8 +117,14 @@ actor SeenStore {
     /// (never synced to this device, or never will be) would otherwise
     /// cost a fresh PhotoKit round trip on every call instead of once
     /// per session.
+    ///
+    /// Returns nothing, doing no fetch, while this device's own id
+    /// cannot currently be read: without it, this method cannot tell
+    /// its own rows apart from a foreign device's, and every row here
+    /// stays untouched. The next call — there is no cached failure, see
+    /// `DeviceIdentity.currentIfAvailable` — tries again.
     private func foreignMatches() -> [(row: SeenEntry, localID: String)] {
-        let me = DeviceIdentity.current
+        guard let me = DeviceIdentity.currentIfAvailable else { return [] }
         let descriptor = FetchDescriptor<SeenEntry>(predicate: #Predicate {
             $0.originDeviceID != me && $0.originDeviceID != "" && $0.cloudKey != nil
         })

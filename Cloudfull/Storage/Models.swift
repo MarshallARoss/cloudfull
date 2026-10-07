@@ -95,13 +95,14 @@ final class SeenEntry {
     /// fallback that lets a row survive that. The field is optional and
     /// defaulted, so adding it needs no live-container migration.
     var cloudKey: String? = nil
-    /// `DeviceIdentity.stampForNewRow` at insert time: normally
-    /// `DeviceIdentity.current`, the device that inserted the row.
-    /// `""` = a 1.0 row, or a row inserted while this device's id could
-    /// not be read reliably — see `DeviceIdentity.stampForNewRow`.
+    /// `DeviceIdentity.currentIfAvailable` at insert time, or `""` when
+    /// that was `nil` — this device's id could not be read reliably at
+    /// that moment. `""` is also what a 1.0 row carries. Either way, a
+    /// `""` row reads as foreign everywhere this field is compared, so
+    /// it is never auto-deleted and never mistaken for this device's own.
     var originDeviceID: String = ""
 
-    init(assetKey: String, cloudKey: String? = nil, originDeviceID: String = DeviceIdentity.stampForNewRow) {
+    init(assetKey: String, cloudKey: String? = nil, originDeviceID: String = DeviceIdentity.currentIfAvailable ?? "") {
         self.assetKey = assetKey
         self.cloudKey = cloudKey
         self.originDeviceID = originDeviceID
@@ -171,10 +172,11 @@ final class TrashEntry {
     /// a video. The bin held only videos before photos gained their own
     /// delete path into this same shared queue.
     var mediaKind: String = TrashMediaKind.video.rawValue
-    /// `DeviceIdentity.stampForNewRow` at insert time: normally
-    /// `DeviceIdentity.current`, the device that inserted the row.
-    /// `""` = a 1.0 row, or a row inserted while this device's id could
-    /// not be read reliably — see `DeviceIdentity.stampForNewRow`.
+    /// `DeviceIdentity.currentIfAvailable` at insert time, or `""` when
+    /// that was `nil` — this device's id could not be read reliably at
+    /// that moment. `""` is also what a 1.0 row carries. Either way, a
+    /// `""` row reads as foreign everywhere this field is compared, so
+    /// it is never auto-deleted and never mistaken for this device's own.
     /// `TrashService.reconcileWithLibrary` reads this to never mark or
     /// delete another device's row; see that method's own comment.
     var originDeviceID: String = ""
@@ -186,7 +188,7 @@ final class TrashEntry {
         cloudKey: String? = nil,
         replacementBytes: Int64 = 0,
         mediaKind: TrashMediaKind = .video,
-        originDeviceID: String = DeviceIdentity.stampForNewRow
+        originDeviceID: String = DeviceIdentity.currentIfAvailable ?? ""
     ) {
         self.assetKey = assetKey
         self.bytes = bytes

@@ -44,14 +44,17 @@ import os
 enum StoreSplitMigrator {
 
     private static let flagKey = "storage.splitV1Done"
-    /// Separate from `flagKey`: the origin-stamp step (3e) alone can be
-    /// deferred past the rest of the split, when this device's id could
-    /// not be read reliably at the time (see `DeviceIdentity.isReliable`
-    /// and `stampOriginDeviceID`'s own comment). `flagKey` still becomes
-    /// true once the rest of the split finishes, so this needs its own
-    /// flag to know whether a later, reliable launch still owes a retry.
-    private static let originStampDoneKey = "storage.originStampDone"
     private static let log = Logger(subsystem: "com.cloudfull.app", category: "Storage")
+
+    /// Thrown by `stampOriginDeviceID` when there are 1.0 rows to stamp
+    /// but this device's id cannot currently be read. Caught by
+    /// `runIfNeeded()`'s own `catch`, the same as any other mid-split
+    /// failure: the flag stays false, `make()` falls back to the single
+    /// full-schema container for this launch, and the whole split
+    /// (stamping included) retries next launch.
+    private enum MigrationError: Error {
+        case deviceIdentityUnavailable
+    }
 
     /// Returns `true` once the 1.0 file is safe for `make()` to open with
     /// the narrower, synced-only schema — whether that is because this
@@ -61,18 +64,11 @@ enum StoreSplitMigrator {
     /// type's doc comment for what the caller must do then.
     @discardableResult
     static func runIfNeeded() -> Bool {
-        if UserDefaults.standard.bool(forKey: flagKey) {
-            // The split itself is done. Only the origin-stamp step can
-            // still be outstanding, if this device's id was unreliable
-            // on every launch so far. Cheap when there is nothing to
-            // retry: both checks below are in-memory reads, with no
-            // store opened unless a retry is actually due.
-            retryOriginStampIfNeeded()
-            return true
-        }
+        if UserDefaults.standard.bool(forKey: flagKey) { return true }
 
         guard FileManager.default.fileExists(atPath: CloudfullModelContainer.syncedStoreURL.path) else {
-            // Fresh install. There is no 1.0 file to migrate rows out of.
+            // Fresh install. There is no 1.0 file to migrate rows out of,
+            // and no pre-M7 `TrashEntry` row to stamp either.
             UserDefaults.standard.set(true, forKey: flagKey)
             return true
         }
@@ -88,7 +84,6 @@ enum StoreSplitMigrator {
 
         let start = Date()
         var deckCopied = false, orderCopied = false, photoDeckCopied = false
-        var originStamped = false
 
         do {
             // Both containers, and the Core Data stack each one opens
@@ -122,20 +117,15 @@ enum StoreSplitMigrator {
                 photoDeckCopied = try copyPhotoDeckStateIfNeeded(from: legacyContext, to: localContext)
                 try localContext.save()
 
-                // Skip the stamp while this device's id is unreliable
-                // (see `DeviceIdentity.isReliable`): writing the id
-                // would stamp every pre-M7 row with a sentinel this
-                // device itself will never recognize again once its
-                // real id becomes readable. `originStamped` stays
-                // false, so `originStampDoneKey` is not set below, and
-                // `retryOriginStampIfNeeded()` tries again on a later,
-                // reliable launch.
-                if DeviceIdentity.isReliable {
-                    try stampOriginDeviceID(in: legacyContext)
-                    originStamped = true
-                } else {
-                    log.error("store_split_stamp_skipped_unreliable_device_id")
-                }
+                // Throws `MigrationError.deviceIdentityUnavailable` if
+                // there is a pre-M7 row to stamp and this device's id
+                // cannot currently be read — caught below, same as any
+                // other mid-split failure. Stamping with no readable id
+                // would need a sentinel this device itself could never
+                // recognize again once its real id becomes readable;
+                // retrying the whole split next launch is simpler and
+                // safe, since nothing has been committed yet.
+                try stampOriginDeviceID(in: legacyContext)
                 try backfillCloudKeysIfAuthorized(in: legacyContext)
 
                 // This store is `.none` here, so a batch delete is fine:
@@ -155,9 +145,6 @@ enum StoreSplitMigrator {
         }
 
         UserDefaults.standard.set(true, forKey: flagKey)
-        if originStamped {
-            UserDefaults.standard.set(true, forKey: originStampDoneKey)
-        }
         #if DEBUG
         let ms = Int(Date().timeIntervalSince(start) * 1000)
         DiagnosticsLog.shared.log(
@@ -239,44 +226,20 @@ enum StoreSplitMigrator {
     /// itself new in M7 (Step C); nothing before this migration ever
     /// read or wrote it.
     ///
-    /// The caller skips this entirely while `DeviceIdentity.isReliable`
-    /// is false, and `retryOriginStampIfNeeded()` below calls it again,
-    /// against the already-split synced store, once a later launch's id
-    /// is reliable. Both callers share this one predicate, so either
-    /// one picks up a row the other left at `""`.
+    /// This runs only once, inside the one-time split, before CloudKit
+    /// ever opens — so it can only ever stamp this device's own pre-M7
+    /// rows, never another device's. Throws if there is a row to stamp
+    /// and this device's id cannot currently be read: the caller's own
+    /// `catch` then leaves the flag false, so the whole split (this step
+    /// included) retries next launch, instead of this method silently
+    /// stamping a sentinel the device could never recognize again.
     private static func stampOriginDeviceID(in legacy: ModelContext) throws {
         let rows = try legacy.fetch(FetchDescriptor<TrashEntry>(predicate: #Predicate { $0.originDeviceID == "" }))
         guard !rows.isEmpty else { return }
-        let current = DeviceIdentity.current
-        for row in rows { row.originDeviceID = current }
-    }
-
-    /// Catches up the origin-stamp step (3e) on a launch after the one
-    /// where the main split ran, when that earlier launch's
-    /// `DeviceIdentity` read was unreliable and skipped it (see
-    /// `stampOriginDeviceID`'s own comment). A no-op, opening no store,
-    /// while `originStampDoneKey` is already set or the id is still
-    /// unreliable. Opens the synced store alone, `.none`, the same way
-    /// the main split's `legacy` container does, and releases it before
-    /// `CloudfullModelContainer.make()` opens the real container.
-    private static func retryOriginStampIfNeeded() {
-        guard !UserDefaults.standard.bool(forKey: originStampDoneKey) else { return }
-        guard DeviceIdentity.isReliable else { return }
-        do {
-            try autoreleasepool {
-                let syncedSchema = Schema(CloudfullModelContainer.syncedModels)
-                let config = ModelConfiguration(
-                    "default", schema: syncedSchema, url: CloudfullModelContainer.syncedStoreURL, cloudKitDatabase: .none
-                )
-                let container = try ModelContainer(for: syncedSchema, configurations: config)
-                let context = ModelContext(container)
-                try stampOriginDeviceID(in: context)
-                try context.save()
-            }
-            UserDefaults.standard.set(true, forKey: originStampDoneKey)
-        } catch {
-            log.error("store_split_origin_stamp_retry_failed_\(error.localizedDescription, privacy: .public)")
+        guard let current = DeviceIdentity.currentIfAvailable else {
+            throw MigrationError.deviceIdentityUnavailable
         }
+        for row in rows { row.originDeviceID = current }
     }
 
     /// Fills `cloudKey` on every `TrashEntry` and `LikedEntry` row that

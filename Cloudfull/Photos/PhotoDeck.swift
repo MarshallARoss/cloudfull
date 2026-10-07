@@ -1313,8 +1313,12 @@ actor PhotoSeenStore {
     /// long-lived one, so `allSeenKeys()` can read foreign rows through
     /// the same throwaway context it already uses for the direct fetch.
     /// See that method's own comment on why.
+    ///
+    /// Returns nothing, doing no fetch, while this device's own id
+    /// cannot currently be read — same reasoning as
+    /// `SeenStore.foreignMatches()`.
     private func foreignMatches(in context: ModelContext) -> [(row: PhotoSeenEntry, localID: String)] {
-        let me = DeviceIdentity.current
+        guard let me = DeviceIdentity.currentIfAvailable else { return [] }
         let descriptor = FetchDescriptor<PhotoSeenEntry>(predicate: #Predicate {
             $0.originDeviceID != me && $0.originDeviceID != "" && $0.cloudKey != nil
         })

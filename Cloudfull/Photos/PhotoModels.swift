@@ -71,13 +71,13 @@ final class PhotoSeenEntry {
     /// at insert time. It gives a stable key across a restore or a device
     /// migration. See `SeenEntry.cloudKey` in Cloudfull/Storage/Models.swift.
     var cloudKey: String? = nil
-    /// `DeviceIdentity.stampForNewRow` at insert time. `""` = a 1.0 row,
-    /// or a row inserted while this device's id could not be read
-    /// reliably. See `SeenEntry.originDeviceID` in
-    /// `Cloudfull/Storage/Models.swift`.
+    /// `DeviceIdentity.currentIfAvailable` at insert time, or `""` when
+    /// that was `nil` — this device's id could not be read reliably at
+    /// that moment. `""` is also what a 1.0 row carries. See
+    /// `SeenEntry.originDeviceID` in `Cloudfull/Storage/Models.swift`.
     var originDeviceID: String = ""
 
-    init(assetKey: String, cloudKey: String? = nil, originDeviceID: String = DeviceIdentity.stampForNewRow) {
+    init(assetKey: String, cloudKey: String? = nil, originDeviceID: String = DeviceIdentity.currentIfAvailable ?? "") {
         self.assetKey = assetKey
         self.cloudKey = cloudKey
         self.originDeviceID = originDeviceID
