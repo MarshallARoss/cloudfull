@@ -129,6 +129,26 @@ final class AssetKeyResolver: ObservableObject {
 
     private var modelContext: ModelContext?
 
+    /// Set when `refreshAfterRemoteChange()` finds a resolution already
+    /// in flight (`state == .pending`, from priming's background resolve
+    /// or from an earlier call to this method) and defers instead of
+    /// starting a competing one. Checked, and cleared, the moment that
+    /// resolution lands — at the end of `resolveCandidates(_:)` or of
+    /// this method's own normal path — so a remote change that arrives
+    /// mid-resolution runs this method again instead of being dropped. A
+    /// single fixed-delay retry is not reliable: the resolution already
+    /// in flight can take longer than any one guess at its duration.
+    private var needsRemoteRefresh = false
+
+    /// Bumped every time `refreshAfterRemoteChange()` takes ownership of
+    /// the pending phase, just before its `await`. Checked again after
+    /// that `await`: `state == .pending` alone cannot tell this call's
+    /// own pending phase apart from a newer one. If an unrelated re-prime
+    /// moved `state` on and back to `.pending` while this call was still
+    /// suspended, a newer call became the owner, and this call must not
+    /// overwrite its result with a now-stale one.
+    private var refreshGeneration = 0
+
     /// The time limit, in nanoseconds (1.5 s), for the background
     /// cloud-key round trip. `resolveCandidates(_:)` does not apply this
     /// limit. No code uses this constant yet.
@@ -302,6 +322,14 @@ final class AssetKeyResolver: ObservableObject {
 
         let newlyExcluded = Array(excludedLive.subtracting(before))
         for handler in resolutionLandedHandlers { handler(newlyExcluded) }
+
+        // A remote change arrived while this priming resolution was in
+        // flight. `refreshAfterRemoteChange()` deferred instead of
+        // racing it; run that refresh now that this resolution landed.
+        if needsRemoteRefresh {
+            needsRemoteRefresh = false
+            await refreshAfterRemoteChange()
+        }
     }
 
     /// Re-resolves shield and queue membership after a CloudKit import
@@ -315,10 +343,11 @@ final class AssetKeyResolver: ObservableObject {
     ///   to refresh early.
     /// - `.partial`: Limited access. No resolution runs under Limited;
     ///   only the raw-key membership is worth re-reading.
-    /// - `.pending`: a resolution this resolver started is already in
-    ///   flight. This call is a no-op; `SyncObserver` re-requests once
-    ///   more after its own 2-second wait, which is enough time for an
-    ///   ordinary resolution to land.
+    /// - `.pending`: a resolution is already in flight, either from
+    ///   priming's background resolve or from an earlier call to this
+    ///   method. This call sets `needsRemoteRefresh` and returns. The
+    ///   resolution already running checks that flag the moment it
+    ///   lands and runs this method again if it is set.
     /// - `.clean`/`.resolved`: the normal path below.
     func refreshAfterRemoteChange() async {
         switch state {
@@ -329,37 +358,66 @@ final class AssetKeyResolver: ObservableObject {
             recompute()
             return
         case .pending:
+            needsRemoteRefresh = true
             return
         case .clean, .resolved:
             break
         }
-
-        // Setting `.pending` here, before the `await` below, is what
-        // makes `isDestructiveActionSafe` false for the duration of this
-        // refresh. No delete may run while a remote row's shield status
-        // is still being resolved.
-        let before = excludedLive
-        state = .pending
-        recompute()
 
         let candidates = collectRotationCandidates()
         // Map only the cloud keys this resolver does not already know,
         // the same restraint `resolveCandidates` applies to its own
         // caller-supplied candidate list.
         let newKeys = Array(Set(candidates.map(\.cloudKey)).subtracting(cloudToLocal.keys))
-        if !newKeys.isEmpty {
-            let mapping = await Task.detached(priority: .userInitiated) {
-                PhotoLibraryService.localIdentifierMappings(forCloudIdentifiers: newKeys)
-            }.value
-            cloudToLocal.merge(mapping) { _, new in new }
+        guard !newKeys.isEmpty else {
+            // Every remote row's raw key already names a live asset
+            // directly, or its cloud key is one this resolver already
+            // knows. A plain rebuild picks up a newly shielded or
+            // queued row with no detour through `.pending`, so an
+            // import that only touched `SeenEntry`/`PhotoSeenEntry`
+            // rows — the common case — never flickers the Delete
+            // button. (Step D: a remote seen row applies at the next
+            // deal or launch anyway, not mid-session.)
+            rebuildFromStore(resolvingWithCache: true)
+            recompute()
+            return
         }
 
+        // Setting `.pending` here, before the `await` below, is what
+        // makes `isDestructiveActionSafe` false for the duration of this
+        // refresh. No delete may run while a remote row's shield status
+        // is still being resolved. `refreshGeneration` marks this call
+        // as that pending phase's current owner; see its own comment.
+        let before = excludedLive
+        state = .pending
+        refreshGeneration += 1
+        let myGeneration = refreshGeneration
+        recompute()
+
+        let mapping = await Task.detached(priority: .userInitiated) {
+            PhotoLibraryService.localIdentifierMappings(forCloudIdentifiers: newKeys)
+        }.value
+        cloudToLocal.merge(mapping) { _, new in new }
+
+        // Something else — an auth downgrade to Limited, or a newer
+        // call that took over the pending phase while this one was
+        // suspended above — can have moved `state` on. Writing
+        // `.resolved` unconditionally here would clobber that newer
+        // state with this now-stale result.
+        guard state == .pending, myGeneration == refreshGeneration else { return }
         rebuildFromStore(resolvingWithCache: true)
         state = .resolved
         recompute()
 
         let newlyExcluded = Array(excludedLive.subtracting(before))
         for handler in resolutionLandedHandlers { handler(newlyExcluded) }
+
+        // A remote change arrived while this call's own resolution was
+        // in flight. Run the refresh once more so it is not dropped.
+        if needsRemoteRefresh {
+            needsRemoteRefresh = false
+            await refreshAfterRemoteChange()
+        }
     }
 
     // MARK: - Incremental maintenance

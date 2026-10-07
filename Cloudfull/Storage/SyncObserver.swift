@@ -71,15 +71,25 @@ final class SyncObserver: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] notification in
-            self?.handleEventNotification(notification)
+            // `queue: .main` above guarantees this closure runs on the
+            // main queue, so it is safe to assume MainActor isolation
+            // here. Same pattern as `OrientationMonitor.start()` and
+            // `MainThreadWatchdog.start()`: the closure itself is plain,
+            // not `@MainActor`, so it cannot call an isolated method
+            // directly without this.
+            MainActor.assumeIsolated {
+                self?.handleEventNotification(notification)
+            }
         }
         accountObserver = NotificationCenter.default.addObserver(
             forName: .CKAccountChanged,
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.scheduleRefresh()
-            self?.refreshAccountStatus()
+            MainActor.assumeIsolated {
+                self?.scheduleRefresh()
+                self?.refreshAccountStatus()
+            }
         }
 
         #if DEBUG
@@ -155,36 +165,41 @@ final class SyncObserver: ObservableObject {
         }
     }
 
+    /// Liked/Trash row counts as of the last pass that actually ran the
+    /// trash/deck refresh below. `-1` guarantees the first pass runs it.
+    private var lastRefreshedLikedCount = -1
+    private var lastRefreshedTrashCount = -1
+
     /// (1) Re-resolves rotation candidates and shield/queue membership;
     /// (2) tells `TrashService` a remote change landed, so a remote
     /// Keep can pull its asset back out of the bin; (3) tells both
     /// decks to recompute their pool counts. In that order, so the
     /// resolver's shield set is current before `TrashService` reads it.
+    ///
+    /// (2) and (3) run only when the Liked or Trash row count actually
+    /// changed since the last pass. An import that only touched
+    /// `SeenEntry`/`PhotoSeenEntry` rows — the common case while two
+    /// devices are both active — needs neither: `AssetKeyResolver`
+    /// already skips its own `.pending` detour for such an import (see
+    /// `refreshAfterRemoteChange()`), and this check keeps the bin and
+    /// the decks from reloading for no visible change either.
     private func refresh() async {
-        // M7-QUESTION: the spec says only "SyncObserver re-requests once
-        // after 2 s" for the `.pending` case, not the exact mechanism.
-        // Conservative reading: detect that `refreshAfterRemoteChange()`
-        // took its no-op `.pending` branch (state is still `.pending`
-        // after it returns, since every other branch leaves state
-        // `.resolved`, `.clean`, `.partial`, or unchanged at `.unprimed`),
-        // then wait 2 s and ask exactly once more.
         await AssetKeyResolver.shared.refreshAfterRemoteChange()
-        if AssetKeyResolver.shared.state == .pending {
-            // `refreshAfterRemoteChange()` found a resolution already in
-            // flight and did nothing. Ask again once, after the window
-            // an ordinary resolution needs to land.
-            try? await Task.sleep(for: .seconds(2))
-            await AssetKeyResolver.shared.refreshAfterRemoteChange()
-        }
 
-        trash?.handleRemoteChange()
-        deck?.refreshPoolAfterExternalChange()
-        PhotoDeck.shared.refreshPoolAfterExternalChange()
-
-        #if DEBUG
         let context = CloudfullModelContainer.shared.mainContext
         let liked = (try? context.fetchCount(FetchDescriptor<LikedEntry>())) ?? 0
         let trashCount = (try? context.fetchCount(FetchDescriptor<TrashEntry>())) ?? 0
+        let likedOrTrashChanged = liked != lastRefreshedLikedCount || trashCount != lastRefreshedTrashCount
+        lastRefreshedLikedCount = liked
+        lastRefreshedTrashCount = trashCount
+
+        if likedOrTrashChanged {
+            trash?.handleRemoteChange()
+            deck?.refreshPoolAfterExternalChange()
+            PhotoDeck.shared.refreshPoolAfterExternalChange()
+        }
+
+        #if DEBUG
         DiagnosticsLog.shared.log("Sync", "sync_refresh_\(liked)_\(trashCount)")
         #endif
     }
