@@ -49,16 +49,6 @@ final class TrashService: ObservableObject {
     private let logger = Logger(subsystem: "com.cloudfull.app", category: "TrashService")
     private var libraryChangeTask: Task<Void, Never>?
     private var observerToken: LibraryObserverToken?
-    /// Reloads `entries` the moment any `ModelContext` on
-    /// `CloudfullModelContainer.shared` finishes saving — in particular,
-    /// a CloudKit import merging a remote delete into the main context.
-    /// Without this, `entries` can keep holding a `TrashEntry` CloudKit
-    /// already removed until the next explicit `load()`, and the Bin UI
-    /// reading a deleted `@Model`'s property is a SwiftData fatal error
-    /// ("backing data could no longer be found"). `SyncObserver.refresh()`
-    /// already calls `handleRemoteChange()`, which also reloads, but only
-    /// after its own 2 s coalescing delay; this observer closes that gap.
-    private var contextSaveObserver: NSObjectProtocol?
     private var didStart = false
 
     /// Maps each entry's stored `assetKey` and its resolved live id to
@@ -97,11 +87,17 @@ final class TrashService: ObservableObject {
     /// measured size (see `PhotoLibraryService.fileSize(for:)`). The UI
     /// uses this to show "about" before a pending or freed figure instead
     /// of an exact number.
-    var hasEstimatedSizes: Bool { entries.contains { $0.isEstimatedBytes } }
+    ///
+    /// `.isLive` must run first in every filter below. A merged CloudKit
+    /// import can drop a row from `entries` only at the next `load()`;
+    /// in between, `entries` can still hold a `TrashEntry` that import
+    /// already removed, and reading any other property on it is a
+    /// SwiftData fatal error. See `TrashEntry.isLive`.
+    var hasEstimatedSizes: Bool { entries.contains { $0.isLive && $0.isEstimatedBytes } }
     /// Counts rows by their stored `mediaKind`. A row with no stored kind
     /// has the default "video", so it counts as a video.
-    var videoCount: Int { entries.filter { $0.mediaKind == TrashMediaKind.video.rawValue }.count }
-    var photoCount: Int { entries.filter { $0.mediaKind == TrashMediaKind.photo.rawValue }.count }
+    var videoCount: Int { entries.filter { $0.isLive && $0.mediaKind == TrashMediaKind.video.rawValue }.count }
+    var photoCount: Int { entries.filter { $0.isLive && $0.mediaKind == TrashMediaKind.photo.rawValue }.count }
 
     init(library: PhotoLibraryService, modelContext: ModelContext) {
         self.library = library
@@ -127,9 +123,6 @@ final class TrashService: ObservableObject {
         libraryChangeTask?.cancel()
         if let observerToken {
             library.removeLibraryChangeObserver(observerToken)
-        }
-        if let contextSaveObserver {
-            NotificationCenter.default.removeObserver(contextSaveObserver)
         }
     }
 
@@ -179,24 +172,17 @@ final class TrashService: ObservableObject {
         observerToken = library.addLibraryChangeObserver { [weak self] in
             self?.scheduleReconciliation()
         }
-
-        // See `contextSaveObserver`'s own comment. `object: nil` catches
-        // every `ModelContext`'s save, not only this service's own —
-        // including a CloudKit import merging into the main context,
-        // which is the one this observer exists for.
-        contextSaveObserver = NotificationCenter.default.addObserver(
-            forName: ModelContext.didSave,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            // `queue: .main` above guarantees this closure runs on the
-            // main queue, so it is safe to assume MainActor isolation
-            // here, the same pattern `SyncObserver.attach(trash:deck:)`
-            // uses for its own `NotificationCenter` observers.
-            MainActor.assumeIsolated {
-                self?.load()
-            }
-        }
+        // A `ModelContext.didSave` observer used to reload `entries`
+        // here too, for a CloudKit import merging into the main
+        // context. It fired on every local save as well — a reload
+        // storm on main for a plain swipe-to-bin — and still missed the
+        // case it was for: an import merge does not necessarily post
+        // `didSave` on the main context. `SyncObserver.refresh()` now
+        // always calls `handleRemoteChange()` after an import (fix 3),
+        // which reloads instead. Every local Bin change already reloads
+        // through this service's own `load()` calls in `queue`,
+        // `restore`, `emptyBin`, and `reconcileWithLibrary` — see each
+        // method's own save-then-`load()` pattern.
     }
 
     /// True if `assetID` matches a queued entry's stored key or live id.
@@ -343,7 +329,11 @@ final class TrashService: ObservableObject {
     /// reporting "Queued" for an asset no longer in the bin.
     @discardableResult
     private func dropShieldedEntries() -> Bool {
-        let shielded = entries.filter { resolver.isShielded($0.assetKey) || resolver.isShielded(resolver.exclusionKey(assetKey: $0.assetKey, cloudKey: $0.cloudKey)) }
+        // `$0.isLive` must run first: a merged CloudKit import can have
+        // invalidated a row in `entries` since the last `load()`, and
+        // reading any other property on it is a SwiftData fatal error.
+        // See `TrashEntry.isLive`.
+        let shielded = entries.filter { $0.isLive && (resolver.isShielded($0.assetKey) || resolver.isShielded(resolver.exclusionKey(assetKey: $0.assetKey, cloudKey: $0.cloudKey))) }
         guard !shielded.isEmpty else { return false }
         for entry in shielded {
             let (assetKey, cloudKey) = (entry.assetKey, entry.cloudKey)
@@ -387,11 +377,14 @@ final class TrashService: ObservableObject {
         await ensureResolverPrimedIfNeeded()
         guard library.authStatus == .authorized, resolver.isDestructiveActionSafe else { return nil }
 
-        // Plain copies of what the counts need, taken before the
-        // SwiftData delete below. A deleted `@Model` object must not be
-        // read afterward.
+        // Plain copies of what the usage-tracking counts need, taken
+        // right after the await above. `.isLive` first: a merged
+        // CloudKit import can have invalidated a row in `entries`
+        // during that await, and reading any other property on it is a
+        // SwiftData fatal error ("backing data could no longer be
+        // found"). See `TrashEntry.isLive`.
         struct EmptiedFacts { let assetKey: String; let queuedAt: Date; let bytes: Int64; let replacementBytes: Int64; let isEstimatedBytes: Bool; let mediaKind: String }
-        let entriesBeingEmptied = entries.map { EmptiedFacts(assetKey: $0.assetKey, queuedAt: $0.queuedAt, bytes: $0.bytes, replacementBytes: $0.replacementBytes, isEstimatedBytes: $0.isEstimatedBytes, mediaKind: $0.mediaKind) }
+        let entriesBeingEmptied = entries.filter(\.isLive).map { EmptiedFacts(assetKey: $0.assetKey, queuedAt: $0.queuedAt, bytes: $0.bytes, replacementBytes: $0.replacementBytes, isEstimatedBytes: $0.isEstimatedBytes, mediaKind: $0.mediaKind) }
         // Do not delete a liked asset. `DeckViewModel.like(assetID:)`
         // removes the matching entry, but a sync conflict, or a remote
         // Keep landing through CloudKit, can bring it back. This is the
@@ -401,24 +394,37 @@ final class TrashService: ObservableObject {
         // Resolve each entry to its current local id. Skip an entry that
         // does not resolve, and keep its row. Try the resolver first. If
         // it fails, use this service's own spot check, so a new photo
-        // row is not skipped.
-        let liveSnapshot = entries
+        // row is not skipped. `.isLive` first, same reason as above.
+        let liveSnapshot = entries.filter(\.isLive)
         let (spotFound, spotResolvedByCloudKey, spotLibraryIsEmpty) = await spotCheckLiveness(for: liveSnapshot)
+        // Re-filtered, not reused: a merged import can have invalidated
+        // any of `liveSnapshot`'s own rows during the await just above.
+        let stillLiveAfterSpotCheck = liveSnapshot.filter(\.isLive)
         if !spotLibraryIsEmpty {
-            feedPhotoSnapshot(liveSnapshot, found: spotFound, resolvedByCloudKey: spotResolvedByCloudKey)
-            let deadNow = Set(liveSnapshot.compactMap { entry in
+            feedPhotoSnapshot(stillLiveAfterSpotCheck, found: spotFound, resolvedByCloudKey: spotResolvedByCloudKey)
+            let deadNow = Set(stillLiveAfterSpotCheck.compactMap { entry in
                 liveIdentifier(for: entry, found: spotFound, resolvedByCloudKey: spotResolvedByCloudKey) == nil ? entry.assetKey : nil
             })
             if deadNow != confirmedDeadIDs { confirmedDeadIDs = deadNow }
         }
-        var targets: [(entry: TrashEntry, liveID: String)] = entries.compactMap { entry in
-            if let live = resolver.currentLocalIdentifier(assetKey: entry.assetKey, cloudKey: entry.cloudKey) {
-                return (entry, live)
+        // From this point on, every delete target is a plain value —
+        // never a `TrashEntry` reference — so nothing below can trip
+        // over a row a later await invalidates. `deleteAssets(ids:)`
+        // below is this method's longest await; the model object is
+        // re-resolved, `isLive`-guarded, only once, right before the
+        // actual `modelContext.delete(_:)` call after it returns.
+        struct Target { let assetKey: String; let liveID: String; let bytes: Int64; let replacementBytes: Int64 }
+        var targets: [Target] = entries.filter(\.isLive).compactMap { entry in
+            let live: String
+            if let resolved = resolver.currentLocalIdentifier(assetKey: entry.assetKey, cloudKey: entry.cloudKey) {
+                live = resolved
+            } else if !spotLibraryIsEmpty,
+                      let resolved = liveIdentifier(for: entry, found: spotFound, resolvedByCloudKey: spotResolvedByCloudKey) {
+                live = resolved
+            } else {
+                return nil
             }
-            guard !spotLibraryIsEmpty,
-                  let live = liveIdentifier(for: entry, found: spotFound, resolvedByCloudKey: spotResolvedByCloudKey)
-            else { return nil }
-            return (entry, live)
+            return Target(assetKey: entry.assetKey, liveID: live, bytes: entry.bytes, replacementBytes: entry.replacementBytes)
         }
         guard !targets.isEmpty else { return [] }
 
@@ -426,7 +432,7 @@ final class TrashService: ObservableObject {
         // `TrashView` calls `restore(assetID:)` with the stored
         // `assetKey`, not the live id. Put both forms in the set so the
         // restore guard matches either one.
-        pendingEmptyIDs = Set(liveIDs).union(targets.map { $0.entry.assetKey })
+        pendingEmptyIDs = Set(liveIDs).union(targets.map(\.assetKey))
         defer { pendingEmptyIDs = [] }
 
         // A remote Keep can land between the shield re-check above and
@@ -435,10 +441,10 @@ final class TrashService: ObservableObject {
         // before the irreversible call: this is the last point that can
         // stop it.
         guard resolver.isDestructiveActionSafe else { return nil }
-        targets = targets.filter { !resolver.isShielded($0.liveID) && !resolver.isShielded($0.entry.assetKey) }
+        targets = targets.filter { !resolver.isShielded($0.liveID) && !resolver.isShielded($0.assetKey) }
         guard !targets.isEmpty else { return [] }
         liveIDs = targets.map(\.liveID)
-        pendingEmptyIDs = Set(liveIDs).union(targets.map { $0.entry.assetKey })
+        pendingEmptyIDs = Set(liveIDs).union(targets.map(\.assetKey))
 
         // Known limit (design/M7_SPEC.md "Known limits"): the re-check
         // above is the last point this method controls. `deleteAssets`
@@ -460,18 +466,39 @@ final class TrashService: ObservableObject {
             return []
         }
 
-        let deletedEntries = targets.filter { deletedLiveIDs.contains($0.liveID) }
+        // Everything from here on reads only `targets`' own value
+        // fields, captured before the `deleteAssets` await above —
+        // never a `TrashEntry` reference carried across it.
+        let deletedTargets = targets.filter { deletedLiveIDs.contains($0.liveID) }
         // Snapshot each deleted entry's contribution before the delete,
         // using the same `max(bytes - replacementBytes, 0)` expression
         // `load()` uses for `pendingBytes`. Every byte leaves
         // `pendingBytes` once: by a restore, or here, into
         // `reclaimedBytes` after a successful empty. This keeps the bin
         // sheet and the space chip in agreement.
-        let reclaimedDelta = deletedEntries.reduce(Int64(0)) {
-            $0 + max($1.entry.bytes - $1.entry.replacementBytes, 0)
+        let reclaimedDelta = deletedTargets.reduce(Int64(0)) {
+            $0 + max($1.bytes - $1.replacementBytes, 0)
         }
-        for (entry, _) in deletedEntries {
-            modelContext.delete(entry)
+        let deletedAssetKeys = Set(deletedTargets.map(\.assetKey))
+        // Re-resolve to live model objects only now, from a fresh
+        // `entries` read guarded by `isLive`. A reference captured
+        // before `deleteAssets`'s await could itself be dead by now; a
+        // row already gone — merged away remotely while that call
+        // awaited — simply has no entry in this dictionary, and this
+        // loop has nothing left to delete for it. Built the same way
+        // `load()` builds `entriesByLiveKey`: a plain assignment loop,
+        // not `Dictionary(uniqueKeysWithValues:)`, because `assetKey`
+        // carries no uniqueness constraint and two devices can
+        // independently queue the same asset before either sees the
+        // other's row.
+        var liveByAssetKey: [String: TrashEntry] = [:]
+        for entry in entries where entry.isLive {
+            liveByAssetKey[entry.assetKey] = entry
+        }
+        for assetKey in deletedAssetKeys {
+            if let entry = liveByAssetKey[assetKey] {
+                modelContext.delete(entry)
+            }
         }
         // The PhotoKit delete is complete. If the cleanup save fails,
         // `reconcileWithLibrary()` removes the rows on a later pass. Do
@@ -486,7 +513,6 @@ final class TrashService: ObservableObject {
         RowCountProbe.lastReclaimed = reclaimedBytes
         #endif
         load()
-        let deletedAssetKeys = Set(deletedEntries.map { $0.entry.assetKey })
         #if DEBUG
         // `gate_all.sh` reads this line: the exact set this batch
         // deleted. It can check the result against Photos.sqlite

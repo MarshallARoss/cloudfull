@@ -95,11 +95,13 @@ final class SeenEntry {
     /// fallback that lets a row survive that. The field is optional and
     /// defaulted, so adding it needs no live-container migration.
     var cloudKey: String? = nil
-    /// `DeviceIdentity.current` of the device that inserted the row.
-    /// `""` = a 1.0 row.
+    /// `DeviceIdentity.stampForNewRow` at insert time: normally
+    /// `DeviceIdentity.current`, the device that inserted the row.
+    /// `""` = a 1.0 row, or a row inserted while this device's id could
+    /// not be read reliably — see `DeviceIdentity.stampForNewRow`.
     var originDeviceID: String = ""
 
-    init(assetKey: String, cloudKey: String? = nil, originDeviceID: String = DeviceIdentity.current) {
+    init(assetKey: String, cloudKey: String? = nil, originDeviceID: String = DeviceIdentity.stampForNewRow) {
         self.assetKey = assetKey
         self.cloudKey = cloudKey
         self.originDeviceID = originDeviceID
@@ -169,10 +171,12 @@ final class TrashEntry {
     /// a video. The bin held only videos before photos gained their own
     /// delete path into this same shared queue.
     var mediaKind: String = TrashMediaKind.video.rawValue
-    /// `DeviceIdentity.current` of the device that inserted the row.
-    /// `""` = a 1.0 row. `TrashService.reconcileWithLibrary` reads this
-    /// to never mark or delete another device's row; see that method's
-    /// own comment.
+    /// `DeviceIdentity.stampForNewRow` at insert time: normally
+    /// `DeviceIdentity.current`, the device that inserted the row.
+    /// `""` = a 1.0 row, or a row inserted while this device's id could
+    /// not be read reliably — see `DeviceIdentity.stampForNewRow`.
+    /// `TrashService.reconcileWithLibrary` reads this to never mark or
+    /// delete another device's row; see that method's own comment.
     var originDeviceID: String = ""
 
     init(
@@ -182,7 +186,7 @@ final class TrashEntry {
         cloudKey: String? = nil,
         replacementBytes: Int64 = 0,
         mediaKind: TrashMediaKind = .video,
-        originDeviceID: String = DeviceIdentity.current
+        originDeviceID: String = DeviceIdentity.stampForNewRow
     ) {
         self.assetKey = assetKey
         self.bytes = bytes
@@ -192,4 +196,16 @@ final class TrashEntry {
         self.mediaKind = mediaKind.rawValue
         self.originDeviceID = originDeviceID
     }
+}
+
+extension TrashEntry {
+    /// False once this row's backing data is gone — deleted locally and
+    /// already saved, or merged away by a remote CloudKit import. Every
+    /// read of a `TrashEntry` property other than `isDeleted`/`isLive`
+    /// itself must check this first. `isDeleted` alone misses a row a
+    /// merged import already removed: SwiftData can drop `modelContext`
+    /// to `nil` on such a row without ever flipping `isDeleted`, and
+    /// reading any other stored property on either kind of dead row is a
+    /// SwiftData fatal error ("backing data could no longer be found").
+    var isLive: Bool { modelContext != nil && !isDeleted }
 }

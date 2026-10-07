@@ -168,24 +168,25 @@ struct TrashView: View {
     /// `shrunkEntries` — see `TrashEntry.replacementBytes`. Filtering
     /// preserves `trashService.entries`' own newest-first order.
     ///
-    /// `!$0.isDeleted` must run first in the predicate. A remote import
-    /// can delete the `TrashEntry` this array still holds a reference to
-    /// between one `TrashService.entries` publish and the next; reading
-    /// any other stored property on such a row is a SwiftData fatal
-    /// error ("backing data could no longer be found"). `&&`
-    /// short-circuits, so `replacementBytes` is never read on a row this
-    /// check already excluded.
+    /// `$0.isLive` must run first in the predicate. A remote import can
+    /// delete, or a merge can otherwise invalidate, the `TrashEntry`
+    /// this array still holds a reference to between one
+    /// `TrashService.entries` publish and the next; reading any other
+    /// stored property on such a row is a SwiftData fatal error
+    /// ("backing data could no longer be found"). `&&` short-circuits,
+    /// so `replacementBytes` is never read on a row this check already
+    /// excluded. See `TrashEntry.isLive`.
     private var deletedEntries: [TrashEntry] {
-        trashService.entries.filter { !$0.isDeleted && $0.replacementBytes == 0 }
+        trashService.entries.filter { $0.isLive && $0.replacementBytes == 0 }
     }
 
     /// Originals a shrink replaced with a smaller HD copy, left in the bin
     /// only because the shrink itself queues them. `replacementBytes > 0`
     /// already marks this, so the split needs no new data. Filtering
     /// preserves `trashService.entries`' own newest-first order. See
-    /// `deletedEntries` for why `!$0.isDeleted` must run first.
+    /// `deletedEntries` for why `$0.isLive` must run first.
     private var shrunkEntries: [TrashEntry] {
-        trashService.entries.filter { !$0.isDeleted && $0.replacementBytes > 0 }
+        trashService.entries.filter { $0.isLive && $0.replacementBytes > 0 }
     }
 
     /// One section's grid. `deletedEntries` and `shrunkEntries` each get
@@ -415,11 +416,20 @@ struct TrashView: View {
     private func performEmpty() async {
         isEmptying = true
         Usage.shared.binEmptyAttempted()   // Counts each Empty Bin tap. Compare with `binEmptied` to find how many users cancel the system dialog.
-        // Record the bytes for each id before the delete. Do not read
-        // `trashService.pendingBytes` after it. PhotoKit skips an id that
-        // no longer resolves. The freed-space message counts only deleted
-        // ids.
-        let entriesBeingFreed = trashService.entries
+        // Plain copies of the bytes for each id, taken before the
+        // delete, filtered to rows still backed by data (`$0.isLive`;
+        // see `TrashEntry.isLive`) at the moment of the copy. Do not
+        // hold a `TrashEntry` reference across `emptyBin()`'s own
+        // await below: a remote import can invalidate it while that
+        // awaits PhotoKit, and reading any other property on it
+        // afterward is a SwiftData fatal error. Do not read
+        // `trashService.pendingBytes` after the await either. PhotoKit
+        // skips an id that no longer resolves. The freed-space message
+        // counts only deleted ids.
+        struct FreedFacts { let assetKey: String; let bytes: Int64; let replacementBytes: Int64; let isEstimatedBytes: Bool }
+        let entriesBeingFreed = trashService.entries.filter(\.isLive).map {
+            FreedFacts(assetKey: $0.assetKey, bytes: $0.bytes, replacementBytes: $0.replacementBytes, isEstimatedBytes: $0.isEstimatedBytes)
+        }
         let deletedIDs = await trashService.emptyBin()
         isEmptying = false
         guard let deletedIDs, !deletedIDs.isEmpty else { return }
@@ -487,14 +497,15 @@ private struct TrashCell: View {
     private var mediaNoun: String { isVideo ? "Video" : "Photo" }
 
     var body: some View {
-        // A remote import can delete this cell's `entry` between the
-        // parent's last `trashService.entries` publish and this body's
-        // own evaluation (for example from an `.task` that runs after a
-        // re-render). Every other property read below is unsafe on a
-        // deleted `@Model` — see `TrashView.deletedEntries`'s comment —
-        // so this cell renders nothing until the next publish drops it
-        // from the grid entirely.
-        if entry.isDeleted {
+        // A remote import can delete, or otherwise invalidate, this
+        // cell's `entry` between the parent's last `trashService.entries`
+        // publish and this body's own evaluation (for example from an
+        // `.task` that runs after a re-render). Every other property
+        // read below is unsafe on such a row — see
+        // `TrashView.deletedEntries`'s comment and `TrashEntry.isLive`
+        // — so this cell renders nothing until the next publish drops
+        // it from the grid entirely.
+        if !entry.isLive {
             Color.clear.aspectRatio(1, contentMode: .fit)
         } else {
             cellBody
@@ -656,11 +667,12 @@ private struct TrashPreviewView: View {
     /// player item.
     @State private var photo: UIImage?
 
-    /// `!$0.isDeleted` must run first in the predicate, before
+    /// `$0.isLive` must run first in the predicate, before
     /// `$0.assetKey` — see `TrashView.deletedEntries`'s comment on why a
-    /// deleted `TrashEntry` cannot be read any other way.
+    /// dead `TrashEntry` cannot be read any other way, and
+    /// `TrashEntry.isLive`.
     private var isPhoto: Bool {
-        trashService.entries.first { !$0.isDeleted && $0.assetKey == assetKey }?.mediaKind == TrashMediaKind.photo.rawValue
+        trashService.entries.first { $0.isLive && $0.assetKey == assetKey }?.mediaKind == TrashMediaKind.photo.rawValue
     }
 
     var body: some View {
@@ -714,9 +726,9 @@ private struct TrashPreviewView: View {
                     Button("Restore") {
                         // Reads `replacementBytes` before the restore call,
                         // which deletes the SwiftData row and can
-                        // invalidate the matching entry. `!$0.isDeleted`
+                        // invalidate the matching entry. `$0.isLive`
                         // must run first — see `isPhoto`'s comment above.
-                        let shrunkOriginal = (trashService.entries.first { !$0.isDeleted && $0.assetKey == assetKey }?.replacementBytes ?? 0) > 0
+                        let shrunkOriginal = (trashService.entries.first { $0.isLive && $0.assetKey == assetKey }?.replacementBytes ?? 0) > 0
                         if trashService.restore(assetID: assetKey) { Usage.shared.binRestore(shrunkOriginal: shrunkOriginal) }
                         dismiss()
                     }
