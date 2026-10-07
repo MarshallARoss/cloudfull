@@ -247,6 +247,7 @@
 		767D31FA309D439E9894829C /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				APS_ENVIRONMENT = development;
 				ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES = AppIconLight;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
@@ -262,6 +263,7 @@
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Cloudfull shows the photos and videos already in your library so you can rediscover them and clear space. It also saves what you keep into a \"Cloudfull keeps\" album, and moves what you delete to your Recently Deleted.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UIBackgroundModes = "remote-notification";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UIStatusBarStyle = UIStatusBarStyleDefault;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
@@ -379,6 +381,7 @@
 		F95293CE8607451D96DA4627 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				APS_ENVIRONMENT = production;
 				ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES = AppIconLight;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
@@ -394,6 +397,7 @@
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Cloudfull shows the photos and videos already in your library so you can rediscover them and clear space. It also saves what you keep into a \"Cloudfull keeps\" album, and moves what you delete to your Recently Deleted.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UIBackgroundModes = "remote-notification";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UIStatusBarStyle = UIStatusBarStyleDefault;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;

@@ -69,6 +69,12 @@ final class CloudfullAppDelegate: NSObject, UIApplicationDelegate {
         // cold-starts the app is delivered to nobody.
         UNUserNotificationCenter.current().delegate = self
         Task { @MainActor in await DailyReminder.shared.refreshAuthorization() }
+        // Silent push needs no user prompt, unlike `DailyReminder`'s
+        // local notifications above. CloudKit's background mirroring
+        // uses this to wake the app for a remote-change notification.
+        // Harmless to call unconditionally: a local-only build or a
+        // signed-out device simply never receives a token-bearing push.
+        application.registerForRemoteNotifications()
         return true
     }
 
@@ -79,6 +85,16 @@ final class CloudfullAppDelegate: NSObject, UIApplicationDelegate {
         configuration.delegateClass = CloudfullSceneDelegate.self
         return configuration
     }
+
+    #if DEBUG
+    func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        DiagnosticsLog.shared.log("Sync", "apns_registered")
+    }
+
+    func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
+        DiagnosticsLog.shared.log("Sync", "apns_failed_\(error.localizedDescription)")
+    }
+    #endif
 }
 
 /// The daily reminder's banner and tap.

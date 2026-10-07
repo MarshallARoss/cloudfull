@@ -258,7 +258,7 @@ final class M10Tests: FeedUITestCase {
     /// `-cloudfull-slow-load` takes its value as the next argument, so it
     /// cannot go through `FeedUITestCase.launch(resettingState:)`.
     private func launchSlow(seconds: Int) {
-        app.launchArguments = ["-cloudfull-reset-deck-state", "-cloudfull-slow-load", "\(seconds)"]
+        app.launchArguments = ["-cloudfull-reset-deck-state", "-cloudfull-slow-load", "\(seconds)", "-cloudfull-local-only"]
         app.launch()
         grantPhotoAccessIfAsked()
     }

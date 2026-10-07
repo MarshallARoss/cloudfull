@@ -38,6 +38,9 @@ struct SettingsView: View {
     /// independent readers of the same `UserDefaults` key are not
     /// reliable enough for this button to work.
     @ObservedObject private var onboardingGate = OnboardingGateState.shared
+    /// Backs the "iCloud sync" row's account-available half. Only
+    /// meaningful when `CloudfullModelContainer.mode == .cloudKit`.
+    @ObservedObject private var syncObserver = SyncObserver.shared
     /// Drives the on-demand welcome screen. See the Help section below.
     @State private var showWelcome = false
     @State private var freeSpaceText = "…"
@@ -214,17 +217,25 @@ struct SettingsView: View {
             }
             .accessibilityElement(children: .combine)
             .accessibilityIdentifier("settings_free_space")
-            // Read-only. The app has no sync engine, so the status is
-            // always "Local only".
+            // Read-only. "Local only" when the gate kept this build off
+            // CloudKit (no container declared, or a test harness forced
+            // it); otherwise "Syncing" once the account is available,
+            // or "Signed out" while it is not. These are the plan's
+            // approved words (plan.md item 4 of Settings).
             HStack {
                 Text("iCloud sync")
                 Spacer()
-                Text("Local only")
+                Text(iCloudSyncStatusText)
                     .foregroundStyle(.secondary)
             }
             .accessibilityElement(children: .combine)
             .accessibilityIdentifier("settings_icloud_status")
         }
+    }
+
+    private var iCloudSyncStatusText: String {
+        guard CloudfullModelContainer.mode == .cloudKit else { return "Local only" }
+        return syncObserver.accountAvailable == true ? "Syncing" : "Signed out"
     }
 
     // The app has two first-run screens: the welcome screen before

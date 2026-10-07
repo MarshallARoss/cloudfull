@@ -43,7 +43,7 @@ final class M4Tests: FeedUITestCase {
     /// rows before termination, and the relaunch reads a
     /// non-deterministic row count.
     private func launchForBackfillSeeding() {
-        app.launchArguments = ["-cloudfull-reset-deck-state", "-cloudfull-suppress-backfill"]
+        app.launchArguments = ["-cloudfull-reset-deck-state", "-cloudfull-suppress-backfill", "-cloudfull-local-only"]
         app.launch()
         grantPhotoAccessIfAsked()
     }

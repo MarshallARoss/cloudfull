@@ -26,6 +26,15 @@ struct CloudfullApp: App {
     /// to erase user data.
     static let resetStateArgument = "-cloudfull-reset-deck-state"
 
+    /// Forces `CloudfullModelContainer.make()` to open the local-only
+    /// store, even on a build that declares a CloudKit container. Every
+    /// UI test launch passes this, so a test run never opens real
+    /// CloudKit. `resetStateArgument` already implies this; this
+    /// argument exists for a launch that needs local-only without also
+    /// erasing the store (for example, a relaunch that must keep what
+    /// an earlier launch wrote).
+    static let localOnlyArgument = "-cloudfull-local-only"
+
     /// Deletes every regular Photos album whose title begins with
     /// `"Cloudfull UITest "` (trailing space included). Used by the
     /// album-creation UI test, so repeated test runs do not add more test
@@ -75,6 +84,12 @@ struct CloudfullApp: App {
     /// outside this process's own main context. This is DEBUG-only,
     /// like every other launch argument in this file.
     static let simulateRemoteKeepArgument = "-cloudfull-simulate-remote-keep"
+
+    /// Backs `CloudfullModelContainer.initializeCloudKitSchemaAndExit()`:
+    /// seeds the CloudKit Development schema from `syncedModels` and
+    /// exits. Run by hand (Step H), never by a UI test. This is
+    /// DEBUG-only, like every other launch argument in this file.
+    static let initCloudKitSchemaArgument = "-cloudfull-init-cloudkit-schema"
 
     /// Logs `auth_report_<PHAuthorizationStatus>` and exits immediately.
     /// Used by `scripts/gate_all.sh`'s round-start authorization check.
