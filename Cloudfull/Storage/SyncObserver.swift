@@ -99,6 +99,23 @@ final class SyncObserver: ObservableObject {
         #endif
     }
 
+    // MARK: - Local cloudKey backfill
+
+    /// Called by `CloudKeyBackfillLauncher`, on the main actor, right
+    /// after a pass sets `cloudKey` on any `TrashEntry` row. This is a
+    /// local background job, not a remote CloudKit event, but it reaches
+    /// `TrashService` through the same weak reference `refresh()` uses
+    /// below — the one existing, already-wired path from outside
+    /// `TrashService` to it, since `TrashService` is not a singleton.
+    /// `handleRemoteChange()`'s own `load()` picks up the new `cloudKey`
+    /// so a cross-device bin match (`spotCheckLiveness`'s cloud-key
+    /// fallback) can work right away, instead of waiting for the next
+    /// unrelated reconciliation pass or CloudKit import. A no-op before
+    /// `attach(trash:deck:)` has run, or once `trash` is discarded.
+    func notifyTrashCloudKeysResolved() {
+        trash?.handleRemoteChange()
+    }
+
     // MARK: - CloudKit account status
 
     func refreshAccountStatus() {

@@ -33,6 +33,13 @@ actor CloudKeyBackfiller {
         let resolved: Int
         let pending: Int
         let total: Int
+        /// How many `TrashEntry` rows this pass set `cloudKey` on — a
+        /// subset of `resolved`. `CloudKeyBackfillLauncher` reads this
+        /// to tell `TrashService` to reload only when the bin actually
+        /// has a newly resolved row: a cross-device bin match through
+        /// `cloudKey` (`TrashService.spotCheckLiveness`'s cloud-key
+        /// fallback) can only work once a row actually has one.
+        let trashRowsResolved: Int
     }
 
     private static let log = Logger(subsystem: "com.cloudfull.app", category: "CloudKeyBackfiller")
@@ -85,7 +92,7 @@ actor CloudKeyBackfiller {
         let trashNilCount = (try? modelContext.fetchCount(trashNilDescriptor)) ?? 0
         let photoSeenNilCount = (try? modelContext.fetchCount(photoSeenNilDescriptor)) ?? 0
         guard seenNilCount + likedNilCount + trashNilCount + photoSeenNilCount > 0 else {
-            return Result(resolved: 0, pending: 0, total: 0)
+            return Result(resolved: 0, pending: 0, total: 0, trashRowsResolved: 0)
         }
 
         #if DEBUG
@@ -159,7 +166,7 @@ actor CloudKeyBackfiller {
             // `CloudKeyBackfillLauncher` match what disk actually holds.
             Self.log.error("CloudKeyBackfiller failed to save resolved cloudKeys: \(error.localizedDescription, privacy: .public)")
             let total = seenRows.count + likedRows.count + trashRows.count + photoSeenRows.count
-            return Result(resolved: 0, pending: total, total: total)
+            return Result(resolved: 0, pending: total, total: total, trashRowsResolved: 0)
         }
 
         // Each fetched row lands in exactly one bucket, counted by
@@ -173,8 +180,11 @@ actor CloudKeyBackfiller {
             + likedRows.lazy.filter { $0.cloudKey == nil }.count
             + trashRows.lazy.filter { $0.cloudKey == nil }.count
             + photoSeenRows.lazy.filter { $0.cloudKey == nil }.count
+        // `trashRows` was fetched where `cloudKey == nil`, so any row
+        // that now has one was resolved by this pass.
+        let trashRowsResolved = trashRows.lazy.filter { $0.cloudKey != nil }.count
 
-        return Result(resolved: resolved, pending: pending, total: resolved + pending)
+        return Result(resolved: resolved, pending: pending, total: resolved + pending, trashRowsResolved: trashRowsResolved)
     }
 }
 
@@ -252,6 +262,14 @@ final class CloudKeyBackfillLauncher {
         let backfiller = CloudKeyBackfiller(modelContainer: container)
         let result = await backfiller.run()
         BackfillProbe.shared.finish(result)
+        // `TrashService.spotCheckLiveness`'s cloud-key fallback, and a
+        // cross-device bin match, can only work once a row actually has
+        // one. Reload now, on the main actor this type already runs on,
+        // instead of waiting for the next unrelated reconciliation pass
+        // or CloudKit event.
+        if result.trashRowsResolved > 0 {
+            SyncObserver.shared.notifyTrashCloudKeysResolved()
+        }
     }
 
     /// Called after a successful insert of a `SeenEntry`, `LikedEntry`,
@@ -287,7 +305,10 @@ final class CloudKeyBackfillLauncher {
             self.pendingNewRowKeys = []
             self.pendingNewRowTask = nil
             guard !keys.isEmpty else { return }
-            _ = await CloudKeyBackfiller(modelContainer: CloudfullModelContainer.shared).run(onlyAssetKeys: keys)
+            let result = await CloudKeyBackfiller(modelContainer: CloudfullModelContainer.shared).run(onlyAssetKeys: keys)
+            if result.trashRowsResolved > 0 {
+                SyncObserver.shared.notifyTrashCloudKeysResolved()
+            }
         }
     }
 }

@@ -348,12 +348,17 @@ final class TrashService: ObservableObject {
         return true
     }
 
-    /// Called by `SyncObserver.refresh()` after a CloudKit import lands.
-    /// Shield beats trash: a remote Keep on an asset already queued here
-    /// must pull it back out of the bin, the same as a local Keep does
-    /// in `DeckViewModel.onLiked`. The reconciliation this schedules
-    /// then catches a remote Bin row (or a remote delete) the normal
-    /// way, through the existing two-strike path.
+    /// Called by `SyncObserver.refresh()` after a CloudKit import lands,
+    /// and by `SyncObserver.notifyTrashCloudKeysResolved()` after a local
+    /// `CloudKeyBackfiller` pass sets `cloudKey` on a `TrashEntry` row —
+    /// neither a CloudKit import nor a local backfill is "remote" in the
+    /// narrow sense, but both leave this service's own `entries` stale
+    /// with no local tap of its own to reload from. Shield beats trash:
+    /// a remote Keep on an asset already queued here must pull it back
+    /// out of the bin, the same as a local Keep does in
+    /// `DeckViewModel.onLiked`. The reconciliation this schedules then
+    /// catches a remote Bin row (or a remote delete) the normal way,
+    /// through the existing two-strike path.
     func handleRemoteChange() {
         load()
         if dropShieldedEntries() { load() }   // shield beats trash
