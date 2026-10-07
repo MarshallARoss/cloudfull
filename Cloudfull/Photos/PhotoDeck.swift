@@ -1240,7 +1240,8 @@ final class KeepStore: ObservableObject {
 @ModelActor
 actor PhotoSeenStore {
     /// Session cache, mirroring `SeenStore.foreignLocalByCloudKey`: cloud
-    /// key -> the local id it currently maps to.
+    /// key -> the local id it currently maps to, or `""` for a cloud key
+    /// PhotoKit could not map on this device.
     private var foreignLocalByCloudKey: [String: String] = [:]
 
     /// A plain insert, with no fetch first to check the row is not
@@ -1324,13 +1325,19 @@ actor PhotoSeenStore {
         var offset = 0
         while offset < uncachedKeys.count {
             let end = min(offset + 200, uncachedKeys.count)
-            let mapped = PhotoLibraryService.localIdentifierMappings(forCloudIdentifiers: Array(uncachedKeys[offset..<end]))
-            foreignLocalByCloudKey.merge(mapped) { _, new in new }
+            let chunk = Array(uncachedKeys[offset..<end])
+            let mapped = PhotoLibraryService.localIdentifierMappings(forCloudIdentifiers: chunk)
+            for key in chunk {
+                foreignLocalByCloudKey[key] = mapped[key] ?? ""
+            }
             offset = end
         }
 
         let out = rows.compactMap { row -> (row: PhotoSeenEntry, localID: String)? in
-            guard let cloudKey = row.cloudKey, let localID = foreignLocalByCloudKey[cloudKey] else { return nil }
+            guard let cloudKey = row.cloudKey,
+                  let localID = foreignLocalByCloudKey[cloudKey],
+                  !localID.isEmpty
+            else { return nil }
             return (row, localID)
         }
         #if DEBUG

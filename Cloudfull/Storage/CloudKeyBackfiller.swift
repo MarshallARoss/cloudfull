@@ -107,23 +107,30 @@ actor CloudKeyBackfiller {
         let keyList = Array(distinctKeys)
         var cloudKeyByLocalID: [String: String] = [:]
         var offset = 0
+        // A single chunk mapping nothing can be that chunk's own 200
+        // local ids, not the whole library. Only three in a row is good
+        // evidence the library has no cloud identifiers available right
+        // now (no iCloud Photos): mapping every later chunk would then
+        // cost the same for the same result. Every row this pass has
+        // not already resolved stays nil and pending; the next launch
+        // tries again.
+        var consecutiveUnmappedChunks = 0
         while offset < keyList.count {
             let end = min(offset + 200, keyList.count)
             let chunk = Array(keyList[offset..<end])
             let mapped = PhotoLibraryService.cloudIdentifierMappings(forLocalIdentifiers: chunk)
-            guard !mapped.isEmpty else {
-                // This chunk's 200 local ids mapped to nothing: the
-                // library almost certainly has no cloud identifiers
-                // available right now (no iCloud Photos). Mapping every
-                // later chunk would cost the same for the same result.
-                // Every row this pass has not already resolved stays
-                // nil and pending; the next launch tries again.
-                #if DEBUG
-                DiagnosticsLog.shared.log("CloudKeyBackfiller", "backfill_stopped_unmapped")
-                #endif
-                break
+            if mapped.isEmpty {
+                consecutiveUnmappedChunks += 1
+                if consecutiveUnmappedChunks >= 3 {
+                    #if DEBUG
+                    DiagnosticsLog.shared.log("CloudKeyBackfiller", "backfill_stopped_unmapped")
+                    #endif
+                    break
+                }
+            } else {
+                consecutiveUnmappedChunks = 0
+                cloudKeyByLocalID.merge(mapped) { _, new in new }
             }
-            cloudKeyByLocalID.merge(mapped) { _, new in new }
             offset = end
             if offset < keyList.count {
                 await Task.yield()

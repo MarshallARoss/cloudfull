@@ -26,10 +26,11 @@ import Foundation
 @ModelActor
 actor SeenStore {
 
-    /// Session cache: cloud key -> the local id it currently maps to.
+    /// Session cache: cloud key -> the local id it currently maps to, or
+    /// `""` for a cloud key PhotoKit could not map on this device.
     /// `foreignMatches()` fills this as it meets a cloud key it has not
-    /// resolved yet, so a key already looked up this session costs no
-    /// second PhotoKit round trip.
+    /// resolved yet, so a key already looked up this session — hit or
+    /// miss — costs no second PhotoKit round trip.
     private var foreignLocalByCloudKey: [String: String] = [:]
 
     /// Inserts a `SeenEntry` for `assetKey`, unless one already exists.
@@ -110,9 +111,12 @@ actor SeenStore {
     ///
     /// Maps only the cloud keys not already in `foreignLocalByCloudKey`,
     /// in chunks of 200, the same batching `CloudKeyBackfiller` uses. A
-    /// key that does not map to a live asset on this device (not in this
-    /// device's library, or not yet synced) is simply absent from the
-    /// result.
+    /// cloud key that does not map to a live asset on this device (not
+    /// in this device's library, or not yet synced) is cached as `""`,
+    /// not left absent: a `SeenEntry` from a permanently foreign asset
+    /// (never synced to this device, or never will be) would otherwise
+    /// cost a fresh PhotoKit round trip on every call instead of once
+    /// per session.
     private func foreignMatches() -> [(row: SeenEntry, localID: String)] {
         let me = DeviceIdentity.current
         let descriptor = FetchDescriptor<SeenEntry>(predicate: #Predicate {
@@ -125,13 +129,19 @@ actor SeenStore {
         var offset = 0
         while offset < uncachedKeys.count {
             let end = min(offset + 200, uncachedKeys.count)
-            let mapped = PhotoLibraryService.localIdentifierMappings(forCloudIdentifiers: Array(uncachedKeys[offset..<end]))
-            foreignLocalByCloudKey.merge(mapped) { _, new in new }
+            let chunk = Array(uncachedKeys[offset..<end])
+            let mapped = PhotoLibraryService.localIdentifierMappings(forCloudIdentifiers: chunk)
+            for key in chunk {
+                foreignLocalByCloudKey[key] = mapped[key] ?? ""
+            }
             offset = end
         }
 
         let out = rows.compactMap { row -> (row: SeenEntry, localID: String)? in
-            guard let cloudKey = row.cloudKey, let localID = foreignLocalByCloudKey[cloudKey] else { return nil }
+            guard let cloudKey = row.cloudKey,
+                  let localID = foreignLocalByCloudKey[cloudKey],
+                  !localID.isEmpty
+            else { return nil }
             return (row, localID)
         }
         #if DEBUG
