@@ -559,7 +559,10 @@ final class TrashService: ObservableObject {
     /// `libraryIsEmpty` is true, the caller must not mark any row as
     /// deleted. See `PhotoLibraryService.existingIdentifiers`.
     private func spotCheckLiveness(for snapshot: [TrashEntry]) async -> (found: Set<String>, resolvedByCloudKey: [String: String], libraryIsEmpty: Bool) {
+        // Read every row value before the first await: a remote import can
+        // delete a row while this function is suspended.
         let cloudKeys = Array(Set(snapshot.compactMap(\.cloudKey)))
+        let assetKeys = Set(snapshot.map(\.assetKey))
         let resolvedByCloudKey: [String: String]
         if cloudKeys.isEmpty {
             resolvedByCloudKey = [:]
@@ -568,7 +571,7 @@ final class TrashService: ObservableObject {
                 PhotoLibraryService.localIdentifierMappings(forCloudIdentifiers: cloudKeys)
             }.value
         }
-        let candidateIDs = Array(Set(snapshot.map(\.assetKey)).union(resolvedByCloudKey.values))
+        let candidateIDs = Array(assetKeys.union(resolvedByCloudKey.values))
         let existence = await Task.detached(priority: .utility) {
             PhotoLibraryService.existingIdentifiers(among: candidateIDs)
         }.value
