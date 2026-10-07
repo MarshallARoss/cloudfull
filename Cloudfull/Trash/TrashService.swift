@@ -294,7 +294,11 @@ final class TrashService: ObservableObject {
     @discardableResult
     func restore(assetID: String) -> Bool {
         guard !pendingEmptyIDs.contains(assetID) else { return false }
-        guard let entry = entriesByLiveKey[assetID] else { return false }
+        // `entriesByLiveKey` is only rebuilt on the next `load()`; a
+        // remote import's merge can invalidate the row it points to in
+        // between. `entry.isLive` must be checked before any other
+        // property read. See `TrashEntry.isLive`.
+        guard let entry = entriesByLiveKey[assetID], entry.isLive else { return false }
         let (assetKey, cloudKey) = (entry.assetKey, entry.cloudKey)
         modelContext.delete(entry)
         guard saveContext() else {
@@ -394,16 +398,18 @@ final class TrashService: ObservableObject {
         // Resolve each entry to its current local id. Skip an entry that
         // does not resolve, and keep its row. Try the resolver first. If
         // it fails, use this service's own spot check, so a new photo
-        // row is not skipped. `.isLive` first, same reason as above.
+        // row is not skipped. `.isLive` first, copied to facts, same
+        // reason as above.
         let liveSnapshot = entries.filter(\.isLive)
-        let (spotFound, spotResolvedByCloudKey, spotLibraryIsEmpty) = await spotCheckLiveness(for: liveSnapshot)
+        let liveFacts = liveSnapshot.map { EntryFacts(assetKey: $0.assetKey, cloudKey: $0.cloudKey, mediaKind: $0.mediaKind) }
+        let (spotFound, spotResolvedByCloudKey, spotLibraryIsEmpty) = await spotCheckLiveness(for: liveFacts)
         // Re-filtered, not reused: a merged import can have invalidated
         // any of `liveSnapshot`'s own rows during the await just above.
-        let stillLiveAfterSpotCheck = liveSnapshot.filter(\.isLive)
+        let stillLiveFacts = liveSnapshot.filter(\.isLive).map { EntryFacts(assetKey: $0.assetKey, cloudKey: $0.cloudKey, mediaKind: $0.mediaKind) }
         if !spotLibraryIsEmpty {
-            feedPhotoSnapshot(stillLiveAfterSpotCheck, found: spotFound, resolvedByCloudKey: spotResolvedByCloudKey)
-            let deadNow = Set(stillLiveAfterSpotCheck.compactMap { entry in
-                liveIdentifier(for: entry, found: spotFound, resolvedByCloudKey: spotResolvedByCloudKey) == nil ? entry.assetKey : nil
+            feedPhotoSnapshot(stillLiveFacts, found: spotFound, resolvedByCloudKey: spotResolvedByCloudKey)
+            let deadNow = Set(stillLiveFacts.compactMap { facts in
+                liveIdentifier(assetKey: facts.assetKey, cloudKey: facts.cloudKey, found: spotFound, resolvedByCloudKey: spotResolvedByCloudKey) == nil ? facts.assetKey : nil
             })
             if deadNow != confirmedDeadIDs { confirmedDeadIDs = deadNow }
         }
@@ -419,7 +425,7 @@ final class TrashService: ObservableObject {
             if let resolved = resolver.currentLocalIdentifier(assetKey: entry.assetKey, cloudKey: entry.cloudKey) {
                 live = resolved
             } else if !spotLibraryIsEmpty,
-                      let resolved = liveIdentifier(for: entry, found: spotFound, resolvedByCloudKey: spotResolvedByCloudKey) {
+                      let resolved = liveIdentifier(assetKey: entry.assetKey, cloudKey: entry.cloudKey, found: spotFound, resolvedByCloudKey: spotResolvedByCloudKey) {
                 live = resolved
             } else {
                 return nil
@@ -551,6 +557,19 @@ final class TrashService: ObservableObject {
 
     // MARK: - Bin liveness
 
+    /// Plain copies of the fields `spotCheckLiveness`, `liveIdentifier`,
+    /// and `feedPhotoSnapshot` need. Every caller builds this array from
+    /// live rows (`$0.isLive` first) before its own first `await`, and
+    /// uses only these copies afterward. Carrying a `TrashEntry`
+    /// reference across an `await` that a remote CloudKit import can
+    /// land during, then reading any property but `isLive` on it, is a
+    /// SwiftData fatal error ("backing data could no longer be found").
+    private struct EntryFacts {
+        let assetKey: String
+        let cloudKey: String?
+        let mediaKind: String
+    }
+
     /// Runs one PhotoKit existence check for the stored keys in
     /// `snapshot` and the local ids of their cloud keys. The cost depends
     /// on the bin size, not the library size. `reconcileWithLibrary()`,
@@ -558,9 +577,12 @@ final class TrashService: ObservableObject {
     /// three never disagree about which entries currently resolve. If
     /// `libraryIsEmpty` is true, the caller must not mark any row as
     /// deleted. See `PhotoLibraryService.existingIdentifiers`.
-    private func spotCheckLiveness(for snapshot: [TrashEntry]) async -> (found: Set<String>, resolvedByCloudKey: [String: String], libraryIsEmpty: Bool) {
-        // Read every row value before the first await: a remote import can
-        // delete a row while this function is suspended.
+    ///
+    /// Takes plain facts, not `TrashEntry` rows: every caller must have
+    /// already copied the fields it needs out of live rows before this
+    /// call, so nothing here can be holding a reference this method's
+    /// own `await` goes on to invalidate.
+    private func spotCheckLiveness(for snapshot: [EntryFacts]) async -> (found: Set<String>, resolvedByCloudKey: [String: String], libraryIsEmpty: Bool) {
         let cloudKeys = Array(Set(snapshot.compactMap(\.cloudKey)))
         let assetKeys = Set(snapshot.map(\.assetKey))
         let resolvedByCloudKey: [String: String]
@@ -578,13 +600,15 @@ final class TrashService: ObservableObject {
         return (existence.found, resolvedByCloudKey, existence.libraryIsEmpty)
     }
 
-    /// Returns `entry`'s current live local id from `found` and
-    /// `resolvedByCloudKey`, the outputs of `spotCheckLiveness`. Returns
-    /// `nil` if neither its stored key, nor the local id its cloud key
-    /// resolves to, names a live asset.
-    private func liveIdentifier(for entry: TrashEntry, found: Set<String>, resolvedByCloudKey: [String: String]) -> String? {
-        if found.contains(entry.assetKey) { return entry.assetKey }
-        if let cloudKey = entry.cloudKey, let resolved = resolvedByCloudKey[cloudKey], found.contains(resolved) {
+    /// Returns the current live local id for `assetKey`/`cloudKey`, from
+    /// `found` and `resolvedByCloudKey`, the outputs of
+    /// `spotCheckLiveness`. Returns `nil` if neither the stored key, nor
+    /// the local id the cloud key resolves to, names a live asset. Takes
+    /// plain values, not a `TrashEntry`, for the same reason
+    /// `spotCheckLiveness` does.
+    private func liveIdentifier(assetKey: String, cloudKey: String?, found: Set<String>, resolvedByCloudKey: [String: String]) -> String? {
+        if found.contains(assetKey) { return assetKey }
+        if let cloudKey, let resolved = resolvedByCloudKey[cloudKey], found.contains(resolved) {
             return resolved
         }
         return nil
@@ -596,10 +620,10 @@ final class TrashService: ObservableObject {
     /// `AssetKeyResolver.refreshPhotoLibrarySnapshot` for why this only
     /// grows that set. Add only photo rows. `AssetKeyResolver.libraryIDs`
     /// already covers videos.
-    private func feedPhotoSnapshot(_ snapshot: [TrashEntry], found: Set<String>, resolvedByCloudKey: [String: String]) {
-        let livePhotoIDs = Set(snapshot.compactMap { entry -> String? in
-            guard entry.mediaKind == TrashMediaKind.photo.rawValue else { return nil }
-            return liveIdentifier(for: entry, found: found, resolvedByCloudKey: resolvedByCloudKey)
+    private func feedPhotoSnapshot(_ snapshot: [EntryFacts], found: Set<String>, resolvedByCloudKey: [String: String]) {
+        let livePhotoIDs = Set(snapshot.compactMap { facts -> String? in
+            guard facts.mediaKind == TrashMediaKind.photo.rawValue else { return nil }
+            return liveIdentifier(assetKey: facts.assetKey, cloudKey: facts.cloudKey, found: found, resolvedByCloudKey: resolvedByCloudKey)
         })
         guard !livePhotoIDs.isEmpty else { return }
         resolver.refreshPhotoLibrarySnapshot(livePhotoIDs)
@@ -614,12 +638,16 @@ final class TrashService: ObservableObject {
             if !confirmedDeadIDs.isEmpty { confirmedDeadIDs = [] }
             return
         }
-        let snapshot = entries
+        // `.isLive` first, and copied to plain facts, before the first
+        // `await` below: a remote import can invalidate a row in
+        // `entries` during that `await`, and `snapshot` must still be
+        // safe to read afterward. See `EntryFacts`.
+        let snapshot = entries.filter(\.isLive).map { EntryFacts(assetKey: $0.assetKey, cloudKey: $0.cloudKey, mediaKind: $0.mediaKind) }
         let (found, resolvedByCloudKey, libraryIsEmpty) = await spotCheckLiveness(for: snapshot)
         guard !libraryIsEmpty else { return }
         feedPhotoSnapshot(snapshot, found: found, resolvedByCloudKey: resolvedByCloudKey)
-        let dead = Set(snapshot.compactMap { entry in
-            liveIdentifier(for: entry, found: found, resolvedByCloudKey: resolvedByCloudKey) == nil ? entry.assetKey : nil
+        let dead = Set(snapshot.compactMap { facts in
+            liveIdentifier(assetKey: facts.assetKey, cloudKey: facts.cloudKey, found: found, resolvedByCloudKey: resolvedByCloudKey) == nil ? facts.assetKey : nil
         })
         #if DEBUG
         // A restore from backup changes local identifiers, so every bin
@@ -706,10 +734,16 @@ final class TrashService: ObservableObject {
         guard !entries.isEmpty else { return }
         guard resolver.isDestructiveActionSafe else { return }
 
-        // Record the keys before the await. The loop below skips a row
-        // queued during the await, because the spot check ran before
-        // that row existed.
-        let preAwaitKeys = Set(entries.map(\.assetKey))
+        // `.isLive` first, copied to facts, before the await below: a
+        // remote import can invalidate a row in `entries` during that
+        // await, and this method must still be safe to read every row's
+        // fields afterward. See `EntryFacts`. `preAwaitKeys` records
+        // which rows this pass actually covers; the loop below skips a
+        // row queued during the await, because the spot check ran
+        // before that row existed.
+        let liveEntries = entries.filter(\.isLive)
+        let preAwaitKeys = Set(liveEntries.map(\.assetKey))
+        let liveFacts = liveEntries.map { EntryFacts(assetKey: $0.assetKey, cloudKey: $0.cloudKey, mediaKind: $0.mediaKind) }
 
         // The spot check resolves every entry's cloud key in one
         // off-main batch. It does not depend on `AssetKeyResolver`'s
@@ -717,24 +751,36 @@ final class TrashService: ObservableObject {
         // share this bin. If `libraryIsEmpty` is true, the pass stops
         // here, so this method marks no row as gone. See
         // `spotCheckLiveness` for the rest.
-        let (idsSet, resolvedByCloudKey, libraryIsEmpty) = await spotCheckLiveness(for: entries)
+        let (idsSet, resolvedByCloudKey, libraryIsEmpty) = await spotCheckLiveness(for: liveFacts)
         guard !libraryIsEmpty else { return }
-        feedPhotoSnapshot(entries, found: idsSet, resolvedByCloudKey: resolvedByCloudKey)
+        feedPhotoSnapshot(liveFacts, found: idsSet, resolvedByCloudKey: resolvedByCloudKey)
+
+        // This device's own id, read once for the whole pass. `nil`
+        // means it could not be read reliably right now:
+        // `DeviceIdentity.currentIfAvailable`'s own doc comment is why
+        // every row below then reads as foreign for this pass — never
+        // marked, never deleted — rather than guessed at.
+        let myID = DeviceIdentity.currentIfAvailable
 
         let now = Date()
         var toDelete: [TrashEntry] = []
         var didChange = false
         var deadNow: Set<String> = []
-        for entry in entries {
+        // Re-filtered, not reused: a merged CloudKit import can have
+        // invalidated a row in `entries` during the `spotCheckLiveness`
+        // await above, and reading any other property on it is a
+        // SwiftData fatal error. See `TrashEntry.isLive`.
+        for entry in entries where entry.isLive {
             guard preAwaitKeys.contains(entry.assetKey) else { continue } // queued mid-await, skipped
-            let resolves = liveIdentifier(for: entry, found: idsSet, resolvedByCloudKey: resolvedByCloudKey) != nil
+            let resolves = liveIdentifier(assetKey: entry.assetKey, cloudKey: entry.cloudKey, found: idsSet, resolvedByCloudKey: resolvedByCloudKey) != nil
             if !resolves { deadNow.insert(entry.assetKey) }
 
-            // Another device's row: never mark, never delete. It still
-            // shows "not available" through `confirmedDeadIDs` above,
-            // and the user can still restore or empty it by hand. Only
-            // the background two-strike delete below is off-limits.
-            guard entry.originDeviceID == DeviceIdentity.current else { continue }
+            // Another device's row, or this device's own id unreadable
+            // right now: never mark, never delete. It still shows "not
+            // available" through `confirmedDeadIDs` above, and the user
+            // can still restore or empty it by hand. Only the
+            // background two-strike delete below is off-limits.
+            guard let myID, entry.originDeviceID == myID else { continue }
 
             if resolves {
                 if entry.dormantSince != nil {
@@ -868,11 +914,15 @@ final class TrashService: ObservableObject {
     /// are reference types, so the write reaches the current objects
     /// even if `load()` ran again while the read was off-main. A row
     /// restored away during the read is not in `entries`, so the loop
-    /// skips it.
+    /// skips it. `entry.isLive` must run first in the `where` clause: a
+    /// merged CloudKit import can have invalidated a row in `entries`
+    /// during `scheduleZeroByteRepair`'s off-main `await`, before this
+    /// method runs, and reading any other property on such a row is a
+    /// SwiftData fatal error. See `TrashEntry.isLive`.
     private func applyZeroByteRepair(_ sizes: [String: PhotoLibraryService.AssetSize], ids: [String]) {
         zeroByteRepairInFlight.subtract(ids)
         var didUpdate = false
-        for entry in entries where entry.bytes == 0 {
+        for entry in entries where entry.isLive && entry.bytes == 0 {
             guard let size = sizes[entry.assetKey], size.bytes > 0 else { continue }
             entry.bytes = size.bytes
             entry.isEstimatedBytes = size.isEstimated
@@ -882,9 +932,10 @@ final class TrashService: ObservableObject {
         _ = saveContext()
         // The loop changes properties on objects in `entries`, not the
         // array, so `@Published` does not fire. Reassign the array to
-        // publish the change. Then recompute `pendingBytes`.
+        // publish the change. Then recompute `pendingBytes`, over live
+        // rows only, for the same reason the loop above checks `isLive`.
         entries = entries
-        pendingBytes = entries.reduce(Int64(0)) { $0 + max($1.bytes - $1.replacementBytes, 0) }
+        pendingBytes = entries.reduce(Int64(0)) { $0 + ($1.isLive ? max($1.bytes - $1.replacementBytes, 0) : 0) }
     }
 
     /// Returns `true` if the save succeeds. On failure, logs the error,
