@@ -3,7 +3,7 @@
 # Copyright (C) 2026 Marshall Ross.
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# M7 Step G1: proves the 1.0 -> 1.1 store-split upgrade. Installs a 1.1
+# M7 Step G1: proves the 1.0 -> 1.1 store-split upgrade. Installs the 1.1
 # Debug build over a fixture copied from a real 1.0 store
 # (scripts/fixtures/store-1.0/default.store*, made once by hand — see
 # design/M7_SPEC.md Step G1 item 1, not automated here), launches with
@@ -12,9 +12,28 @@
 # normally, and screenshots it so a person can confirm the deck resumed
 # instead of showing onboarding.
 #
+# This script never uninstalls the app. A real OS update replaces only the
+# app binary and keeps the data container, the onboarding flag, and the
+# Photos access grant; `simctl uninstall` wipes all three, which made the
+# old version of this script's final screenshot prove nothing (onboarding
+# or the permission view would show instead of a resumed deck). Instead,
+# this script installs the 1.1 build in place (an upgrade install over
+# whatever is already there, or a fresh install the first time), then
+# replaces only the SwiftData store files and the `storage.splitV1Done`
+# flag under that same, still-installed app.
+#
+# Photos access: `simctl privacy grant photos` writes the TCC row but
+# PhotoKit still reports `.notDetermined` on this runtime (iOS 26.5). This
+# script cannot grant access itself. Grant it ONCE, by hand, through the
+# real system dialog (launch the app normally and tap Allow), before the
+# first run of this script on a given simulator. Because this script never
+# uninstalls, that grant then survives every later run. If access is not
+# `.authorized` when this script starts, it fails fast (exit 3) instead of
+# producing a screenshot that proves nothing.
+#
 # Usage:
 #   scripts/m7_upgrade_check.sh                 # local-only, with the 1.0 fixture (the main proof)
-#   scripts/m7_upgrade_check.sh --no-fixture     # the split flag pre-set, no local.store, no fixture: must not crash
+#   scripts/m7_upgrade_check.sh --no-fixture     # the split flag pre-set, no local.store, real fixture: must not crash
 #   scripts/m7_upgrade_check.sh --cloudkit       # same as the default, but CloudKit on (sim must already be signed in)
 #
 # COUNTS.txt format: one "ZNAME=count" line per table named in
@@ -23,8 +42,9 @@
 # so it must contain only lines of that shape.
 #
 # Exit codes:
-#   1  usage error, or the fixture is missing (default/--cloudkit modes only)
+#   1  usage error, or the fixture is missing
 #   2  the 1.1 Debug build is missing, or the app never produced a data container
+#   3  Photos access is not `.authorized` — grant it once via the real dialog, then re-run
 #   4  a reported count does not match COUNTS.txt, or the mode field is wrong
 #   5  default.store still has one of the 4 dropped local-model tables
 #   6  the app never logged a store_report_ line (it must, even in --no-fixture mode)
@@ -55,7 +75,10 @@ case "${1:-}" in
 esac
 echo "## m7_upgrade_check: mode=$MODE"
 
-if [[ "$MODE" != "no-fixture" && ! -f "$FIXTURE/default.store" ]]; then
+# Every mode now copies the real 1.0 fixture (audit finding 10): the
+# risky case `--no-fixture` exists to exercise is flag=true, a real 1.0
+# default.store, no local.store — not an empty store.
+if [[ ! -f "$FIXTURE/default.store" ]]; then
   echo "## GATE FAILURE: no fixture at $FIXTURE/default.store — see design/M7_SPEC.md Step G1 item 1"
   exit 1
 fi
@@ -64,7 +87,12 @@ if [[ ! -d "$APP" ]]; then
   exit 2
 fi
 
-xcrun simctl uninstall "$UDID" "$BUNDLE_ID" > /dev/null 2>&1
+# Installing over an already-installed app of the same bundle id is an
+# upgrade install, exactly like a real OS app update: it replaces the
+# binary and keeps the data container, Preferences (the onboarding
+# flag), and the Photos TCC grant. The first-ever run on a simulator
+# installs fresh instead; either way, nothing here uninstalls.
+xcrun simctl terminate "$UDID" "$BUNDLE_ID" > /dev/null 2>&1
 xcrun simctl install "$UDID" "$APP"
 
 container=$(xcrun simctl get_app_container "$UDID" "$BUNDLE_ID" data) \
@@ -72,16 +100,53 @@ container=$(xcrun simctl get_app_container "$UDID" "$BUNDLE_ID" data) \
 SUPPORT="$container/Library/Application Support"
 mkdir -p "$SUPPORT"
 
-if [[ "$MODE" != "no-fixture" ]]; then
-  cp "$FIXTURE"/default.store* "$SUPPORT/" 2>/dev/null
-else
+# Onboarding: written every run, idempotent. Safe even on the very first
+# install (where it is also what lets the final relaunch show the deck
+# instead of the welcome screen). Not wiped between runs because this
+# script never uninstalls.
+xcrun simctl spawn "$UDID" defaults write "$BUNDLE_ID" onboarding.hasCompleted -bool YES > /dev/null 2>&1
+
+# Photos access: this script cannot grant it (see the header comment).
+# Check it the same way gate_all.sh's round-start check does, with the
+# same retry shape for a freshly busy simulator.
+auth_state=""
+for attempt in 1 2 3; do
+  xcrun simctl launch "$UDID" "$BUNDLE_ID" -cloudfull-report-auth -cloudfull-local-only > /dev/null 2>&1
+  sleep $(( attempt * 3 ))
+  auth_state=$(xcrun simctl spawn "$UDID" log show --last 1m \
+    --predicate 'subsystem == "com.cloudfull.app" and category == "AuthReport"' --style compact \
+    | grep -oE 'auth_report_[A-Za-z]+' | tail -1 | sed 's/auth_report_//')
+  xcrun simctl terminate "$UDID" "$BUNDLE_ID" > /dev/null 2>&1
+  [[ -n "$auth_state" ]] && break
+  echo "## photo access check: empty read on attempt $attempt, retrying"
+done
+echo "## photo access check: ${auth_state:-<none>}"
+if [[ "$auth_state" != "authorized" ]]; then
+  echo "## GATE FAILURE: Photos access is '${auth_state:-unknown}', not authorized, on $UDID." \
+       "simctl cannot grant it on this runtime (see this script's header comment) — launch Cloudfull" \
+       "on this simulator by hand once and tap Allow, then re-run this script."
+  exit 3
+fi
+
+# Clears whatever a previous run of this script left behind. This script
+# never uninstalls, so these files — and the split flag below — are the
+# only state a repeat run must reset by hand.
+rm -f "$SUPPORT"/default.store* "$SUPPORT"/local.store*
+
+if [[ "$MODE" == "no-fixture" ]]; then
   # Simulates a device that already ran the store split once (the flag
   # reads true) but has no local.store — for example a container
-  # restored from a backup that did not carry it. No fixture is copied
-  # either, so default.store starts empty too. The only requirement
-  # here is that the app does not crash.
-  xcrun simctl spawn "$UDID" defaults write "$BUNDLE_ID" storage.splitV1Done -bool YES
+  # restored from a backup that did not carry it — with a real,
+  # non-empty 1.0-schema default.store still in place (the split never
+  # ran, so it was never emptied or narrowed). The requirement here is
+  # that the app does not crash.
+  xcrun simctl spawn "$UDID" defaults write "$BUNDLE_ID" storage.splitV1Done -bool YES > /dev/null 2>&1
+else
+  # The main proof, and --cloudkit: simulate a pristine 1.0 device, where
+  # the split has never run.
+  xcrun simctl spawn "$UDID" defaults delete "$BUNDLE_ID" storage.splitV1Done > /dev/null 2>&1
 fi
+cp "$FIXTURE"/default.store* "$SUPPORT/" 2>/dev/null
 
 report_args=(-cloudfull-report-store)
 [[ "$MODE" != "cloudkit" ]] && report_args+=(-cloudfull-local-only)
