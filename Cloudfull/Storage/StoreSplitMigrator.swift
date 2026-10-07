@@ -34,8 +34,10 @@ import os
 /// `default.store` after step 3g below has emptied the four local
 /// tables in it. When `make()` then opens `default.store` with the
 /// synced-only schema, SwiftData's inferred migration drops those four
-/// now-empty tables. Re-running after a crash is safe: step 3c skips a
-/// table already copied, by checking the destination first.
+/// now-empty tables. Re-running after a crash is safe: every attempt
+/// deletes any existing `local.store` first (see `runIfNeeded()`), so
+/// step 3c never trusts a destination row a partial earlier attempt may
+/// have left behind — it always copies fresh from the 1.0 file.
 ///
 /// Known cost: SQLite does not shrink `default.store` after the
 /// metadata-cache delete. There is no `VACUUM` in M7.
@@ -74,6 +76,15 @@ enum StoreSplitMigrator {
             UserDefaults.standard.set(true, forKey: flagKey)
             return true
         }
+
+        // A partial earlier attempt can have already written some of
+        // `local.store` before this launch's own process died or threw.
+        // Left in place, `copy*IfNeeded`'s "does the destination already
+        // have a row" check would treat a stale, or only partially
+        // committed, write as "already copied" and skip copying this
+        // device's own real deck rows out of the 1.0 file. Every attempt
+        // starts from a clean slate instead.
+        deleteLocalStoreIfExists()
 
         let start = Date()
         var deckCopied = false, orderCopied = false, photoDeckCopied = false
@@ -333,5 +344,22 @@ enum StoreSplitMigrator {
         try legacy.delete(model: DeckOrder.self)
         try legacy.delete(model: PhotoDeckState.self)
         try legacy.delete(model: PhotoMetaRecord.self)
+    }
+
+    // MARK: - Clean slate for the local store
+
+    /// Removes `local.store` and its `-shm`/`-wal` sidecar files, if any
+    /// are there, before this attempt opens it. `copyDeckStateIfNeeded`
+    /// and its two siblings only copy a row across when the destination
+    /// has none yet; without this, a partial earlier attempt's own
+    /// write — possibly only partially committed — would read as
+    /// "already copied" and never be replaced with a fresh copy from
+    /// `default.store`. Each candidate not existing is the common case
+    /// (no prior partial attempt) and not an error.
+    private static func deleteLocalStoreIfExists() {
+        let base = CloudfullModelContainer.localStoreURL.path
+        for suffix in ["", "-shm", "-wal"] {
+            try? FileManager.default.removeItem(atPath: base + suffix)
+        }
     }
 }
