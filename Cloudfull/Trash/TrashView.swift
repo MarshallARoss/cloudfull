@@ -167,16 +167,25 @@ struct TrashView: View {
     /// `replacementBytes == 0` is what tells this apart from
     /// `shrunkEntries` — see `TrashEntry.replacementBytes`. Filtering
     /// preserves `trashService.entries`' own newest-first order.
+    ///
+    /// `!$0.isDeleted` must run first in the predicate. A remote import
+    /// can delete the `TrashEntry` this array still holds a reference to
+    /// between one `TrashService.entries` publish and the next; reading
+    /// any other stored property on such a row is a SwiftData fatal
+    /// error ("backing data could no longer be found"). `&&`
+    /// short-circuits, so `replacementBytes` is never read on a row this
+    /// check already excluded.
     private var deletedEntries: [TrashEntry] {
-        trashService.entries.filter { $0.replacementBytes == 0 }
+        trashService.entries.filter { !$0.isDeleted && $0.replacementBytes == 0 }
     }
 
     /// Originals a shrink replaced with a smaller HD copy, left in the bin
     /// only because the shrink itself queues them. `replacementBytes > 0`
     /// already marks this, so the split needs no new data. Filtering
-    /// preserves `trashService.entries`' own newest-first order.
+    /// preserves `trashService.entries`' own newest-first order. See
+    /// `deletedEntries` for why `!$0.isDeleted` must run first.
     private var shrunkEntries: [TrashEntry] {
-        trashService.entries.filter { $0.replacementBytes > 0 }
+        trashService.entries.filter { !$0.isDeleted && $0.replacementBytes > 0 }
     }
 
     /// One section's grid. `deletedEntries` and `shrunkEntries` each get
@@ -478,6 +487,21 @@ private struct TrashCell: View {
     private var mediaNoun: String { isVideo ? "Video" : "Photo" }
 
     var body: some View {
+        // A remote import can delete this cell's `entry` between the
+        // parent's last `trashService.entries` publish and this body's
+        // own evaluation (for example from an `.task` that runs after a
+        // re-render). Every other property read below is unsafe on a
+        // deleted `@Model` — see `TrashView.deletedEntries`'s comment —
+        // so this cell renders nothing until the next publish drops it
+        // from the grid entirely.
+        if entry.isDeleted {
+            Color.clear.aspectRatio(1, contentMode: .fit)
+        } else {
+            cellBody
+        }
+    }
+
+    private var cellBody: some View {
         Color(.secondarySystemBackground)
             .aspectRatio(1, contentMode: .fit)
             .overlay {
@@ -632,8 +656,11 @@ private struct TrashPreviewView: View {
     /// player item.
     @State private var photo: UIImage?
 
+    /// `!$0.isDeleted` must run first in the predicate, before
+    /// `$0.assetKey` — see `TrashView.deletedEntries`'s comment on why a
+    /// deleted `TrashEntry` cannot be read any other way.
     private var isPhoto: Bool {
-        trashService.entries.first { $0.assetKey == assetKey }?.mediaKind == TrashMediaKind.photo.rawValue
+        trashService.entries.first { !$0.isDeleted && $0.assetKey == assetKey }?.mediaKind == TrashMediaKind.photo.rawValue
     }
 
     var body: some View {
@@ -687,8 +714,9 @@ private struct TrashPreviewView: View {
                     Button("Restore") {
                         // Reads `replacementBytes` before the restore call,
                         // which deletes the SwiftData row and can
-                        // invalidate the matching entry.
-                        let shrunkOriginal = (trashService.entries.first { $0.assetKey == assetKey }?.replacementBytes ?? 0) > 0
+                        // invalidate the matching entry. `!$0.isDeleted`
+                        // must run first — see `isPhoto`'s comment above.
+                        let shrunkOriginal = (trashService.entries.first { !$0.isDeleted && $0.assetKey == assetKey }?.replacementBytes ?? 0) > 0
                         if trashService.restore(assetID: assetKey) { Usage.shared.binRestore(shrunkOriginal: shrunkOriginal) }
                         dismiss()
                     }

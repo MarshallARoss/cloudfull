@@ -49,6 +49,16 @@ final class TrashService: ObservableObject {
     private let logger = Logger(subsystem: "com.cloudfull.app", category: "TrashService")
     private var libraryChangeTask: Task<Void, Never>?
     private var observerToken: LibraryObserverToken?
+    /// Reloads `entries` the moment any `ModelContext` on
+    /// `CloudfullModelContainer.shared` finishes saving — in particular,
+    /// a CloudKit import merging a remote delete into the main context.
+    /// Without this, `entries` can keep holding a `TrashEntry` CloudKit
+    /// already removed until the next explicit `load()`, and the Bin UI
+    /// reading a deleted `@Model`'s property is a SwiftData fatal error
+    /// ("backing data could no longer be found"). `SyncObserver.refresh()`
+    /// already calls `handleRemoteChange()`, which also reloads, but only
+    /// after its own 2 s coalescing delay; this observer closes that gap.
+    private var contextSaveObserver: NSObjectProtocol?
     private var didStart = false
 
     /// Maps each entry's stored `assetKey` and its resolved live id to
@@ -118,6 +128,9 @@ final class TrashService: ObservableObject {
         if let observerToken {
             library.removeLibraryChangeObserver(observerToken)
         }
+        if let contextSaveObserver {
+            NotificationCenter.default.removeObserver(contextSaveObserver)
+        }
     }
 
     /// One-time setup: reconciles the queue against the library as of
@@ -165,6 +178,24 @@ final class TrashService: ObservableObject {
         }
         observerToken = library.addLibraryChangeObserver { [weak self] in
             self?.scheduleReconciliation()
+        }
+
+        // See `contextSaveObserver`'s own comment. `object: nil` catches
+        // every `ModelContext`'s save, not only this service's own —
+        // including a CloudKit import merging into the main context,
+        // which is the one this observer exists for.
+        contextSaveObserver = NotificationCenter.default.addObserver(
+            forName: ModelContext.didSave,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            // `queue: .main` above guarantees this closure runs on the
+            // main queue, so it is safe to assume MainActor isolation
+            // here, the same pattern `SyncObserver.attach(trash:deck:)`
+            // uses for its own `NotificationCenter` observers.
+            MainActor.assumeIsolated {
+                self?.load()
+            }
         }
     }
 
@@ -409,6 +440,13 @@ final class TrashService: ObservableObject {
         liveIDs = targets.map(\.liveID)
         pendingEmptyIDs = Set(liveIDs).union(targets.map { $0.entry.assetKey })
 
+        // Known limit (design/M7_SPEC.md "Known limits"): the re-check
+        // above is the last point this method controls. `deleteAssets`
+        // shows the system delete confirmation next. A remote Keep that
+        // lands while that confirmation is still on screen — after this
+        // check, before the user's tap — still gets deleted. Nothing
+        // between here and `performChanges` finishing can see or stop
+        // that; the system sheet, once shown, is outside this method.
         guard let deletedLiveIDs = await library.deleteAssets(ids: liveIDs) else {
             // Cancelled or errored. Nothing changed. The queue stays
             // exactly as it was.
