@@ -285,7 +285,7 @@ run_hdr_proof() {
   probe="$container/Documents/hdr_probe.mov"
   rm -f "$probe"
   SIMCTL_CHILD_CLOUDFULL_HDR_ORIGINAL_ID="$TEST_RUNNER_CLOUDFULL_HDR_ASSET_ID" \
-    xcrun simctl launch "$UDID" "$BUNDLE_ID" -cloudfull-export-newest-replacement > /dev/null 2>&1
+    xcrun simctl launch "$UDID" "$BUNDLE_ID" -cloudfull-export-newest-replacement -cloudfull-local-only > /dev/null 2>&1
 
   local last=-1 sz
   for _ in $(seq 1 60); do
@@ -370,7 +370,7 @@ verify_photo_access_authorized() {
   local auth_state=""
   local attempt
   for attempt in 1 2 3; do
-    xcrun simctl launch "$UDID" "$BUNDLE_ID" -cloudfull-report-auth > /dev/null 2>&1
+    xcrun simctl launch "$UDID" "$BUNDLE_ID" -cloudfull-report-auth -cloudfull-local-only > /dev/null 2>&1
     sleep $(( attempt * 3 ))
     auth_state=$(xcrun simctl spawn "$UDID" log show --last 1m \
       --predicate 'subsystem == "com.cloudfull.app" and category == "AuthReport"' --style compact \

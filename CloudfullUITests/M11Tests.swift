@@ -657,7 +657,7 @@ final class M11Tests: FeedUITestCase {
     /// while tier-2 metadata loads. It resets deck and stall state before
     /// it launches.
     func testPhotoMetadataNeverBlocksScroll() throws {
-        app.launchArguments = ["-cloudfull-reset-deck-state", "-cloudfull-reset-stalls"]
+        app.launchArguments = ["-cloudfull-reset-deck-state", "-cloudfull-reset-stalls", "-cloudfull-local-only"]
         app.launch()
         grantPhotoAccessIfAsked()
 

@@ -33,7 +33,7 @@ final class M9Tests: FeedUITestCase {
     // MARK: - 1. Twenty swipes produce no main-thread stalls
 
     func testTwentySwipesProduceNoMainThreadStalls() throws {
-        app.launchArguments = ["-cloudfull-reset-deck-state", "-cloudfull-reset-stalls"]
+        app.launchArguments = ["-cloudfull-reset-deck-state", "-cloudfull-reset-stalls", "-cloudfull-local-only"]
         app.launch()
         grantPhotoAccessIfAsked()
 

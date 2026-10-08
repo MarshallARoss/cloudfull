@@ -1052,7 +1052,7 @@ final class M5Tests: FeedUITestCase {
     /// flag. The rotation harness must act on rows a previous launch
     /// persisted.
     private func launchRotating() {
-        app.launchArguments = ["-cloudfull-rotate-keys"]
+        app.launchArguments = ["-cloudfull-rotate-keys", "-cloudfull-local-only"]
         app.launch()
         grantPhotoAccessIfAsked()
     }

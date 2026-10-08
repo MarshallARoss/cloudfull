@@ -31,7 +31,13 @@ class FeedUITestCase: XCTestCase {
     // MARK: - Launch
 
     func launch(resettingState: Bool) {
-        app.launchArguments = resettingState ? ["-cloudfull-reset-deck-state"] : []
+        // `-cloudfull-local-only` on every launch keeps a test run off
+        // real CloudKit even on a build that declares a container.
+        // `resettingState`'s own flag already implies this, but both
+        // branches pass it explicitly so neither depends on that.
+        app.launchArguments = resettingState
+            ? ["-cloudfull-reset-deck-state", "-cloudfull-local-only"]
+            : ["-cloudfull-local-only"]
         app.launch()
         grantPhotoAccessIfAsked()
     }

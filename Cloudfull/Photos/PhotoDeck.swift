@@ -1189,6 +1189,11 @@ final class KeepStore: ObservableObject {
         modelContext.insert(LikedEntry(assetKey: assetID, cloudKey: cloudKey))
         try? modelContext.save()
         resolver.noteLiked(assetKey: assetID, cloudKey: cloudKey)
+        // Only when no cloud key was already known. See
+        // `DeckViewModel.like`'s identical call.
+        if cloudKey == nil {
+            CloudKeyBackfillLauncher.shared.noteNewRow(assetID)
+        }
         return true
     }
 
@@ -1234,6 +1239,11 @@ final class KeepStore: ObservableObject {
 /// table, `PhotoSeenEntry`, so the two decks' seen memory never mixes.
 @ModelActor
 actor PhotoSeenStore {
+    /// Session cache, mirroring `SeenStore.foreignLocalByCloudKey`: cloud
+    /// key -> the local id it currently maps to, or `""` for a cloud key
+    /// PhotoKit could not map on this device.
+    private var foreignLocalByCloudKey: [String: String] = [:]
+
     /// A plain insert, with no fetch first to check the row is not
     /// already there. `PhotoSeenEntry` has no `#Index`, because the model
     /// is CloudKit-shaped. A check fetch scans the full table on each
@@ -1247,6 +1257,11 @@ actor PhotoSeenStore {
     func markSeen(_ assetKey: String) {
         modelContext.insert(PhotoSeenEntry(assetKey: assetKey))
         try? modelContext.save()
+        // This actor is not the main actor, and `CloudKeyBackfillLauncher`
+        // is. Hop over to resolve this row's cloudKey within seconds.
+        Task { @MainActor in
+            CloudKeyBackfillLauncher.shared.noteNewRow(assetKey)
+        }
     }
 
     /// Every seen key, with no library id set to intersect against. The
@@ -1259,6 +1274,9 @@ actor PhotoSeenStore {
     /// This call grows with how much of the library the user has seen, so
     /// nothing may wait on it. `PhotoDeck.scheduleSeenLoad` runs it
     /// alongside the first deal, never before it.
+    ///
+    /// The result is the direct keys union the local ids every foreign
+    /// row's cloud key currently maps to (see `foreignMatches(in:)`).
     func allSeenKeys() -> Set<String> {
         // A fresh, throwaway context, not this actor's long-lived one.
         // The fetch creates one managed object per row, and a
@@ -1270,14 +1288,65 @@ actor PhotoSeenStore {
         // plain `Set<String>` survives.
         let context = ModelContext(modelContainer)
         let all = (try? context.fetch(FetchDescriptor<PhotoSeenEntry>())) ?? []
-        return Set(all.map(\.assetKey))
+        var result = Set(all.map(\.assetKey))
+        result.formUnion(foreignMatches(in: context).map(\.localID))
+        return result
     }
 
-    /// One batch delete, not a fetch-then-delete loop. At a cycle seam
-    /// this table holds one row per photo in the pool, so a fetch of
-    /// every row before the delete costs O(library).
+    /// Replaces the old single batch `delete(model:)` with a
+    /// fetch-limited loop: batch deletes are not reliably mirrored to
+    /// CloudKit. At a cycle seam this table can hold one row per photo
+    /// in the pool, so each pass only fetches up to 500 rows at a time,
+    /// not the whole table at once.
     func clearAllSeen() {
-        try? modelContext.delete(model: PhotoSeenEntry.self)
-        try? modelContext.save()
+        while true {
+            var descriptor = FetchDescriptor<PhotoSeenEntry>()
+            descriptor.fetchLimit = 500
+            guard let rows = try? modelContext.fetch(descriptor), !rows.isEmpty else { break }
+            for row in rows { modelContext.delete(row) }
+            try? modelContext.save()
+        }
+    }
+
+    /// The photo-side twin of `SeenStore.foreignMatches()`. Takes its
+    /// `ModelContext` as a parameter, rather than using this actor's own
+    /// long-lived one, so `allSeenKeys()` can read foreign rows through
+    /// the same throwaway context it already uses for the direct fetch.
+    /// See that method's own comment on why.
+    ///
+    /// Returns nothing, doing no fetch, while this device's own id
+    /// cannot currently be read — same reasoning as
+    /// `SeenStore.foreignMatches()`.
+    private func foreignMatches(in context: ModelContext) -> [(row: PhotoSeenEntry, localID: String)] {
+        guard let me = DeviceIdentity.currentIfAvailable else { return [] }
+        let descriptor = FetchDescriptor<PhotoSeenEntry>(predicate: #Predicate {
+            $0.originDeviceID != me && $0.originDeviceID != "" && $0.cloudKey != nil
+        })
+        let rows = (try? context.fetch(descriptor)) ?? []
+        guard !rows.isEmpty else { return [] }
+
+        let uncachedKeys = Array(Set(rows.compactMap(\.cloudKey)).subtracting(foreignLocalByCloudKey.keys))
+        var offset = 0
+        while offset < uncachedKeys.count {
+            let end = min(offset + 200, uncachedKeys.count)
+            let chunk = Array(uncachedKeys[offset..<end])
+            let mapped = PhotoLibraryService.localIdentifierMappings(forCloudIdentifiers: chunk)
+            for key in chunk {
+                foreignLocalByCloudKey[key] = mapped[key] ?? ""
+            }
+            offset = end
+        }
+
+        let out = rows.compactMap { row -> (row: PhotoSeenEntry, localID: String)? in
+            guard let cloudKey = row.cloudKey,
+                  let localID = foreignLocalByCloudKey[cloudKey],
+                  !localID.isEmpty
+            else { return nil }
+            return (row, localID)
+        }
+        #if DEBUG
+        SeenForeignProbe.mapped = out.count
+        #endif
+        return out
     }
 }

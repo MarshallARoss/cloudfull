@@ -129,6 +129,38 @@ final class AssetKeyResolver: ObservableObject {
 
     private var modelContext: ModelContext?
 
+    /// Set when `refreshAfterRemoteChange()` finds a resolution already
+    /// in flight (`state == .pending`, from priming's background resolve
+    /// or from an earlier call to this method) and defers instead of
+    /// starting a competing one. Checked, and cleared, the moment that
+    /// resolution lands — at the end of `resolveCandidates(_:)` or of
+    /// this method's own normal path — so a remote change that arrives
+    /// mid-resolution runs this method again instead of being dropped. A
+    /// single fixed-delay retry is not reliable: the resolution already
+    /// in flight can take longer than any one guess at its duration.
+    private var needsRemoteRefresh = false
+
+    /// Bumped every time `primeSynchronously` runs, and every time
+    /// `refreshAfterRemoteChange()` takes ownership of the pending
+    /// phase, just before its `await`. `resolveCandidates(_:)` and
+    /// `refreshAfterRemoteChange()` each capture this value before their
+    /// own `await` and check it again afterward: `state == .pending`
+    /// alone cannot tell a call's own pending phase apart from a newer
+    /// one. Without the bump in `primeSynchronously`, nothing but
+    /// `refreshAfterRemoteChange()` itself ever changed this value, so
+    /// the only way to reach a mismatched generation was a second
+    /// `refreshAfterRemoteChange()` call taking over — which the
+    /// `.pending` case at this method's own top already redirects into
+    /// `needsRemoteRefresh` before it can bump anything. That made the
+    /// check dead: it could never actually catch a stale call. A
+    /// re-prime does not share that guard, and can set `state` back to
+    /// `.pending` with entirely new candidates while an older
+    /// `resolveCandidates(_:)` or `refreshAfterRemoteChange()` call is
+    /// still suspended on its own PhotoKit round trip; bumping here is
+    /// what makes the later check actually catch that case instead of
+    /// overwriting the re-prime's result with a now-stale mapping.
+    private var refreshGeneration = 0
+
     /// The time limit, in nanoseconds (1.5 s), for the background
     /// cloud-key round trip. `resolveCandidates(_:)` does not apply this
     /// limit. No code uses this constant yet.
@@ -224,6 +256,15 @@ final class AssetKeyResolver: ObservableObject {
         authStatus: PHAuthorizationStatus,
         modelContext: ModelContext
     ) -> [RotationCandidate] {
+        // Every re-prime invalidates any resolution already in flight
+        // from an earlier prime or `refreshAfterRemoteChange()` call,
+        // whatever `state` this call ends up setting below. Without
+        // this, a `resolveCandidates(_:)` or `refreshAfterRemoteChange()`
+        // call suspended at its own `await` can resume, find `state ==
+        // .pending` only by coincidence — this call's own, newer pending
+        // phase — and overwrite it with its now-stale mapping. See
+        // `refreshGeneration`'s own comment.
+        refreshGeneration += 1
         self.modelContext = modelContext
         self.libraryIDs = ids
         // `resolvingWithCache` mirrors `refreshLibrarySnapshot`. Once the
@@ -288,12 +329,19 @@ final class AssetKeyResolver: ObservableObject {
     /// fresher prime superseded it.
     func resolveCandidates(_ candidates: [RotationCandidate]) async {
         guard !candidates.isEmpty else { return }
+        // Captured before the `await` below, the same way
+        // `refreshAfterRemoteChange()` captures `myGeneration`. A re-prime
+        // that lands while this call is suspended bumps
+        // `refreshGeneration`, so the check below tells this call's own
+        // pending phase apart from a newer one that happens to also read
+        // `.pending`.
+        let myGeneration = refreshGeneration
         let keys = Array(Set(candidates.map(\.cloudKey)))
         let mapping = await Task.detached(priority: .userInitiated) {
             PhotoLibraryService.localIdentifierMappings(forCloudIdentifiers: keys)
         }.value
 
-        guard state == .pending else { return }
+        guard state == .pending, myGeneration == refreshGeneration else { return }
         let before = excludedLive
         cloudToLocal.merge(mapping) { _, new in new }
         rebuildFromStore(resolvingWithCache: true)
@@ -302,6 +350,102 @@ final class AssetKeyResolver: ObservableObject {
 
         let newlyExcluded = Array(excludedLive.subtracting(before))
         for handler in resolutionLandedHandlers { handler(newlyExcluded) }
+
+        // A remote change arrived while this priming resolution was in
+        // flight. `refreshAfterRemoteChange()` deferred instead of
+        // racing it; run that refresh now that this resolution landed.
+        if needsRemoteRefresh {
+            needsRemoteRefresh = false
+            await refreshAfterRemoteChange()
+        }
+    }
+
+    /// Re-resolves shield and queue membership after a CloudKit import
+    /// or an account change. `SyncObserver.refresh()` calls this first,
+    /// before it tells `TrashService` or the decks about the change: a
+    /// remote `LikedEntry` or `TrashEntry` row can need a rotation
+    /// resolution this session never primed against.
+    ///
+    /// - `.unprimed`: nothing has dealt yet. The next `primeSynchronously`
+    ///   call starts from the store as it now stands; there is nothing
+    ///   to refresh early.
+    /// - `.partial`: Limited access. No resolution runs under Limited;
+    ///   only the raw-key membership is worth re-reading.
+    /// - `.pending`: a resolution is already in flight, either from
+    ///   priming's background resolve or from an earlier call to this
+    ///   method. This call sets `needsRemoteRefresh` and returns. The
+    ///   resolution already running checks that flag the moment it
+    ///   lands and runs this method again if it is set.
+    /// - `.clean`/`.resolved`: the normal path below.
+    func refreshAfterRemoteChange() async {
+        switch state {
+        case .unprimed:
+            return
+        case .partial:
+            rebuildFromStore(resolvingWithCache: true)
+            recompute()
+            return
+        case .pending:
+            needsRemoteRefresh = true
+            return
+        case .clean, .resolved:
+            break
+        }
+
+        let candidates = collectRotationCandidates()
+        // Map only the cloud keys this resolver does not already know,
+        // the same restraint `resolveCandidates` applies to its own
+        // caller-supplied candidate list.
+        let newKeys = Array(Set(candidates.map(\.cloudKey)).subtracting(cloudToLocal.keys))
+        guard !newKeys.isEmpty else {
+            // Every remote row's raw key already names a live asset
+            // directly, or its cloud key is one this resolver already
+            // knows. A plain rebuild picks up a newly shielded or
+            // queued row with no detour through `.pending`, so an
+            // import that only touched `SeenEntry`/`PhotoSeenEntry`
+            // rows — the common case — never flickers the Delete
+            // button. (Step D: a remote seen row applies at the next
+            // deal or launch anyway, not mid-session.)
+            rebuildFromStore(resolvingWithCache: true)
+            recompute()
+            return
+        }
+
+        // Setting `.pending` here, before the `await` below, is what
+        // makes `isDestructiveActionSafe` false for the duration of this
+        // refresh. No delete may run while a remote row's shield status
+        // is still being resolved. `refreshGeneration` marks this call
+        // as that pending phase's current owner; see its own comment.
+        let before = excludedLive
+        state = .pending
+        refreshGeneration += 1
+        let myGeneration = refreshGeneration
+        recompute()
+
+        let mapping = await Task.detached(priority: .userInitiated) {
+            PhotoLibraryService.localIdentifierMappings(forCloudIdentifiers: newKeys)
+        }.value
+        cloudToLocal.merge(mapping) { _, new in new }
+
+        // Something else — an auth downgrade to Limited, or a newer
+        // call that took over the pending phase while this one was
+        // suspended above — can have moved `state` on. Writing
+        // `.resolved` unconditionally here would clobber that newer
+        // state with this now-stale result.
+        guard state == .pending, myGeneration == refreshGeneration else { return }
+        rebuildFromStore(resolvingWithCache: true)
+        state = .resolved
+        recompute()
+
+        let newlyExcluded = Array(excludedLive.subtracting(before))
+        for handler in resolutionLandedHandlers { handler(newlyExcluded) }
+
+        // A remote change arrived while this call's own resolution was
+        // in flight. Run the refresh once more so it is not dropped.
+        if needsRemoteRefresh {
+            needsRemoteRefresh = false
+            await refreshAfterRemoteChange()
+        }
     }
 
     // MARK: - Incremental maintenance

@@ -28,7 +28,7 @@ final class PurgeAlbumsHelper: XCTestCase {
 
     func testDriveAlbumPurgeConsentDialog() {
         let app = XCUIApplication()
-        app.launchArguments = ["-cloudfull-purge-test-albums"]
+        app.launchArguments = ["-cloudfull-purge-test-albums", "-cloudfull-local-only"]
         app.launch()
         XCTAssertTrue(
             app.wait(for: .runningForeground, timeout: 15),

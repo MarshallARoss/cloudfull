@@ -167,16 +167,26 @@ struct TrashView: View {
     /// `replacementBytes == 0` is what tells this apart from
     /// `shrunkEntries` — see `TrashEntry.replacementBytes`. Filtering
     /// preserves `trashService.entries`' own newest-first order.
+    ///
+    /// `$0.isLive` must run first in the predicate. A remote import can
+    /// delete, or a merge can otherwise invalidate, the `TrashEntry`
+    /// this array still holds a reference to between one
+    /// `TrashService.entries` publish and the next; reading any other
+    /// stored property on such a row is a SwiftData fatal error
+    /// ("backing data could no longer be found"). `&&` short-circuits,
+    /// so `replacementBytes` is never read on a row this check already
+    /// excluded. See `TrashEntry.isLive`.
     private var deletedEntries: [TrashEntry] {
-        trashService.entries.filter { $0.replacementBytes == 0 }
+        trashService.entries.filter { $0.isLive && $0.replacementBytes == 0 }
     }
 
     /// Originals a shrink replaced with a smaller HD copy, left in the bin
     /// only because the shrink itself queues them. `replacementBytes > 0`
     /// already marks this, so the split needs no new data. Filtering
-    /// preserves `trashService.entries`' own newest-first order.
+    /// preserves `trashService.entries`' own newest-first order. See
+    /// `deletedEntries` for why `$0.isLive` must run first.
     private var shrunkEntries: [TrashEntry] {
-        trashService.entries.filter { $0.replacementBytes > 0 }
+        trashService.entries.filter { $0.isLive && $0.replacementBytes > 0 }
     }
 
     /// One section's grid. `deletedEntries` and `shrunkEntries` each get
@@ -184,11 +194,19 @@ struct TrashView: View {
     private func grid(for entries: [TrashEntry]) -> some View {
         LazyVGrid(columns: columns, spacing: 2) {
             ForEach(entries, id: \.assetKey) { entry in
+                // `entries` is already `.isLive`-filtered (`deletedEntries`/
+                // `shrunkEntries`), so reading `entry.assetKey` here, at
+                // `ForEach`'s own render time, is safe. The closure below
+                // can fire much later, after a remote import may have
+                // invalidated `entry`; it captures the plain `String`
+                // value instead of the row, so there is nothing left to
+                // read unsafely by then.
+                let assetKey = entry.assetKey
                 TrashCell(
                     entry: entry,
                     trashService: trashService,
                     onRestoreResult: handleRestoreResult,
-                    onPreviewRequested: { Usage.shared.binPreviewOpened(); previewTarget = PreviewTarget(id: entry.assetKey) }
+                    onPreviewRequested: { Usage.shared.binPreviewOpened(); previewTarget = PreviewTarget(id: assetKey) }
                 )
             }
         }
@@ -406,11 +424,20 @@ struct TrashView: View {
     private func performEmpty() async {
         isEmptying = true
         Usage.shared.binEmptyAttempted()   // Counts each Empty Bin tap. Compare with `binEmptied` to find how many users cancel the system dialog.
-        // Record the bytes for each id before the delete. Do not read
-        // `trashService.pendingBytes` after it. PhotoKit skips an id that
-        // no longer resolves. The freed-space message counts only deleted
-        // ids.
-        let entriesBeingFreed = trashService.entries
+        // Plain copies of the bytes for each id, taken before the
+        // delete, filtered to rows still backed by data (`$0.isLive`;
+        // see `TrashEntry.isLive`) at the moment of the copy. Do not
+        // hold a `TrashEntry` reference across `emptyBin()`'s own
+        // await below: a remote import can invalidate it while that
+        // awaits PhotoKit, and reading any other property on it
+        // afterward is a SwiftData fatal error. Do not read
+        // `trashService.pendingBytes` after the await either. PhotoKit
+        // skips an id that no longer resolves. The freed-space message
+        // counts only deleted ids.
+        struct FreedFacts { let assetKey: String; let bytes: Int64; let replacementBytes: Int64; let isEstimatedBytes: Bool }
+        let entriesBeingFreed = trashService.entries.filter(\.isLive).map {
+            FreedFacts(assetKey: $0.assetKey, bytes: $0.bytes, replacementBytes: $0.replacementBytes, isEstimatedBytes: $0.isEstimatedBytes)
+        }
         let deletedIDs = await trashService.emptyBin()
         isEmptying = false
         guard let deletedIDs, !deletedIDs.isEmpty else { return }
@@ -459,6 +486,26 @@ private struct TrashCell: View {
     /// glyph.
     let onPreviewRequested: () -> Void
 
+    /// Captured once, when this cell is created — `body` below only ever
+    /// builds `cellBody` while `entry.isLive`, so this read is safe. Every
+    /// closure on this cell (`.task`, the tap gesture, the "Preview"
+    /// accessibility action, `restoreGlyph`'s own action) can run after a
+    /// remote import invalidates `entry`, sometimes after its own
+    /// `await`. Reading `entry.assetKey`/`entry.mediaKind` again at that
+    /// point would be a SwiftData fatal error; these plain copies are
+    /// used there instead. See `TrashEntry.isLive`.
+    private let assetKey: String
+    private let mediaKind: String
+
+    init(entry: TrashEntry, trashService: TrashService, onRestoreResult: @escaping (Bool) -> Void, onPreviewRequested: @escaping () -> Void) {
+        self.entry = entry
+        self.trashService = trashService
+        self.onRestoreResult = onRestoreResult
+        self.onPreviewRequested = onPreviewRequested
+        self.assetKey = entry.assetKey
+        self.mediaKind = entry.mediaKind
+    }
+
     @State private var thumbnail: UIImage?
     @State private var durationText = ""
     private let library = PhotoLibraryService.shared
@@ -468,16 +515,32 @@ private struct TrashCell: View {
     /// only after a liveness check confirms the asset is missing.
     /// `entry.dormantSince` only controls when the row leaves the queue.
     private var isDormant: Bool {
-        !trashService.isLive(assetKey: entry.assetKey)
+        !trashService.isLive(assetKey: assetKey)
     }
 
     /// Duration applies only to a video. `PHAsset.duration` reads 0 for a
     /// photo, so the overlay and label skip duration entirely for a photo
     /// row instead of showing "0:00".
-    private var isVideo: Bool { entry.mediaKind != TrashMediaKind.photo.rawValue }
+    private var isVideo: Bool { mediaKind != TrashMediaKind.photo.rawValue }
     private var mediaNoun: String { isVideo ? "Video" : "Photo" }
 
     var body: some View {
+        // A remote import can delete, or otherwise invalidate, this
+        // cell's `entry` between the parent's last `trashService.entries`
+        // publish and this body's own evaluation (for example from an
+        // `.task` that runs after a re-render). Every other property
+        // read below is unsafe on such a row — see
+        // `TrashView.deletedEntries`'s comment and `TrashEntry.isLive`
+        // — so this cell renders nothing until the next publish drops
+        // it from the grid entirely.
+        if !entry.isLive {
+            Color.clear.aspectRatio(1, contentMode: .fit)
+        } else {
+            cellBody
+        }
+    }
+
+    private var cellBody: some View {
         Color(.secondarySystemBackground)
             .aspectRatio(1, contentMode: .fit)
             .overlay {
@@ -524,7 +587,7 @@ private struct TrashCell: View {
                         .background(.black.opacity(0.55), in: Capsule())
                         .padding(.leading, 4)
                         .padding(.top, 4)
-                        .accessibilityIdentifier("trash_shrunk_\(entry.assetKey)")
+                        .accessibilityIdentifier("trash_shrunk_\(assetKey)")
                         .accessibilityLabel("Shrunk: the original of a video Cloudfull replaced with a smaller copy")
                 }
             }
@@ -537,25 +600,35 @@ private struct TrashCell: View {
                         .padding(.vertical, 3)
                         .background(.black.opacity(0.55), in: Capsule())
                         .padding(.top, 4)
-                        .accessibilityIdentifier("trash_dormant_\(entry.assetKey)")
+                        .accessibilityIdentifier("trash_dormant_\(assetKey)")
                 }
             }
             .contentShape(Rectangle())
             .onTapGesture {
                 // A dormant asset does not resolve, so no preview can
                 // load. The `.task` below skips the thumbnail and
-                // duration fetch for the same reason.
-                guard !isDormant else { return }
+                // duration fetch for the same reason. `entry.isLive` is
+                // checked too: this closure can still fire after a
+                // remote import invalidates `entry`, since it is a
+                // separate `Button`-less gesture SwiftUI can keep
+                // attached to a stale cell for a moment.
+                guard entry.isLive, !isDormant else { return }
                 onPreviewRequested()
             }
             .task {
                 // A dormant row's stored key names nothing right now. Skip
                 // the PhotoKit fetch instead of fetching a thumbnail or
                 // duration that comes back empty.
-                guard !isDormant else { return }
-                thumbnail = await library.thumbnail(for: entry.assetKey, side: 200)
+                guard entry.isLive, !isDormant else { return }
+                thumbnail = await library.thumbnail(for: assetKey, side: 200)
+                // Re-checked after the await: a remote import can
+                // invalidate `entry` while that PhotoKit fetch is in
+                // flight. `assetKey`/`isVideo` below are already the
+                // plain copies, never `entry` itself, so nothing past
+                // this guard reads an unsafe property either way.
+                guard entry.isLive else { return }
                 if isVideo {
-                    durationText = Fmt.duration(library.asset(for: entry.assetKey)?.duration ?? 0)
+                    durationText = Fmt.duration(library.asset(for: assetKey)?.duration ?? 0)
                 }
             }
             // Uses `.accessibilityElement(children: .contain)` so
@@ -563,7 +636,7 @@ private struct TrashCell: View {
             // on this group replaces child identifiers, which hides
             // `trash_restore_<assetKey>` on `restoreGlyph`.
             .accessibilityElement(children: .contain)
-            .accessibilityIdentifier("trash_preview_\(entry.assetKey)")
+            .accessibilityIdentifier("trash_preview_\(assetKey)")
             // No ", shrunk original" suffix here. The restored `Shrunk`
             // badge above is its own accessibility element, with its own
             // longer label ("Shrunk: the original of a video Cloudfull
@@ -581,7 +654,7 @@ private struct TrashCell: View {
             // and VoiceOver cannot reach Restore. A named action gives
             // the preview.
             .accessibilityAction(named: "Preview") {
-                guard !isDormant else { return }
+                guard entry.isLive, !isDormant else { return }
                 onPreviewRequested()
             }
     }
@@ -591,10 +664,15 @@ private struct TrashCell: View {
     /// to this button, not to the cell's `onTapGesture`.
     private var restoreGlyph: some View {
         Button {
-            // Reads `replacementBytes` before the restore call, which
-            // deletes the SwiftData row and can invalidate this object.
+            // This action can fire after a remote import invalidates
+            // `entry`, since SwiftUI can keep a button attached to a
+            // stale cell for a moment. Check `entry.isLive` before any
+            // other read, then read `replacementBytes` before the
+            // restore call, which deletes the SwiftData row and can
+            // invalidate this object too.
+            guard entry.isLive else { return }
             let shrunkOriginal = entry.replacementBytes > 0
-            let restored = trashService.restore(assetID: entry.assetKey)
+            let restored = trashService.restore(assetID: assetKey)
             if restored { Usage.shared.binRestore(shrunkOriginal: shrunkOriginal) }
             withAnimation { onRestoreResult(restored) }
         } label: {
@@ -606,7 +684,7 @@ private struct TrashCell: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityIdentifier("trash_restore_\(entry.assetKey)")
+        .accessibilityIdentifier("trash_restore_\(assetKey)")
         .accessibilityLabel(isDormant
             ? "Restore \(mediaNoun.lowercased()), not available right now"
             : (isVideo ? "Restore \(mediaNoun.lowercased()), \(durationText)" : "Restore \(mediaNoun.lowercased())"))
@@ -632,8 +710,12 @@ private struct TrashPreviewView: View {
     /// player item.
     @State private var photo: UIImage?
 
+    /// `$0.isLive` must run first in the predicate, before
+    /// `$0.assetKey` — see `TrashView.deletedEntries`'s comment on why a
+    /// dead `TrashEntry` cannot be read any other way, and
+    /// `TrashEntry.isLive`.
     private var isPhoto: Bool {
-        trashService.entries.first { $0.assetKey == assetKey }?.mediaKind == TrashMediaKind.photo.rawValue
+        trashService.entries.first { $0.isLive && $0.assetKey == assetKey }?.mediaKind == TrashMediaKind.photo.rawValue
     }
 
     var body: some View {
@@ -687,8 +769,9 @@ private struct TrashPreviewView: View {
                     Button("Restore") {
                         // Reads `replacementBytes` before the restore call,
                         // which deletes the SwiftData row and can
-                        // invalidate the matching entry.
-                        let shrunkOriginal = (trashService.entries.first { $0.assetKey == assetKey }?.replacementBytes ?? 0) > 0
+                        // invalidate the matching entry. `$0.isLive`
+                        // must run first — see `isPhoto`'s comment above.
+                        let shrunkOriginal = (trashService.entries.first { $0.isLive && $0.assetKey == assetKey }?.replacementBytes ?? 0) > 0
                         if trashService.restore(assetID: assetKey) { Usage.shared.binRestore(shrunkOriginal: shrunkOriginal) }
                         dismiss()
                     }

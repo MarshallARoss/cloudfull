@@ -26,6 +26,15 @@ struct CloudfullApp: App {
     /// to erase user data.
     static let resetStateArgument = "-cloudfull-reset-deck-state"
 
+    /// Forces `CloudfullModelContainer.make()` to open the local-only
+    /// store, even on a build that declares a CloudKit container. Every
+    /// UI test launch passes this, so a test run never opens real
+    /// CloudKit. `resetStateArgument` already implies this; this
+    /// argument exists for a launch that needs local-only without also
+    /// erasing the store (for example, a relaunch that must keep what
+    /// an earlier launch wrote).
+    static let localOnlyArgument = "-cloudfull-local-only"
+
     /// Deletes every regular Photos album whose title begins with
     /// `"Cloudfull UITest "` (trailing space included). Used by the
     /// album-creation UI test, so repeated test runs do not add more test
@@ -52,6 +61,36 @@ struct CloudfullApp: App {
     /// no release binary carries a way to corrupt its own store this way.
     static let rotateKeysArgument = "-cloudfull-rotate-keys"
 
+    /// Seeds two `TrashEntry` rows through `SyncTestHarness`: one stamped
+    /// with another device's id, one with this device's own. Lets
+    /// `M7Tests.testReconcileKeepsAnotherDevicesBinRow` prove that
+    /// `TrashService.reconcileWithLibrary` never marks or deletes
+    /// another device's row. This is DEBUG-only, like every other launch
+    /// argument in this file.
+    static let seedForeignTrashArgument = "-cloudfull-seed-foreign-trash"
+
+    /// Seeds one foreign `SeenEntry` row through `SyncTestHarness`,
+    /// stamped with another device's id and the newest video's cloud
+    /// key. Lets `M7Tests.testForeignSeenRowCountsAsSeen` prove a
+    /// cross-device seen match keeps that video off screen. This is
+    /// DEBUG-only, like every other launch argument in this file.
+    static let seedForeignSeenArgument = "-cloudfull-seed-foreign-seen"
+
+    /// Simulates a remote Keep landing through CloudKit, 3 seconds after
+    /// `SyncObserver.attach(trash:deck:)` runs: see
+    /// `SyncTestHarness.simulateRemoteKeepAfterDelay()`. Lets
+    /// `M7Tests.testRemoteKeepPullsRowFromBin` prove `TrashService`
+    /// pulls a row out of the bin when a `LikedEntry` for it lands from
+    /// outside this process's own main context. This is DEBUG-only,
+    /// like every other launch argument in this file.
+    static let simulateRemoteKeepArgument = "-cloudfull-simulate-remote-keep"
+
+    /// Backs `CloudfullModelContainer.initializeCloudKitSchemaAndExit()`:
+    /// seeds the CloudKit Development schema from `syncedModels` and
+    /// exits. Run by hand (Step H), never by a UI test. This is
+    /// DEBUG-only, like every other launch argument in this file.
+    static let initCloudKitSchemaArgument = "-cloudfull-init-cloudkit-schema"
+
     /// Logs `auth_report_<PHAuthorizationStatus>` and exits immediately.
     /// Used by `scripts/gate_all.sh`'s round-start authorization check.
     /// Nothing else checks or restores Photos access between rounds. An
@@ -67,6 +106,14 @@ struct CloudfullApp: App {
     /// `DeckViewModel` is what reads it. This matches the pattern used
     /// for every other `-cloudfull-*` argument.
     static let reportPoolArgument = "-cloudfull-report-pool"
+
+    /// Logs one line with every row count
+    /// `scripts/m7_upgrade_check.sh` needs —
+    /// `store_report_<mode>_<seen>_<liked>_<trash>_<photoSeen>_<deckState>_<deckOrder>_<photoDeck>_<meta>_<trashOwned>`
+    /// — then exits. Read in `init()`, after the container has opened
+    /// (so `StoreSplitMigrator` has already run). Needs no view, no
+    /// authorized session, and no photo access.
+    static let reportStoreArgument = "-cloudfull-report-store"
 
     /// Writes the shrink replacement of `$CLOUDFULL_HDR_ORIGINAL_ID` to
     /// `Documents/hdr_probe.mov` and exits. Fired from
@@ -145,6 +192,20 @@ struct CloudfullApp: App {
             // the process shows only the feed, also after a relaunch.
             UserDefaults.standard.set(true, forKey: OnboardingGate.storageKey)
         }
+        // Seed the foreign-bin-row fixture here, before any view exists,
+        // the same pattern `KeyRotationHarness` uses below. The rows are
+        // then in place before `TrashService.start()`'s own reconcile
+        // pass runs.
+        if ProcessInfo.processInfo.arguments.contains(Self.seedForeignTrashArgument) {
+            SyncTestHarness.seedForeignTrash(container: CloudfullModelContainer.shared)
+        }
+        // Same pattern, for a cross-device seen match instead of a
+        // foreign bin row. This needs the photo library, not only the
+        // store, so it runs here rather than waiting on the backfill
+        // launcher's own authorization gate.
+        if ProcessInfo.processInfo.arguments.contains(Self.seedForeignSeenArgument) {
+            SyncTestHarness.seedForeignSeen(container: CloudfullModelContainer.shared)
+        }
         // Rotate the keys here, before any view exists. The rotated rows
         // are then in place before `DeckViewModel.start()` deals the
         // deck.
@@ -171,6 +232,25 @@ struct CloudfullApp: App {
             }
             Logger(subsystem: Bundle.main.bundleIdentifier ?? "com.cloudfull.app", category: "AuthReport")
                 .log("auth_report_\(name, privacy: .public)")
+            exit(0)
+        }
+        // Opens the container — running `StoreSplitMigrator` if this is
+        // the first launch after an upgrade — then reports one line
+        // with every row count `scripts/m7_upgrade_check.sh` checks,
+        // and exits. Needs no view and no authorized session.
+        if ProcessInfo.processInfo.arguments.contains(Self.reportStoreArgument) {
+            let context = ModelContext(CloudfullModelContainer.shared)
+            let seen = (try? context.fetchCount(FetchDescriptor<SeenEntry>())) ?? 0
+            let liked = (try? context.fetchCount(FetchDescriptor<LikedEntry>())) ?? 0
+            let trashRows = (try? context.fetch(FetchDescriptor<TrashEntry>())) ?? []
+            let photoSeen = (try? context.fetchCount(FetchDescriptor<PhotoSeenEntry>())) ?? 0
+            let deckState = (try? context.fetchCount(FetchDescriptor<DeckState>())) ?? 0
+            let deckOrder = (try? context.fetchCount(FetchDescriptor<DeckOrder>())) ?? 0
+            let photoDeck = (try? context.fetchCount(FetchDescriptor<PhotoDeckState>())) ?? 0
+            let meta = (try? context.fetchCount(FetchDescriptor<PhotoMetaRecord>())) ?? 0
+            let trashOwned = trashRows.filter { $0.originDeviceID == DeviceIdentity.currentIfAvailable }.count
+            Logger(subsystem: Bundle.main.bundleIdentifier ?? "com.cloudfull.app", category: "StoreReport")
+                .log("store_report_\(CloudfullModelContainer.mode.rawValue, privacy: .public)_\(seen)_\(liked)_\(trashRows.count)_\(photoSeen)_\(deckState)_\(deckOrder)_\(photoDeck)_\(meta)_\(trashOwned)")
             exit(0)
         }
         #endif
@@ -204,7 +284,12 @@ struct CloudfullApp: App {
     private static func eraseLocalStore() {
         let fileManager = FileManager.default
         guard let support = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return }
-        for name in ["default.store", "default.store-shm", "default.store-wal"] {
+        // "default.store" is the synced store; "local.store" (new in M7)
+        // holds deck position and the metadata cache. Both must go, or a
+        // reset launch would resume from the old deck position on a
+        // store that otherwise looks fresh.
+        for name in ["default.store", "default.store-shm", "default.store-wal",
+                     "local.store", "local.store-shm", "local.store-wal"] {
             try? fileManager.removeItem(at: support.appendingPathComponent(name))
         }
     }

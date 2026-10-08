@@ -71,10 +71,16 @@ final class PhotoSeenEntry {
     /// at insert time. It gives a stable key across a restore or a device
     /// migration. See `SeenEntry.cloudKey` in Cloudfull/Storage/Models.swift.
     var cloudKey: String? = nil
+    /// `DeviceIdentity.currentIfAvailable` at insert time, or `""` when
+    /// that was `nil` — this device's id could not be read reliably at
+    /// that moment. `""` is also what a 1.0 row carries. See
+    /// `SeenEntry.originDeviceID` in `Cloudfull/Storage/Models.swift`.
+    var originDeviceID: String = ""
 
-    init(assetKey: String, cloudKey: String? = nil) {
+    init(assetKey: String, cloudKey: String? = nil, originDeviceID: String = DeviceIdentity.currentIfAvailable ?? "") {
         self.assetKey = assetKey
         self.cloudKey = cloudKey
+        self.originDeviceID = originDeviceID
     }
 }
 
@@ -83,7 +89,11 @@ final class PhotoSeenEntry {
 /// lasts for the current run. This table holds the half that survives a
 /// relaunch. `PhotoMetaStore` in Cloudfull/Storage/PhotoMetaStore.swift is
 /// the `@ModelActor` that reads and writes it off the main actor.
-/// One row exists per asset that has loaded tier 1 at least once.
+/// One row exists per asset that has loaded tier 1 at least once. That
+/// invariant is kept by `PhotoMetaStore.fetchOrCreate` (single actor,
+/// fetch-before-insert), not by a `.unique` attribute on `assetID`: a
+/// CloudKit-backed store rejects `.unique`. Do not insert
+/// `PhotoMetaRecord` anywhere else.
 /// `modificationDate` mirrors `PHAsset.modificationDate` at write time. An
 /// edit is the most common reason an asset changes. Then
 /// `PhotoMetaStore.fetchIfFresh` returns nil for a stale row, so the
@@ -93,7 +103,7 @@ final class PhotoSeenEntry {
 /// first case is a real cache hit.
 @Model
 final class PhotoMetaRecord {
-    @Attribute(.unique) var assetID: String = ""
+    var assetID: String = ""
     var modificationDate: Date?
     var fetchedAt: Date = Date()
 

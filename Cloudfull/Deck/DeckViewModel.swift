@@ -839,6 +839,11 @@ final class DeckViewModel: ObservableObject {
             modelContext.insert(LikedEntry(assetKey: assetID, cloudKey: cloudKey))
             try? modelContext.save()
             resolver.noteLiked(assetKey: assetID, cloudKey: cloudKey)
+            // Only when no cloud key was already known: a row inserted
+            // with one needs no backfill pass to resolve it.
+            if cloudKey == nil {
+                CloudKeyBackfillLauncher.shared.noteNewRow(assetID)
+            }
         }
         removeFromFuture(assetID: assetID)
         // The shield always wins over a pending delete: a video queued

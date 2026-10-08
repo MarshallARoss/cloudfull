@@ -471,6 +471,12 @@ private final class AuthorizedSession {
         self.deck = deck
         self.trash = trash
         self.shrink = shrink
+
+        // Registers CloudKit's remote-change observers once per process
+        // (see `didAttach`). Called last, so `trash` and `deck` above
+        // are fully wired before anything can reach them through a
+        // remote-change refresh.
+        SyncObserver.shared.attach(trash: trash, deck: deck)
     }
 }
 

@@ -38,6 +38,9 @@ struct SettingsView: View {
     /// independent readers of the same `UserDefaults` key are not
     /// reliable enough for this button to work.
     @ObservedObject private var onboardingGate = OnboardingGateState.shared
+    /// Backs the "iCloud sync" row's account-available half. Only
+    /// meaningful when `CloudfullModelContainer.mode == .cloudKit`.
+    @ObservedObject private var syncObserver = SyncObserver.shared
     /// Drives the on-demand welcome screen. See the Help section below.
     @State private var showWelcome = false
     @State private var freeSpaceText = "…"
@@ -102,6 +105,12 @@ struct SettingsView: View {
         .onAppear {
             Usage.shared.settingsOpened()
             appIcon = AppIconChoice.current   // read the actual icon; do not assume the stored choice took effect
+            // Re-checks the account status every time this screen
+            // appears, not only once at launch, so the "iCloud sync"
+            // row catches a sign-in or sign-out that happened while
+            // Settings was not on screen. A no-op (sets `nil`) when
+            // `mode != .cloudKit`; see `refreshAccountStatus()`.
+            syncObserver.refreshAccountStatus()
         }
         .task {
             let gb = await Task.detached(priority: .utility) { Usage.freeSpaceGB() }.value
@@ -214,16 +223,32 @@ struct SettingsView: View {
             }
             .accessibilityElement(children: .combine)
             .accessibilityIdentifier("settings_free_space")
-            // Read-only. The app has no sync engine, so the status is
-            // always "Local only".
+            // Read-only. "Local only" when the gate kept this build off
+            // CloudKit (no container declared, or a test harness forced
+            // it); otherwise "Syncing" once the account is available,
+            // or "Signed out" once it is known not to be. While the
+            // account status is still unknown (`accountAvailable ==
+            // nil`), this row shows no status text at all: `nil` means
+            // "not yet checked", not "signed out", and the plan's
+            // approved words (plan.md item 4 of Settings) do not include
+            // a third word for that case.
             HStack {
                 Text("iCloud sync")
                 Spacer()
-                Text("Local only")
+                Text(iCloudSyncStatusText)
                     .foregroundStyle(.secondary)
             }
             .accessibilityElement(children: .combine)
             .accessibilityIdentifier("settings_icloud_status")
+        }
+    }
+
+    private var iCloudSyncStatusText: String {
+        guard CloudfullModelContainer.mode == .cloudKit else { return "Local only" }
+        switch syncObserver.accountAvailable {
+        case true: return "Syncing"
+        case false: return "Signed out"
+        case nil: return ""   // not yet checked; see this row's own comment
         }
     }
 

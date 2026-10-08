@@ -8,6 +8,7 @@
 
 import SwiftData
 import Foundation
+import CoreData
 import os
 
 /// The app's one SwiftData container.
@@ -16,8 +17,13 @@ import os
 /// identifier, and falls back to a local-only store otherwise. This
 /// includes any case where the CloudKit store fails to open.
 ///
-/// To turn on CloudKit, add the Info.plist key below. No Swift change is
-/// necessary.
+/// Two `ModelConfiguration`s back the one container. `synced` holds
+/// every model CloudKit mirrors (`syncedModels`), at the 1.0 file
+/// `default.store`. `local` holds deck position and the recomputable
+/// metadata cache (`localModels`), at the new `local.store`. Keeping the
+/// local models out of the CloudKit config, with their own explicit
+/// `schema:`, is what stops them from ever syncing: a config built
+/// without an explicit schema gets the whole container's schema.
 enum CloudfullModelContainer {
 
     enum Mode: String { case cloudKit, localOnly }
@@ -25,45 +31,86 @@ enum CloudfullModelContainer {
     /// Set by `make()`. Read only for logging and for the DEBUG probe.
     private(set) nonisolated(unsafe) static var mode: Mode = .localOnly
 
-    /// Build-settings key to add alongside CODE_SIGN_ENTITLEMENTS once a
-    /// developer account with the entitlement exists:
-    ///   INFOPLIST_KEY_CloudfullCloudKitContainerIdentifier = iCloud.com.cloudfull.app
-    ///
-    /// When the key is absent, `declaredCloudContainerIdentifier` is nil
-    /// and the CloudKit branch does not run. Reading a declaration the
-    /// app controls is the only entitlement check available on iOS
-    /// without a private API. Add this key in the same change that adds
-    /// the capability. If the CloudKit store still fails to open,
-    /// `make()` uses the local-only store.
-    private static let containerIDInfoKey = "CloudfullCloudKitContainerIdentifier"
+    /// The iCloud container this build declares, or `nil` for a fork.
+    /// Same rule and reason as `Usage.containerID`: a fork of this app
+    /// has no access to this container, and `CKContainer`/`.automatic`
+    /// stops the app trying to use one it cannot. A plain constant, not
+    /// an Info.plist key: a custom `INFOPLIST_KEY_` is silently dropped
+    /// by Xcode's generated Info.plist.
+    static let cloudContainerID: String? = Bundle.main.bundleIdentifier == "com.cloudfull.app" ? "iCloud.com.cloudfull.app" : nil
+
+    /// Every model CloudKit mirrors. `make()` and `StoreSplitMigrator`
+    /// both build their schemas from this list and `localModels`, so the
+    /// two can never drift apart.
+    static let syncedModels: [any PersistentModel.Type] = [SeenEntry.self, LikedEntry.self, TrashEntry.self, PhotoSeenEntry.self]
+    /// Every model that stays on this device: deck position and the
+    /// metadata cache. The cache is large (tens of megabytes) and
+    /// recomputable; deck position is per-device by nature.
+    static let localModels: [any PersistentModel.Type] = [DeckState.self, DeckOrder.self, PhotoDeckState.self, PhotoMetaRecord.self]
+
+    /// The 1.0 file. Every install before M7 has every model in this one
+    /// file, under this same name. `StoreSplitMigrator` moves the local
+    /// models out of it before `make()` ever opens it with the narrower,
+    /// synced-only schema below.
+    static var syncedStoreURL: URL { URL.applicationSupportDirectory.appending(path: "default.store") }
+    /// New in M7. Holds `localModels` only. Never opened with a CloudKit
+    /// database, so it never syncs regardless of `mode`.
+    static var localStoreURL: URL { URL.applicationSupportDirectory.appending(path: "local.store") }
 
     static let shared: ModelContainer = make()
 
     private static let log = Logger(subsystem: "com.cloudfull.app", category: "Storage")
 
-    private static var declaredCloudContainerIdentifier: String? {
-        guard let raw = Bundle.main.object(forInfoDictionaryKey: containerIDInfoKey) as? String else { return nil }
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
+    /// `cloudContainerID != nil`, unless a DEBUG test harness forces
+    /// this process local.
+    private static var useCloud: Bool {
+        cloudContainerID != nil && !isForcedLocalByTestHarness
     }
 
     private static var isForcedLocalByTestHarness: Bool {
         #if DEBUG
         return ProcessInfo.processInfo.arguments.contains(CloudfullApp.resetStateArgument)
+            || ProcessInfo.processInfo.arguments.contains(CloudfullApp.localOnlyArgument)
         #else
         return false
         #endif
     }
 
     private static func make() -> ModelContainer {
-        let schema = Schema([DeckState.self, DeckOrder.self, SeenEntry.self, LikedEntry.self, TrashEntry.self,
-                             PhotoDeckState.self, PhotoSeenEntry.self, PhotoMetaRecord.self])
+        #if DEBUG
+        // Handled first: this exits the process, and must never touch
+        // `syncedStoreURL`/`localStoreURL`, so it runs before
+        // `StoreSplitMigrator` or either `ModelContainer` below.
+        if ProcessInfo.processInfo.arguments.contains(CloudfullApp.initCloudKitSchemaArgument) {
+            initializeCloudKitSchemaAndExit()
+        }
+        #endif
 
-        if let containerID = declaredCloudContainerIdentifier, !isForcedLocalByTestHarness {
+        // Must run before either `ModelContainer` below opens
+        // `syncedStoreURL`. See `StoreSplitMigrator` for why the order
+        // matters: a 1.0 file still carries the local models' rows until
+        // this call moves them out. `splitOK == false` means this
+        // attempt threw partway through, so the CloudKit branch below
+        // must not run this launch: the safety argument only holds once
+        // the split has actually finished.
+        let splitOK = StoreSplitMigrator.runIfNeeded()
+
+        let syncedSchema = Schema(syncedModels)
+        let localSchema = Schema(localModels)
+        let fullSchema = Schema(syncedModels + localModels)
+        #if DEBUG
+        assertModelSplitIsDisjointAndComplete(syncedSchema: syncedSchema, localSchema: localSchema, fullSchema: fullSchema)
+        #endif
+
+        // Every model is in exactly one config, and every config below
+        // passes both `schema:` and `cloudKitDatabase:` explicitly.
+        let local = ModelConfiguration("local", schema: localSchema, url: localStoreURL, cloudKitDatabase: .none)
+
+        if splitOK, useCloud, let containerID = cloudContainerID {
             // `.automatic` reads the entitlement itself, so the container id
             // above acts as a gate, not a parameter.
-            let config = ModelConfiguration(schema: schema, cloudKitDatabase: .automatic)
-            if let container = try? ModelContainer(for: schema, configurations: config) {
+            let synced = ModelConfiguration("default", schema: syncedSchema, url: syncedStoreURL, cloudKitDatabase: .automatic)
+            if let container = try? ModelContainer(for: fullSchema, configurations: synced, local) {
                 mode = .cloudKit
                 log.notice("SwiftData store mode: cloudKit (declared container \(containerID, privacy: .public))")
                 return container
@@ -71,15 +118,94 @@ enum CloudfullModelContainer {
             log.error("SwiftData store mode: local-only — CloudKit container \(containerID, privacy: .public) declared but failed to open")
         }
 
-        let config = ModelConfiguration(schema: schema, cloudKitDatabase: .none)
         mode = .localOnly
-        if declaredCloudContainerIdentifier == nil {
+        if !splitOK {
+            // The split threw partway through, so `syncedStoreURL` can
+            // still physically hold the 4 local models' tables (step 3g,
+            // which empties them, never ran). Opening it with the
+            // narrower `syncedSchema` here, as the normal path below
+            // does, would make SwiftData's inferred migration drop
+            // those tables as "not in this config's schema" — exactly
+            // the data loss this fallback exists to avoid. Open ONE
+            // configuration with `fullSchema` (all 8 models) at
+            // `syncedStoreURL` instead, so every table survives, and
+            // skip `local.store` entirely this launch: every model
+            // already lives in this one file. `StoreSplitMigrator`
+            // retries the split from scratch next launch.
+            log.error("SwiftData store mode: local-only — the 1.0 store split did not finish; opening the full schema at the synced store so no table is lost, and retrying the split next launch")
+            let fallback = ModelConfiguration("default", schema: fullSchema, url: syncedStoreURL, cloudKitDatabase: .none)
+            do {
+                return try ModelContainer(for: fullSchema, configurations: fallback)
+            } catch {
+                fatalError("Cloudfull cannot open its local SwiftData store: \(error)")
+            }
+        }
+        if cloudContainerID == nil {
             log.notice("SwiftData store mode: local-only (no CloudKit container declared)")
         }
+        let synced = ModelConfiguration("default", schema: syncedSchema, url: syncedStoreURL, cloudKitDatabase: .none)
         do {
-            return try ModelContainer(for: schema, configurations: config)
+            return try ModelContainer(for: fullSchema, configurations: synced, local)
         } catch {
             fatalError("Cloudfull cannot open its local SwiftData store: \(error)")
         }
     }
+
+    #if DEBUG
+    /// Backs `-cloudfull-init-cloudkit-schema`. Apple's documented
+    /// pattern for seeding a CloudKit container's schema from a
+    /// SwiftData model, run by hand against the Development
+    /// environment ahead of Step H's Production schema deploy: build a
+    /// plain `NSManagedObjectModel` for `syncedModels`, open an
+    /// `NSPersistentCloudKitContainer` on a throwaway store with it, and
+    /// call `initializeCloudKitSchema()`. Never touches `default.store`
+    /// or `local.store`.
+    private static func initializeCloudKitSchemaAndExit() -> Never {
+        let storeURL = FileManager.default.temporaryDirectory.appendingPathComponent("ck-schema-init.store")
+        try? FileManager.default.removeItem(at: storeURL)
+
+        guard let model = NSManagedObjectModel.makeManagedObjectModel(for: syncedModels) else {
+            log.error("ck_schema_init_failed_no_model")
+            exit(0)
+        }
+
+        let container = NSPersistentCloudKitContainer(name: "ck-schema-init", managedObjectModel: model)
+        let description = NSPersistentStoreDescription(url: storeURL)
+        description.cloudKitContainerOptions = NSPersistentCloudKitContainerOptions(containerIdentifier: "iCloud.com.cloudfull.app")
+        description.shouldAddStoreAsynchronously = false
+        container.persistentStoreDescriptions = [description]
+
+        var loadError: Error?
+        container.loadPersistentStores { _, error in loadError = error }
+        if let loadError {
+            log.error("ck_schema_init_failed_\(loadError.localizedDescription, privacy: .public)")
+            exit(0)
+        }
+
+        do {
+            try container.initializeCloudKitSchema()
+            log.notice("ck_schema_init_ok")
+        } catch {
+            log.error("ck_schema_init_failed_\(error.localizedDescription, privacy: .public)")
+        }
+        try? FileManager.default.removeItem(at: storeURL)
+        exit(0)
+    }
+    #endif
+
+    #if DEBUG
+    /// Every model belongs to exactly one of `syncedModels`/`localModels`,
+    /// and their union is the whole container schema. A config built
+    /// without this explicit `schema:` split would mirror the deck and
+    /// cache tables into CloudKit by accident. This is a build-time
+    /// invariant, not a condition a release build needs to recover from,
+    /// so it only runs in DEBUG.
+    private static func assertModelSplitIsDisjointAndComplete(syncedSchema: Schema, localSchema: Schema, fullSchema: Schema) {
+        let syncedNames = Set(syncedSchema.entities.map(\.name))
+        let localNames = Set(localSchema.entities.map(\.name))
+        let fullNames = Set(fullSchema.entities.map(\.name))
+        assert(syncedNames.isDisjoint(with: localNames), "syncedModels and localModels overlap: \(syncedNames.intersection(localNames))")
+        assert(syncedNames.union(localNames) == fullNames, "syncedModels + localModels does not equal the full container schema")
+    }
+    #endif
 }

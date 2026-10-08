@@ -15,5 +15,12 @@
 	<array>
 		<string>CloudKit</string>
 	</array>
+	<!-- development for Debug, production for Release (TestFlight and the
+	     App Store use production). Set by APS_ENVIRONMENT in the project's
+	     build settings, so an archive can never carry the development
+	     value. Needed for CloudKit's silent push to wake the app for a
+	     remote-change notification. -->
+	<key>aps-environment</key>
+	<string>$(APS_ENVIRONMENT)</string>
 </dict>
 </plist>
