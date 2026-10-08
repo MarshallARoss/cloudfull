@@ -1075,8 +1075,11 @@ final class PhotoLibraryService: NSObject, ObservableObject {
             let newest = assets.firstObject
             let newestDate: Date? = {
                 guard let newest else { return nil }
-                let added = newest.addedDate
+                // `addedDate` is optional from the iOS 27.1 SDK on; the
+                // explicit `Date?` keeps this compiling on both SDKs.
+                let added: Date? = newest.addedDate
                 guard let created = newest.creationDate else { return added }
+                guard let added else { return created }
                 return max(created, added)
             }()
             summaries.append(AlbumSummary(
