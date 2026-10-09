@@ -222,18 +222,31 @@ struct PlayerPageView: View {
 
     var body: some View {
         GeometryReader { proxy in
-            // The fixed 9:16 stage.
-            // Width is always this page's own full width. Height is always
-            // width times 16/9, vertically centred. Both come only from
-            // `proxy.size` and the 16:9 constant, never from the loaded
-            // video's own dimensions. `proxy.size` tracks the screen,
-            // since this page fills it. The bands above and below the
-            // stage stay pixel-identical whatever plays next.
-            // A video that is not 9:16 still letterboxes or pillarboxes
-            // inside this box, through the `.resizeAspect` gravity in
-            // `PlayerLayerView`.
-            let stageWidth = proxy.size.width
-            let stageHeight = stageWidth * 16 / 9
+            // The video stage: the largest 9:16 box that fits the space
+            // available for it, centred there.
+            //
+            // Before the iPhone Duo this was simpler: width was always
+            // this page's own full width, and height was always width
+            // times 16/9 — a box that could only ever be too TALL for a
+            // tall iPhone's screen, never too wide, so centring it needed
+            // only a vertical split (`halfLeftover` below). The Duo's
+            // closed screen breaks that assumption: once
+            // `duoLayout.stageRect` excludes the bar column from the
+            // available width, that width can be narrow enough that a
+            // 9:16 box sized from it would overflow the screen's actual
+            // height — the likely root of the ring-offscreen bug item 86
+            // flagged. `stageRect` picks whichever side actually binds,
+            // the way `AVLayerVideoGravity.resizeAspect` already does for
+            // the video itself one level in.
+            //
+            // On a regular iPhone `duoLayout` is `DuoLayout.none`, so
+            // `stageRect` returns exactly the old width-derived box: width
+            // is always the binding side there, because a phone screen is
+            // always taller than 16:9. This stays pixel-identical to the
+            // pre-Duo math by construction, not by a separate code path.
+            let stageRect = duoLayout.stageRect(containerSize: proxy.size)
+            let stageWidth = stageRect.width
+            let stageHeight = stageRect.height
             // In fullscreen the canvas is the screen's own dimensions with
             // width and height swapped: a landscape-shaped box sized
             // `screenHeight × screenWidth`. It lays out un-rotated at that
@@ -254,6 +267,21 @@ struct PlayerPageView: View {
             // has nothing to do with the 9:16 stage or the island, so
             // `downShift` below is always zero for it.
             let halfLeftover = max(0, (proxy.size.height - canvasHeight) / 2)
+            // The stage's own horizontal leftover within the full page
+            // width, split by `stageRect`'s position rather than evenly:
+            // `stageRect` already centres the box inside
+            // `duoLayout.availableRect`, which sits flush against one
+            // edge of the page when the bar column is on (excluded from
+            // that rect) and spans the full page when it is off. Reusing
+            // its position, instead of re-centring here, is what keeps
+            // the video out of the bar column rather than merely
+            // off-centre within it.
+            // Zero on a regular iPhone: `stageRect.width` is already the
+            // full page width there, so both sides come out to 0, same as
+            // today. Zero in fullscreen too: the rotated canvas has no
+            // bar column to dodge.
+            let horizontalLeadingSpace = isFullscreen ? 0 : stageRect.minX
+            let horizontalTrailingSpace = isFullscreen ? 0 : max(0, proxy.size.width - stageRect.maxX)
             // Shifts the resting 9:16 stage down by the same amount
             // `FeedView.topBandHeight` adds to its own top band. The
             // video and the top chrome above it then never disagree about
@@ -264,7 +292,17 @@ struct PlayerPageView: View {
             // `safeAreaTop` is the parameter passed down from `FeedView`,
             // not `proxy.safeAreaInsets.top`, which reads 0 under the
             // pager's `.ignoresSafeArea()`. See the parameter's own comment.
-            let downShift = isFullscreen ? 0 : StageGeometry.downShift(safeAreaTop: safeAreaTop, containerSize: proxy.size)
+            //
+            // Reads the real stage height here, not the container's own
+            // width-derived one: `StageGeometry.downShift(safeAreaTop:stageHeight:containerHeight:)`,
+            // not the `containerSize:` form `FeedView`'s chrome still
+            // uses. On a regular iPhone `stageHeight` already equals the
+            // width-derived number the container form computes
+            // internally, so the two agree exactly. On the Duo's closed
+            // screen, where `stageHeight` can be smaller than that
+            // derived number, only this form reports the real band —
+            // the fix for the ring sitting too low / offscreen.
+            let downShift = isFullscreen ? 0 : StageGeometry.downShift(safeAreaTop: safeAreaTop, stageHeight: stageHeight, containerHeight: proxy.size.height)
             let topSpace = halfLeftover + downShift
             // The black band this page leaves below the stage, reflecting
             // the down-shifted stage rather than a flat symmetric split.
@@ -273,7 +311,7 @@ struct PlayerPageView: View {
             // into the video.
             let bottomSpace = isFullscreen
                 ? halfLeftover
-                : StageGeometry.bottomBand(safeAreaTop: safeAreaTop, containerSize: proxy.size)
+                : StageGeometry.bottomBand(safeAreaTop: safeAreaTop, stageHeight: stageHeight, containerHeight: proxy.size.height)
             ZStack {
                 Color.black
 
@@ -405,6 +443,18 @@ struct PlayerPageView: View {
                         .animation(.easeInOut(duration: 0.25), value: deviceStance.contentRotation)
                     Color.clear.frame(height: bottomSpace)
                 }
+                // Insets the whole stage column off whichever edge the
+                // bar sits on, closed. Both values are 0 outside that
+                // case (see their own comments above), so this is a
+                // no-op everywhere else. The VStack's own children ask
+                // for exactly `canvasWidth` (the greedy `Color.clear`
+                // spacers fill whatever width this padding leaves them,
+                // and `stageContent` centres inside that at its default
+                // alignment), so the two padding amounts need not match:
+                // an uneven split still lands the stage exactly where
+                // `stageRect` placed it.
+                .padding(.leading, horizontalLeadingSpace)
+                .padding(.trailing, horizontalTrailingSpace)
             }
             .frame(width: proxy.size.width, height: proxy.size.height)
         }
