@@ -1978,6 +1978,16 @@ private struct FeedPageContent: View {
             // (a computed column) — see `DuoLayout.railColumn`'s own
             // comment for why those two share this one rectangle.
             let railColumnRect = duoLayout.railColumnRect(containerSize: proxy.size, safeAreaTop: safeAreaTop)
+            // Build 4: pose 3 (openWide) and pose 4/4W (book) place the
+            // caption at their own fixed point off the stage —
+            // `duoOpenWideCaption`/`duoBookCaption`, rendered as their
+            // own absolute-positioned siblings below, never through
+            // this VStack's flow layout. Both poses already have a
+            // non-nil `railColumnRect` (the bar is on for them too —
+            // see `DUO_POSES.md`), so without this guard the `if let
+            // railColumnRect` branch below would ALSO render a second,
+            // flow-positioned caption for them.
+            let usesDuoCaption = duoLayout.pose == .openWide || duoLayout.pose == .book
             VStack(spacing: 0) {
                 Spacer(minLength: 0)
                 // `exhaustedCard` sits directly above the caption and
@@ -1987,28 +1997,36 @@ private struct FeedPageContent: View {
                     exhaustedCard
                         .padding(.bottom, 24)
                 }
-                if let railColumnRect {
-                    // The rail lives in its own column (`actionRailColumn`
-                    // below), not over the stage, so the caption only
-                    // needs to stay clear of that column, not of a rail
-                    // that is no longer on the video.
-                    captionZone(trailingClearance: railColumnRect.width + 16, hidden: false)
-                } else {
-                    HStack(alignment: .bottom, spacing: 0) {
-                        captionZone(trailingClearance: 16, hidden: false)
-                        VStack(alignment: .trailing, spacing: 0) {
-                            if isActive, let calloutMessage = shareCoordinator.calloutMessage {
-                                railCallout(calloutMessage)
+                if !usesDuoCaption {
+                    if let railColumnRect {
+                        // The rail lives in its own column
+                        // (`actionRailColumn` below), not over the
+                        // stage, so the caption only needs to stay
+                        // clear of that column, not of a rail that is
+                        // no longer on the video.
+                        captionZone(trailingClearance: railColumnRect.width + 16, hidden: false)
+                    } else {
+                        HStack(alignment: .bottom, spacing: 0) {
+                            captionZone(trailingClearance: 16, hidden: false)
+                            VStack(alignment: .trailing, spacing: 0) {
+                                if isActive, let calloutMessage = shareCoordinator.calloutMessage {
+                                    railCallout(calloutMessage)
+                                }
+                                actionRail(bottomBand: bottomBand)
                             }
-                            actionRail(bottomBand: bottomBand)
+                            .animation(.easeInOut(duration: 0.2), value: shareCoordinator.calloutMessage)
                         }
-                        .animation(.easeInOut(duration: 0.2), value: shareCoordinator.calloutMessage)
                     }
                 }
             }
             .frame(width: proxy.size.width, height: proxy.size.height)
             if let railColumnRect {
                 actionRailColumn(rect: railColumnRect, containerSize: proxy.size)
+            }
+            if duoLayout.pose == .openWide {
+                duoOpenWideCaption(containerSize: proxy.size, safeAreaTop: safeAreaTop)
+            } else if duoLayout.pose == .book {
+                duoBookCaption(containerSize: proxy.size, safeAreaTop: safeAreaTop)
             }
             #if DEBUG
             pageFactsProbe
@@ -2095,6 +2113,29 @@ private struct FeedPageContent: View {
             .joined(separator: " · ")
     }
 
+    /// The caption's own two lines, with no outer positioning — shared
+    /// by `captionZone` (every pose but 3/4/4W) and, as of build 4,
+    /// `duoOpenWideCaption`/`duoBookCaption`, which each wrap this in
+    /// their own absolute-positioned frame instead of `captionZone`'s
+    /// flow-based padding.
+    private var captionTexts: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(dateLine)                           // "<date> · <time> · <place>"
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(.white)
+                // Always one line. A long city name pushes this past the
+                // chin's width, so it shrinks to 75% before it truncates.
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+                .truncationMode(.tail)
+            Text(meta.detailText)                    // "4K · 1:12 · 428 MB"
+                .font(.system(size: 14))
+                .monospacedDigit()
+                .foregroundStyle(.white.opacity(0.85))
+                .lineLimit(1)
+        }
+    }
+
     /// `trailingClearance` is how far the caption must stay off the
     /// trailing edge: the overlay rail's own 16pt margin when the rail
     /// is on the video (a regular iPhone, or an open Duo too narrow
@@ -2114,23 +2155,9 @@ private struct FeedPageContent: View {
     /// `hideForFullscreen` path — is a real, reusable shape a later
     /// pose could still need.
     private func captionZone(trailingClearance: CGFloat, hidden: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(dateLine)                           // "<date> · <time> · <place>"
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(.white)
-                // Always one line. A long city name pushes this past the
-                // chin's width, so it shrinks to 75% before it truncates.
-                .lineLimit(1)
-                .minimumScaleFactor(0.75)
-                .truncationMode(.tail)
-            Text(meta.detailText)                    // "4K · 1:12 · 428 MB"
-                .font(.system(size: 14))
-                .monospacedDigit()
-                .foregroundStyle(.white.opacity(0.85))
-                .lineLimit(1)
-        }
-        .feedShadow()
-        .frame(maxWidth: .infinity, alignment: .leading)
+        captionTexts
+            .feedShadow()
+            .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.leading, 16)
         .padding(.bottom, 20)
         .padding(.trailing, trailingClearance)
@@ -2169,6 +2196,79 @@ private struct FeedPageContent: View {
         .accessibilityLabel(meta.placeText.map { "\($0). " + meta.voiceOverLabel } ?? meta.voiceOverLabel)
     }
 
+    // MARK: - Pose 3/4/4W caption (build 4)
+
+    /// Pose 3's own caption: off the video, bottom-leading at the
+    /// PAGE's own edges — "leading 24, bottom 30" (`DUO_POSES.md`'s
+    /// per-pose table) — rather than `captionZone`'s flow-based
+    /// leading 16/bottom 20 inside the VStack every other pose
+    /// shares. `maxWidth` clears the video's own leading edge by
+    /// 40pt, computed from the TALL-video stage box
+    /// (`duoLayout.stageRect`'s default aspect ratio) regardless of
+    /// which video shape is actually loaded: this view has no way to
+    /// read `PlayerPageView.videoIsLandscape` (a sibling view's own
+    /// `@State`), and the per-pose table's own clamp is spelled out
+    /// for the tall-video sub-case only. For the wide-video sub-case
+    /// this is a deliberate approximation — a narrower caption than
+    /// the table's own "under the video" row strictly needs, since
+    /// that row names no clamp at all — accepted rather than plumbing
+    /// the loaded video's shape across two views for one number;
+    /// flagged for the owner's own look at the sim.
+    ///
+    /// Positioned the same way `actionRailColumn` already is: a
+    /// target rect, `.frame(width:height:alignment:)` to give the
+    /// text a well-defined box, then `.position(x: rect.midX, y:
+    /// rect.midY)` — `.bottomLeading` alignment inside a box reaching
+    /// from the page's own top to `H − 30` is what lands the text's
+    /// OWN bottom-leading corner at `(24, H − 30)` regardless of its
+    /// rendered height, with no need to measure that height first.
+    private func duoOpenWideCaption(containerSize: CGSize, safeAreaTop: CGFloat) -> some View {
+        let stageMinX = duoLayout.stageRect(containerSize: containerSize, safeAreaTop: safeAreaTop).minX
+        let leading: CGFloat = 24
+        let width = max(0, stageMinX - 40 - leading)
+        let rect = CGRect(x: leading, y: 0, width: width, height: max(0, containerSize.height - 30))
+        return captionTexts
+            .feedShadow()
+            .frame(width: rect.width, alignment: .leading)
+            .opacity(isScrubbing ? 0 : 1)
+            .animation(.easeOut(duration: 0.15), value: isScrubbing)
+            .allowsHitTesting(false)
+            .accessibilityElement(children: .combine)
+            .accessibilityHidden(hideForFullscreen)
+            .accessibilityIdentifier(isActive && !hideForFullscreen ? "feed_caption" : "")
+            .accessibilityLabel(meta.placeText.map { "\($0). " + meta.voiceOverLabel } ?? meta.voiceOverLabel)
+            .frame(width: rect.width, height: rect.height, alignment: .bottomLeading)
+            .position(x: rect.midX, y: rect.midY)
+    }
+
+    /// Pose 4/4W's own caption: the right page, "leading
+    /// `rightPage.minX + 20`, bottom 30" (`DUO_POSES.md`). Renders
+    /// nothing when `DuoLayout.rightPage` itself is `nil` (no active
+    /// division this frame). No `maxWidth` clamp in the per-pose
+    /// table here: the right page's own trailing edge (the rail/bar
+    /// or chrome column beyond it) already bounds the available
+    /// width the same way `captionZone`'s `trailingClearance` bounds
+    /// every other pose's caption, so `rightPage.maxX` is the clamp.
+    @ViewBuilder
+    private func duoBookCaption(containerSize: CGSize, safeAreaTop: CGFloat) -> some View {
+        if let rightPage = duoLayout.rightPage(containerSize: containerSize, safeAreaTop: safeAreaTop) {
+            let leading = rightPage.minX + 20
+            let width = max(0, rightPage.maxX - leading)
+            let rect = CGRect(x: leading, y: 0, width: width, height: max(0, containerSize.height - 30))
+            captionTexts
+                .feedShadow()
+                .frame(width: rect.width, alignment: .leading)
+                .opacity(isScrubbing ? 0 : 1)
+                .animation(.easeOut(duration: 0.15), value: isScrubbing)
+                .allowsHitTesting(false)
+                .accessibilityElement(children: .combine)
+                .accessibilityHidden(hideForFullscreen)
+                .accessibilityIdentifier(isActive && !hideForFullscreen ? "feed_caption" : "")
+                .accessibilityLabel(meta.placeText.map { "\($0). " + meta.voiceOverLabel } ?? meta.voiceOverLabel)
+                .frame(width: rect.width, height: rect.height, alignment: .bottomLeading)
+                .position(x: rect.midX, y: rect.midY)
+        }
+    }
 
     // MARK: - Rail callout
     //

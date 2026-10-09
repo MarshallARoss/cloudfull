@@ -299,6 +299,45 @@ struct PlayerPageView: View {
         videoIsLandscape && (duoLayout.pose == .openWide || duoLayout.pose == .book)
     }
 
+    /// True at pose 3 (any video shape) and pose 4W (book with a
+    /// landscape video) — build 4: the two cases the round-3
+    /// wireframes (`DUO_POSES.md`) give a fixed SCREEN point instead
+    /// of "today"'s stage-relative placement. See `ringFixedPoint`'s
+    /// own comment for the actual points, and the `CloudDownloadRing`
+    /// construction in `stageContent` for why this only ever toggles
+    /// that instance's `.opacity`, never its mounting.
+    ///
+    /// Pose 4's own TALL-video case is deliberately excluded —
+    /// `useVideoAspect` is `false` there, so it is not `.book` alone
+    /// that matters, only `.book` together with a landscape video.
+    private var usesFixedRingPoint: Bool {
+        duoLayout.pose == .openWide || (duoLayout.pose == .book && useVideoAspect)
+    }
+
+    /// The fixed screen point `usesFixedRingPoint` cases use, in
+    /// `containerSize`'s own coordinate space (0 at the page's own
+    /// top) — the wireframe's own numbers (`DUO_POSES.md`): pose 3,
+    /// `(48, H − 113)`, above the caption; pose 4W, `(44, H − 79)`.
+    /// `nil` when `usesFixedRingPoint` is `false`.
+    ///
+    /// Both points sit outside pose 3's own stage box (which
+    /// `openWideWideVideoRect`'s own comment, and the per-pose table,
+    /// place well to the trailing side of x = 48 on every measured
+    /// window). `stageContent`'s own `.clipped()` would cut off
+    /// anything placed there from inside it, which is why this is a
+    /// second, separate `CloudDownloadRing` mounted at `body`'s own
+    /// outer level instead, never a repositioning of the existing one.
+    private func ringFixedPoint(containerSize: CGSize) -> CGPoint? {
+        switch duoLayout.pose {
+        case .openWide:
+            return CGPoint(x: 48, y: containerSize.height - 113)
+        case .book where useVideoAspect:
+            return CGPoint(x: 44, y: containerSize.height - 79)
+        default:
+            return nil
+        }
+    }
+
     #if DEBUG
     private static let rotationLog = Logger(subsystem: "com.cloudfull.app", category: "Rotation")
 
@@ -646,7 +685,19 @@ struct PlayerPageView: View {
                                     isScrubbing: isScrubbing,
                                     scrubFraction: scrubFraction,
                                     durationSeconds: holder.duration,
-                                    bandHeight: bottomSpace,
+                                    // Build 4: pose 3/4/4W pass a literal
+                                    // 0 — never the real `bottomSpace` —
+                                    // so `ScrubberView.seamOffset` always
+                                    // falls below `minimumSeamBand` and
+                                    // the hairline stays on the video's
+                                    // own bottom edge, the per-pose
+                                    // table's "on video bottom edge" for
+                                    // every one of these poses, tall or
+                                    // wide video alike, regardless of how
+                                    // much real black band this frame
+                                    // happens to leave below the stage.
+                                    bandHeight: (duoLayout.pose == .openWide || duoLayout.pose == .book)
+                                        ? 0 : bottomSpace,
                                     isActive: isActive,
                                     reduceMotion: reduceMotion,
                                     onStripDrag: handleScrubChanged,
@@ -676,6 +727,22 @@ struct PlayerPageView: View {
                 // `stageRect` placed it.
                 .padding(.leading, horizontalLeadingSpace)
                 .padding(.trailing, horizontalTrailingSpace)
+                // Build 4: the visible `CloudDownloadRing` for
+                // `usesFixedRingPoint` — see that property's own
+                // comment, and `ringFixedPoint`'s, for why this is a
+                // second instance at `body`'s own outer level rather
+                // than a repositioning of the one inside `stageContent`
+                // (hidden there via `.opacity`, never unmounted, so its
+                // `.task` triggers keep setting `showSpinner` for both).
+                // `.accessibilityHidden(true)` always: the hidden
+                // instance still carries the real "Loading video"
+                // label, so VoiceOver never hears it twice.
+                if usesFixedRingPoint, let fixedPoint = ringFixedPoint(containerSize: proxy.size) {
+                    CloudDownloadRing(fraction: downloadFraction, isRunning: showSpinner)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                        .position(fixedPoint)
+                }
             }
             .frame(width: proxy.size.width, height: proxy.size.height)
         }
@@ -1024,8 +1091,24 @@ struct PlayerPageView: View {
             // closing sweep. Read
             // that file's header before changing any number in it.
             CloudDownloadRing(fraction: downloadFraction, isRunning: showSpinner)
-                // No `.opacity`, no `.animation`, and no `.feedShadow()`
-                // here, and all three absences are deliberate.
+                // Build 4: invisible, never removed, at pose 3/openWide
+                // and pose 4W/book-with-a-wide-video — `usesFixedRingPoint`.
+                // Those two need the ring at a fixed SCREEN point outside
+                // this stage's own clipped box (see `ringFixedPoint`'s own
+                // comment for why), so `body`'s own outer `ZStack` mounts
+                // a second, purely visual instance at that point instead
+                // — see the sibling mounted there. This instance stays
+                // mounted and keeps every modifier below, unchanged,
+                // rather than being wrapped in an `if`: the two `.task`
+                // triggers a few lines down are the ONLY place that ever
+                // sets `showSpinner = true`, and the comment above this
+                // whole block already explains why an `if` must never
+                // tear this down mid-sweep. `.opacity` hides the pixels
+                // without touching that lifecycle; the visible duplicate
+                // reads the same `showSpinner`/`downloadFraction` state.
+                .opacity(usesFixedRingPoint ? 0 : 1)
+                // No `.animation`, and no `.feedShadow()` here, and both
+                // absences are deliberate.
                 //
                 // The ring owns its whole life from `isRunning`. It fades
                 // itself in over 0.2 s. On the way out it sweeps the arc
