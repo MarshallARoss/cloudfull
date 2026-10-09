@@ -91,6 +91,52 @@ final class DuoR4RotationCheck: FeedUITestCase {
         XCUIDevice.shared.orientation = .portrait
     }
 
+    // MARK: - Independent capture cross-check (team-lead's ask)
+
+    /// Holds the wide video's landscape-fullscreen state for ~25 s so an
+    /// EXTERNAL `xcrun simctl io <udid> screenshot`/`recordVideo` call,
+    /// run from a separate shell, can capture the same moment
+    /// `app.screenshot()` (XCUIScreen, in `testRotationLooksRightOnWideAndTallVideo`)
+    /// showed clipped to ~402pt. `simctl`'s own capture path does not go
+    /// through XCUIScreen at all, so it tells apart "XCUIScreen capture
+    /// artifact" from "the app really is rendering wrong."
+    ///
+    /// Writes a sentinel file the instant the hold starts, so the
+    /// external shell command can poll for it instead of guessing a
+    /// fixed delay.
+    func testHoldWideLandscapeForExternalCapture() throws {
+        app.launchArguments = ["-cloudfull-log-rotation"]
+        app.launch()
+        grantPhotoAccessIfAsked()
+
+        guard let start = centeredPage(timeout: 20) else {
+            XCTFail("No centered page at launch")
+            return
+        }
+        guard let widePage = scrollToAsset(Self.landscapeAssetID, from: start, budget: 60) else {
+            XCTFail("Never reached the known landscape fixture \(Self.landscapeAssetID)")
+            return
+        }
+        XCUIDevice.shared.orientation = .landscapeLeft
+        guard let wideActive = waitForFullscreenState(assetID: widePage.assetID, timeout: 8) else {
+            XCTFail("fullscreen_state_ never appeared for the wide video after rotating")
+            return
+        }
+        XCTAssertTrue(wideActive.active, "wide video did not go fullscreen on rotation")
+
+        writeSentinel("HOLD_READY")
+        Thread.sleep(forTimeInterval: 25.0)
+        writeSentinel("HOLD_DONE")
+
+        XCUIDevice.shared.orientation = .portrait
+    }
+
+    private func writeSentinel(_ name: String) {
+        let dir = "/private/tmp/claude-501/-Users-barrychanleerwilliams-Downloads-cloudfull/cc902d69-3e6c-435e-a364-3e3da7a81e44/scratchpad/screens"
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: "\(dir)/\(name)", contents: Data("\(Date())".utf8))
+    }
+
     // MARK: - Helpers (duplicated from M6Tests, same pattern that file's own comment describes)
 
     private func element(_ identifier: String) -> XCUIElement {
