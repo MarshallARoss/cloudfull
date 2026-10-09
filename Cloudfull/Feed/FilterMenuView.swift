@@ -16,11 +16,14 @@ import SwiftUI
 /// `DeckViewModel.apply(options:)`. This view never touches the deck.
 struct FilterMenuView: View {
     @ObservedObject var store: FeedOptionsStore
-    /// The ancestor `.accessibilityHidden(isFullscreen)` does not
+    /// The ancestor `.accessibilityHidden(hidesGlobalChrome)` does not
     /// reliably reach this view on this runtime. So the view clears its
-    /// own identifier while `isFullscreen` is true. `bin_open` and the
-    /// four rail buttons do the same.
-    let isFullscreen: Bool
+    /// own identifier while this is true — `FeedView.hidesGlobalChrome`,
+    /// true for `isFullscreen` (the rotation hack) or `isLandscapeFit`
+    /// (step 6). `bin_open` and the four rail buttons do the same, the
+    /// rail buttons against plain `isFullscreen` only — see
+    /// `FeedView.hidesGlobalChrome`'s own comment for why.
+    let hidesChrome: Bool
 
     var body: some View {
         Menu {
@@ -68,7 +71,7 @@ struct FilterMenuView: View {
         // Sections must not reorder when the menu opens upward. Tests and
         // people find items by their position on screen.
         .menuOrder(.fixed)
-        .accessibilityIdentifier(isFullscreen ? "" : "feed_filter_button")
+        .accessibilityIdentifier(hidesChrome ? "" : "feed_filter_button")
         .accessibilityLabel(accessibilityLabel)
         .accessibilityHint("Opens sort and filter options for the feed")
     }

@@ -112,26 +112,36 @@ struct DuoLayout {
         }
     }
 
-    /// The largest 9:16 box that fits inside
+    /// The largest `aspectRatio` (width ÷ height) box that fits inside
     /// `availableRect(containerSize:safeAreaTop:)`, centred there.
+    /// Defaults to 9:16 (`9.0 / 16.0`), the fixed portrait video stage
+    /// every call site but one still wants.
     ///
     /// On a regular iPhone `availableRect` is the full container, which
-    /// is always taller (relative to its width) than 16:9, so this
-    /// reduces to the old width-derived box exactly: `width` is the
-    /// binding side there, matching `PlayerPageView`'s pre-Duo stage.
-    /// On the Duo's closed screen, once the bar column is excluded,
-    /// height can become the binding side instead, which is what keeps
-    /// the stage from overflowing the squat screen. On an open Duo wide
-    /// enough for a computed column (same function), the box lands
-    /// flush against that column with no pillarbox between them — see
-    /// `railColumn`'s own comment for why that falls out of the same
-    /// formula rather than needing a separate "flush left" rule. See
-    /// `PlayerPageView.body` for the caller.
-    func stageRect(containerSize: CGSize, safeAreaTop: CGFloat) -> CGRect {
+    /// is always taller (relative to its width) than the default 16:9,
+    /// so this reduces to the old width-derived box exactly: `width` is
+    /// the binding side there, matching `PlayerPageView`'s pre-Duo
+    /// stage. On the Duo's closed screen, once the bar column is
+    /// excluded, height can become the binding side instead, which is
+    /// what keeps the stage from overflowing the squat screen. On an
+    /// open Duo wide enough for a computed column (same function), the
+    /// box lands flush against that column with no pillarbox between
+    /// them — see `railColumn`'s own comment for why that falls out of
+    /// the same formula rather than needing a separate "flush left"
+    /// rule.
+    ///
+    /// The non-default `aspectRatio` is step 6's own addition: an open
+    /// Duo turned sideways really rotates its window (see
+    /// `PlayerPageView.windowIsLandscape`), and a horizontal video
+    /// shown there must FIT its own shape, not the portrait stage every
+    /// other screen wants. `PlayerPageView.body` passes the loaded
+    /// video's real aspect ratio exactly when that applies, and the
+    /// default everywhere else.
+    func stageRect(containerSize: CGSize, safeAreaTop: CGFloat, aspectRatio: CGFloat = 9.0 / 16.0) -> CGRect {
         let avail = availableRect(containerSize: containerSize, safeAreaTop: safeAreaTop)
         guard avail.width > 0, avail.height > 0 else { return avail }
-        let height = min(avail.height, avail.width * 16 / 9)
-        let width = height * 9 / 16
+        let height = min(avail.height, avail.width / aspectRatio)
+        let width = height * aspectRatio
         return CGRect(
             x: avail.minX + (avail.width - width) / 2,
             y: avail.minY + (avail.height - height) / 2,
