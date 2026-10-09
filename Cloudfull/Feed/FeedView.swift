@@ -105,7 +105,7 @@ struct FeedView: View {
     /// after this view mounts.
     @State private var settledDuoPose: DuoPose?
     /// `.regular` only on the Duo's inner display — the same size-class
-    /// read `PlayerPageView.isFullscreen`/`isLandscapeFit` already lean
+    /// read `PlayerPageView.isFullscreen`/`useVideoAspect` already lean
     /// on, needed here too: `DuoLayout.classify` cannot tell the inner
     /// display's fully-open poses (`.openWide`/`.openTall`) or its
     /// partially-open ones (`.book`/`.laptop`) from the outer display's
@@ -117,10 +117,6 @@ struct FeedView: View {
     /// `isScrubbing`. Only the centered page can ever be fullscreen, so at
     /// most one page's callback ever reports `true`.
     @State private var isFullscreen = false
-    /// The same shape as `isFullscreen`, through `onLandscapeFitChanged`:
-    /// a real-rotation horizontal video, open Duo only (step 6). See
-    /// `hidesGlobalChrome` for how the two differ.
-    @State private var isLandscapeFit = false
 
     /// Owns the share flow end to end: the Wi-Fi guard, resolving a
     /// shareable file, presenting the system share sheet, and the album
@@ -207,24 +203,21 @@ struct FeedView: View {
             && shareCoordinator.probeState == .idle
     }
 
-    /// True whenever ANY fullscreen-like mode hides the GLOBAL chrome —
-    /// the top mute/filter/bin row (`overlayControls`) and the chin
-    /// (`ChinNavigation`). Both `isFullscreen` (the rotation hack, a
-    /// regular iPhone or a closed Duo turned sideways) and
-    /// `isLandscapeFit` (a real-rotation horizontal video, open Duo
-    /// only — step 6) hide that chrome the same way.
+    /// True while the rotation hack's fullscreen mode (a regular iPhone
+    /// or a closed Duo turned sideways) hides the GLOBAL chrome — the
+    /// top mute/filter/bin row (`overlayControls`) and the chin
+    /// (`ChinNavigation`).
     ///
-    /// They do NOT hide the same way below this: `FeedPageContent`'s own
-    /// outer `.opacity`/`.allowsHitTesting`/`.accessibilityHidden`, at
-    /// the `pager` call site, stay keyed on plain `isFullscreen`, never
-    /// this. `isLandscapeFit` keeps the per-page rail visible and
-    /// interactive — the window is genuinely landscape there, so the
-    /// rail column (steps 3/5) already renders right side up in the
-    /// right place, with nothing to hide it for. Only the CAPTION hides
-    /// during `isLandscapeFit`, and that happens inside
-    /// `FeedPageContent` itself, through its own `isLandscapeFit`
-    /// parameter — see `captionZone`'s `hidden:` argument.
-    private var hidesGlobalChrome: Bool { isFullscreen || isLandscapeFit }
+    /// Build 1 fix, step 2: this used to also hide for `isLandscapeFit`
+    /// (a real-rotation horizontal video, open Duo only — the old
+    /// round's step 6). The round-3 wireframes (`DUO_POSES.md`) call
+    /// for pose 3's chrome to stay up instead: rail, chin, chrome,
+    /// caption, and status all visible over a wide video's own FIT
+    /// layout. `isLandscapeFit` itself is gone — see
+    /// `PlayerPageView.useVideoAspect`, its pose-gated replacement for
+    /// the stage/aspect-ratio math alone, with no chrome-hiding role of
+    /// its own left to inherit.
+    private var hidesGlobalChrome: Bool { isFullscreen }
 
     /// Pose 5's own chin position: beside the rail's own last item in
     /// the open-tall column (bar off), `Rail.spacing` below it — the
@@ -309,11 +302,9 @@ struct FeedView: View {
             content(safeAreaTop: safeAreaTop, duoLayout: duoLayout)
             // The whole global chrome layer (mute, the shrink progress
             // capsule, the counters, the bin) hides while `isFullscreen`
-            // (the rotation hack) OR `isLandscapeFit` (step 6's
-            // real-rotation case) is on — see `hidesGlobalChrome`'s own
-            // comment for why the two agree here but not everywhere.
-            // Each page's own `bottomScrim` and `FeedPageContent` in
-            // `pager` hide on plain `isFullscreen` only.
+            // (the rotation hack) is on — see `hidesGlobalChrome`'s own
+            // comment. Each page's own `bottomScrim` and `FeedPageContent`
+            // in `pager` hide on plain `isFullscreen` too.
             overlayControls(duoLayout: duoLayout)
                 .opacity(hidesGlobalChrome ? 0 : 1)
                 .allowsHitTesting(!hidesGlobalChrome)
@@ -401,10 +392,10 @@ struct FeedView: View {
             }
         }
         // Hides the status bar and home indicator while `hidesGlobalChrome`
-        // is on — `isFullscreen` or `isLandscapeFit`, the same chrome-hide
-        // condition `overlayControls`/`ChinNavigation` already use. This
-        // is safe for the stage geometry. The pager and `overlayControls`
-        // both already `.ignoresSafeArea()`, so `proxy.size` — the only
+        // (`isFullscreen`) is on, the same chrome-hide condition
+        // `overlayControls`/`ChinNavigation` already use. This is safe
+        // for the stage geometry. The pager and `overlayControls` both
+        // already `.ignoresSafeArea()`, so `proxy.size` — the only
         // input to the stage math — does not move when the inset does.
         .statusBarHidden(hidesGlobalChrome)
         .persistentSystemOverlays(hidesGlobalChrome ? .hidden : .automatic)
@@ -612,7 +603,6 @@ struct FeedView: View {
                             deviceStance: orientation.stance,
                             fullscreenAllowed: fullscreenAllowed,
                             onFullscreenChanged: { isFullscreen = $0 },
-                            onLandscapeFitChanged: { isLandscapeFit = $0 },
                             safeAreaTop: safeAreaTop,
                             duoLayout: duoLayout,
                             onDoubleTap: { doubleTapKeepNonces[entry.id, default: 0] += 1 },
@@ -627,12 +617,9 @@ struct FeedView: View {
                         //
                         // Hidden while fullscreen is on, alongside
                         // `FeedPageContent` below — both on plain
-                        // `isFullscreen`, never `hidesGlobalChrome`: the
-                        // rail inside `FeedPageContent` stays up during
-                        // `isLandscapeFit`, and this scrim exists partly
-                        // to keep that rail legible, so it stays up too.
+                        // `isFullscreen`, never `hidesGlobalChrome`.
                         // `overlayControls` and the chin are the ones
-                        // that hide for either state; see
+                        // that hide for that state; see
                         // `hidesGlobalChrome`'s own comment. Only the
                         // centered page can ever be fullscreen. So
                         // gating every page's own scrim and content on
@@ -648,7 +635,6 @@ struct FeedView: View {
                             isActive: isActive,
                             isFinalExhausted: isFinalExhausted,
                             hideForFullscreen: isFullscreen,
-                            isLandscapeFit: isLandscapeFit,
                             isScrubbing: isScrubbing,
                             viewModel: viewModel,
                             trashService: trashService,
@@ -743,12 +729,10 @@ struct FeedView: View {
         // nothing, reusing the same modifier instead of adding a second
         // one.
         //
-        // Deliberately NOT `hidesGlobalChrome`: `isLandscapeFit` is a
-        // real window rotation, not the rotation hack, so the pager's
-        // own vertical swipe still means what it always does — paging
-        // to the next video — and nothing about this page's coordinate
-        // space is rotated out from under it the way the hack's canvas
-        // is. Swiping to the next video stays available in landscape.
+        // `hidesGlobalChrome` reduces to plain `isFullscreen` now (step
+        // 2 build 1 fix removed its other term), so this is the same
+        // condition spelled out directly rather than through that name
+        // — the pager's own disable has nothing to do with chrome.
         .scrollDisabled(isScrubbing || isFullscreen)
         .ignoresSafeArea()
         .background(Color.black)
@@ -1705,15 +1689,6 @@ private struct FeedPageContent: View {
     /// applied once. It is applied from the outside, at the `FeedView`
     /// call site.
     let hideForFullscreen: Bool
-    /// Mirrors `FeedView.isLandscapeFit` (step 6): a real-rotation
-    /// horizontal video, open Duo only. Unlike `hideForFullscreen`, this
-    /// hides only the caption, through `captionZone`'s own `hidden:`
-    /// argument — the rail stays visible and interactive, since the
-    /// window is genuinely landscape and the rail column (steps 3/5)
-    /// already renders right side up. See `FeedView.hidesGlobalChrome`
-    /// for the rest of this state's hiding (the global chrome, the
-    /// chin), which happens outside this type entirely.
-    let isLandscapeFit: Bool
     /// Mirrors `FeedView.isScrubbing`. While the scrubber is active, its
     /// "0:01 / 0:03" time label sits centered in the chin, the same row
     /// the caption occupies. The caption fades out for the duration of
@@ -1937,10 +1912,10 @@ private struct FeedPageContent: View {
                     // below), not over the stage, so the caption only
                     // needs to stay clear of that column, not of a rail
                     // that is no longer on the video.
-                    captionZone(trailingClearance: railColumnRect.width + 16, hidden: isLandscapeFit)
+                    captionZone(trailingClearance: railColumnRect.width + 16, hidden: false)
                 } else {
                     HStack(alignment: .bottom, spacing: 0) {
-                        captionZone(trailingClearance: 16, hidden: isLandscapeFit)
+                        captionZone(trailingClearance: 16, hidden: false)
                         VStack(alignment: .trailing, spacing: 0) {
                             if isActive, let calloutMessage = shareCoordinator.calloutMessage {
                                 railCallout(calloutMessage)
@@ -2048,12 +2023,16 @@ private struct FeedPageContent: View {
     /// `FeedPageContent.body` for which case applies, and
     /// `DuoLayout.railColumnRect` for where the column's width comes
     /// from.
-    /// `hidden` is `isLandscapeFit` (step 6): true only for a real-rotation
-    /// horizontal video on an open Duo. The caption hides the same way
-    /// `isScrubbing` already does — opacity, plus its own accessibility
-    /// bits below — rather than through the outer `hideForFullscreen`
-    /// path, because the rail next to it must NOT hide the same way; see
-    /// this type's own `isLandscapeFit` comment.
+    /// `hidden` is always `false` from both call sites below, as of
+    /// step 2's build 1 fix: the old round's `isLandscapeFit` used to
+    /// pass `true` here for a real-rotation horizontal video on an
+    /// open Duo, but the round-3 wireframes (`DUO_POSES.md`) keep the
+    /// caption visible for pose 3's wide video too. Kept as its own
+    /// parameter, rather than deleted outright, since the caption
+    /// hiding the same way `isScrubbing` already does — opacity, plus
+    /// its own accessibility bits below, independent of the outer
+    /// `hideForFullscreen` path — is a real, reusable shape a later
+    /// pose could still need.
     private func captionZone(trailingClearance: CGFloat, hidden: Bool) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(dateLine)                           // "<date> · <time> · <place>"
@@ -2103,9 +2082,8 @@ private struct FeedPageContent: View {
         // in fullscreen. Off-center pages still render, fully
         // interactive, just without the identifier.
         //
-        // `hidden` folds in here too: `isLandscapeFit` hides this view
-        // exactly the way `hideForFullscreen` does, just without also
-        // taking the rail down with it.
+        // `hidden` folds in here too, for whichever future caller
+        // passes `true` — see this function's own comment on `hidden`.
         .accessibilityHidden(hideForFullscreen || hidden)
         .accessibilityIdentifier(isActive && !hideForFullscreen && !hidden ? "feed_caption" : "")
         .accessibilityLabel(meta.placeText.map { "\($0). " + meta.voiceOverLabel } ?? meta.voiceOverLabel)

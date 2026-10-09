@@ -43,12 +43,6 @@ struct PlayerPageView: View {
     /// `.scrollDisabled(isScrubbing || isFullscreen)` and hides the global
     /// chrome. Its shape matches `onScrubbingChanged`.
     let onFullscreenChanged: (Bool) -> Void
-    /// Reports `isLandscapeFit` to `FeedView`, which hides the global
-    /// chrome and the chin the same way `isFullscreen` does, but — unlike
-    /// `isFullscreen` — keeps the per-page rail visible; see
-    /// `FeedView.hidesGlobalChrome` and `FeedPageContent`'s own
-    /// `isLandscapeFit` parameter. Its shape matches `onFullscreenChanged`.
-    let onLandscapeFitChanged: (Bool) -> Void
     /// The device's real top safe-area inset, measured by `FeedView` above
     /// the pager's `.ignoresSafeArea()`.
     /// This page's own `GeometryReader` sits under that modifier, so it
@@ -143,7 +137,7 @@ struct PlayerPageView: View {
     /// its item.
     @State private var videoIsLandscape = false
     /// The same `presentationSize` reading as `videoIsLandscape`, kept as
-    /// width ÷ height rather than a bare bool, so `isLandscapeFit` can
+    /// width ÷ height rather than a bare bool, so `useVideoAspect` can
     /// size the stage to the video's own shape instead of the fixed 9:16
     /// box every other case still wants. Reset alongside
     /// `videoIsLandscape`, to the same 9:16 default `DuoLayout.stageRect`
@@ -154,9 +148,12 @@ struct PlayerPageView: View {
     /// from `proxy.size` in `body`, the one place this page can measure
     /// its own real window shape; see that `onChange` for why a stored
     /// property is needed at all when `body` already has `proxy.size`
-    /// directly: `isFullscreen` and `isLandscapeFit` below are plain
-    /// computed properties, read from `.onChange` modifiers chained
-    /// outside the `GeometryReader`, where no `proxy` is in scope.
+    /// directly: `isFullscreen` below is a plain computed property,
+    /// read from `.onChange` modifiers chained outside the
+    /// `GeometryReader`, where no `proxy` is in scope. `useVideoAspect`
+    /// (build 1 fix, step 2 — this file's own pose-gated replacement
+    /// for the old round's window-rotation-gated `isLandscapeFit`)
+    /// does not read this property at all; see its own comment.
     ///
     /// Only an open Duo held in a landscape-window pose ("partially
     /// folded," Apple's book-like hold) can make this true: a regular
@@ -225,9 +222,9 @@ struct PlayerPageView: View {
     /// device would report `deviceStance.isLandscape == true` from the
     /// SAME physical rotation that already turned the window, and this
     /// hack would layer a second, unwanted rotation on top of one the
-    /// system already did. `isLandscapeFit` below is the window-rotated
-    /// case's own path instead — decided from geometry, never from
-    /// `deviceStance` or a device check.
+    /// system already did. `useVideoAspect` below is the window-rotated
+    /// case's own path instead — decided from `duoLayout.pose`, never
+    /// from `deviceStance` or a device check.
     ///
     /// `horizontalSizeClass != .regular` (step 6, addition): a SECOND
     /// window-shape pose exists where `windowIsLandscape` alone is not
@@ -266,32 +263,40 @@ struct PlayerPageView: View {
             && fullscreenAllowed && !dismissedThisSpell && !isScrubbing
     }
 
-    /// True when the window itself is really landscape (an open Duo
-    /// turned sideways; see `windowIsLandscape`) and the loaded video is
-    /// itself landscape. The stage then fits the video's own aspect
-    /// ratio instead of the fixed 9:16 box (`body` passes
-    /// `videoAspectRatio` into `duoLayout.stageRect` exactly when this is
-    /// true), and the chrome/caption/chin hide the way `isFullscreen`'s
-    /// rotation hack already does — see `FeedView.hidesGlobalChrome` and
-    /// `FeedPageContent`'s own `isLandscapeFit` parameter — except the
-    /// rail, which stays in its column: unlike the rotation hack, the
-    /// window is genuinely landscape here, so the rail column (step 3/5)
-    /// already renders right side up, in the right place, with nothing
-    /// to undo.
+    /// True when the loaded video is landscape and this frame's pose is
+    /// one the round-3 wireframes (`DUO_POSES.md`) FIT a wide video to
+    /// its own shape rather than the fixed 9:16 box: open-wide (pose 3)
+    /// or book (pose 4/4W). The stage then fits the video's own aspect
+    /// ratio instead (`body` passes `videoAspectRatio` into
+    /// `duoLayout.stageRect` exactly when this is true).
     ///
-    /// No `dismissedThisSpell` latch: there is nothing to dismiss back
-    /// to. The window is really landscape; the user leaves this state by
-    /// turning the device (or closing the Duo) back to portrait, not by
-    /// tapping a button.
+    /// Build 1 fix, step 2 — this replaces the old round's
+    /// `isLandscapeFit`, which read `windowIsLandscape` (a real window
+    /// rotation) instead of `duoLayout.pose`. That old property also
+    /// hid the chrome/caption/chin the way `isFullscreen`'s rotation
+    /// hack does; this one hides nothing — `FeedView.hidesGlobalChrome`
+    /// no longer has a term for it, and `FeedPageContent.captionZone`
+    /// always passes `hidden: false` — because the round-3 wireframes
+    /// keep pose 3's rail, chin, chrome, caption, and status all
+    /// visible over the video.
     ///
-    /// Deliberately excludes a VERTICAL video shown while the window is
-    /// landscape — requirement 7 (plan item 86): a vertical video must
-    /// never be full-screened when open, in either hold. It stays in the
-    /// normal 9:16-fit layout, which `duoLayout.stageRect`'s default
-    /// aspect ratio already produces correctly for a landscape
-    /// container — see that function's own comment.
-    private var isLandscapeFit: Bool {
-        isActive && windowIsLandscape && videoIsLandscape && fullscreenAllowed && !isScrubbing
+    /// Deliberately excludes `isActive`, `fullscreenAllowed`, and
+    /// `isScrubbing` — spec requirement, step 1's build list: a
+    /// neighbour page's own stage must already read its final aspect
+    /// before it ever becomes active, the moment its own video loads
+    /// (`videoIsLandscape` sets independent of `isActive`), so swiping
+    /// onto it never jumps its layout. Compare `isFullscreen`, which
+    /// DOES need `isActive` — only one page may ever claim the
+    /// rotation hack's shared fullscreen state, where this value feeds
+    /// only this page's own stage.
+    ///
+    /// Still excludes a VERTICAL video shown at this pose — requirement
+    /// 7 (plan item 86): a vertical video must never be full-screened
+    /// or aspect-fit when open. It stays in the normal 9:16-fit layout,
+    /// which `duoLayout.stageRect`'s default aspect ratio already
+    /// produces correctly — see that function's own comment.
+    private var useVideoAspect: Bool {
+        videoIsLandscape && (duoLayout.pose == .openWide || duoLayout.pose == .book)
     }
 
     #if DEBUG
@@ -425,9 +430,8 @@ struct PlayerPageView: View {
             // height.
             //
             // The aspect ratio itself is the fixed 9:16 default except
-            // in `isLandscapeFit` (step 6): a horizontal video shown
-            // while the window is really landscape (an open Duo turned
-            // sideways) fits its OWN shape instead, so the stage reads
+            // in `useVideoAspect`: a landscape video at the open-wide or
+            // book pose fits its OWN shape instead, so the stage reads
             // `videoAspectRatio` rather than leaving the portrait box
             // `stageRect` would otherwise still produce — see that
             // property's own comment for why a landscape window with a
@@ -435,7 +439,7 @@ struct PlayerPageView: View {
             let stageRect = duoLayout.stageRect(
                 containerSize: proxy.size,
                 safeAreaTop: safeAreaTop,
-                aspectRatio: isLandscapeFit ? videoAspectRatio : 9.0 / 16.0
+                aspectRatio: useVideoAspect ? videoAspectRatio : 9.0 / 16.0
             )
             let stageWidth = stageRect.width
             let stageHeight = stageRect.height
@@ -484,7 +488,7 @@ struct PlayerPageView: View {
             // the full reasoning — pulled out of this `let`, which the
             // Swift type checker could not resolve inline in
             // reasonable time once it grew a branch for
-            // `isLandscapeFit` too.
+            // `useVideoAspect` too.
             //
             // The open-tall pose (bar off) reads this same path as the
             // closed bar column and a regular iPhone, deliberately: the
@@ -496,7 +500,7 @@ struct PlayerPageView: View {
             // longer needs one.
             let downShift = resolvedDownShift(
                 isFullscreen: isFullscreen,
-                isLandscapeFit: isLandscapeFit,
+                useVideoAspect: useVideoAspect,
                 stageHeight: stageHeight,
                 containerHeight: proxy.size.height
             )
@@ -717,13 +721,6 @@ struct PlayerPageView: View {
         .onChange(of: isFullscreen) { _, newValue in
             onFullscreenChanged(newValue)
         }
-        // `isLandscapeFit`'s own edge signal, the same shape as
-        // `isFullscreen`'s immediately above. No `Usage` call: that
-        // event exists for the rotation-hack fullscreen specifically,
-        // and `isLandscapeFit` is not that.
-        .onChange(of: isLandscapeFit) { _, newValue in
-            onLandscapeFitChanged(newValue)
-        }
         // A new asset resets the dismiss latch, the chrome-reveal state,
         // `videoIsLandscape`, and `videoAspectRatio`, so it does not
         // inherit state from the previous video.
@@ -819,8 +816,6 @@ struct PlayerPageView: View {
                 // reflect the state after the resets below force
                 // `isFullscreen` to read `false`.
                 let wasFullscreen = isFullscreen
-                // Same reasoning, for `isLandscapeFit`.
-                let wasLandscapeFit = isLandscapeFit
                 endScrub()
                 holder.release()
                 isLoading = true
@@ -851,10 +846,6 @@ struct PlayerPageView: View {
                 if wasFullscreen {
                     onFullscreenChanged(false)
                 }
-                // Same guard, for `onLandscapeFitChanged`.
-                if wasLandscapeFit {
-                    onLandscapeFitChanged(false)
-                }
             }
         }
         .onChange(of: scenePhase) { _, newPhase in
@@ -875,14 +866,10 @@ struct PlayerPageView: View {
             // either: nothing below this line should change what gets
             // reported.
             let wasFullscreen = isFullscreen
-            let wasLandscapeFit = isLandscapeFit
             endScrub()
             holder.release()
             if wasFullscreen {
                 onFullscreenChanged(false)
-            }
-            if wasLandscapeFit {
-                onLandscapeFitChanged(false)
             }
         }
     }
@@ -893,12 +880,17 @@ struct PlayerPageView: View {
     /// `body`'s own `some View` expression in reasonable time with
     /// that much branching arithmetic inlined directly in it.
     ///
-    /// `isFullscreen || isLandscapeFit`: zero. The rotated fullscreen
-    /// canvas has no top chrome above it to make room for; the
-    /// landscape-fit stage's own top chrome is itself hidden (see
-    /// `FeedView.hidesGlobalChrome`), so there is nothing to reserve a
-    /// band for either — both centre plainly in the available space,
-    /// the same symmetric split `halfLeftover` already gives them.
+    /// `isFullscreen || useVideoAspect`: zero. The rotated fullscreen
+    /// canvas has no top chrome above it to make room for. The
+    /// `useVideoAspect` stage (pose 3/4's wide video) has no reserved
+    /// band to clear either — build 1 fix, step 2 un-hid this pose's
+    /// chrome, but `DuoLayout.availableRect`'s own "overlay, never
+    /// carve out height" rule already covers it the same way it
+    /// already does the bar column and the open-tall column: the
+    /// chrome draws ON the video's own top edge, full height, rather
+    /// than pushing it down — both this case and the rotated canvas
+    /// centre plainly in the available space, the same symmetric split
+    /// `halfLeftover` already gives them.
     ///
     /// Otherwise: the existing `StageGeometry.downShift`, for every
     /// other case alike — a regular iPhone, the closed bar column, and
@@ -913,11 +905,11 @@ struct PlayerPageView: View {
     /// as the closed bar column already did.
     private func resolvedDownShift(
         isFullscreen: Bool,
-        isLandscapeFit: Bool,
+        useVideoAspect: Bool,
         stageHeight: CGFloat,
         containerHeight: CGFloat
     ) -> CGFloat {
-        if isFullscreen || isLandscapeFit {
+        if isFullscreen || useVideoAspect {
             return 0
         }
         return StageGeometry.downShift(safeAreaTop: safeAreaTop, stageHeight: stageHeight, containerHeight: containerHeight)

@@ -19,9 +19,9 @@ struct FilterMenuView: View {
     /// The ancestor `.accessibilityHidden(hidesGlobalChrome)` does not
     /// reliably reach this view on this runtime. So the view clears its
     /// own identifier while this is true — `FeedView.hidesGlobalChrome`,
-    /// true for `isFullscreen` (the rotation hack) or `isLandscapeFit`
-    /// (step 6). `bin_open` and the four rail buttons do the same, the
-    /// rail buttons against plain `isFullscreen` only — see
+    /// which reduces to plain `isFullscreen` (the rotation hack) as of
+    /// build 1's fix, step 2. `bin_open` and the four rail buttons do
+    /// the same, directly against `isFullscreen` — see
     /// `FeedView.hidesGlobalChrome`'s own comment for why.
     let hidesChrome: Bool
 
