@@ -315,18 +315,147 @@ struct DuoLayout {
     /// other screen wants. `PlayerPageView.body` passes the loaded
     /// video's real aspect ratio exactly when that applies, and the
     /// default everywhere else.
+    ///
+    /// Build 3 addition: `.openWide` and `.book` get their own stage
+    /// box once `aspectRatio >= 1` — a landscape video, the only case
+    /// `PlayerPageView.useVideoAspect` ever passes a non-default
+    /// `aspectRatio` for — matching the round-3 wireframes
+    /// (`DUO_POSES.md`, pose 3/4W rows): the chrome column and (for
+    /// `.book`) the fold both carve space this function's generic
+    /// `availableRect` path has no way to know about, since that path
+    /// only ever excludes the rail/bar column. `aspectRatio >= 1`
+    /// (never read outside this function) is the one signal available
+    /// here for "this is the landscape-video sub-case," so the
+    /// function stays a drop-in replacement at its one call site
+    /// rather than growing a second parameter every caller would need
+    /// to pass. `.openWide`'s own TALL-video case (the default
+    /// `aspectRatio`) falls through to the generic `availableRect`
+    /// path unchanged — see `openWideWideVideoRect`'s own comment for
+    /// why that case already reads correctly from the generic math,
+    /// with nothing special to do. `.book`'s own TALL-video case
+    /// does need its own box, just not its own named function: "FIT
+    /// 9:16 full height, centred in `[0, division.minX]`" below —
+    /// `division.minX`, not the bar column, is what bounds the left
+    /// page, since the fold sits well inside where the bar column
+    /// would start to matter.
     func stageRect(containerSize: CGSize, safeAreaTop: CGFloat, aspectRatio: CGFloat = 9.0 / 16.0) -> CGRect {
+        if pose == .openWide, aspectRatio >= 1 {
+            return openWideWideVideoRect(containerSize: containerSize, safeAreaTop: safeAreaTop, aspectRatio: aspectRatio)
+        }
+        if pose == .book, let division {
+            return aspectRatio >= 1
+                ? bookWideVideoRect(division: division, containerSize: containerSize, aspectRatio: aspectRatio)
+                : fitRect(in: CGRect(x: 0, y: 0, width: max(0, division.minX), height: containerSize.height),
+                          aspectRatio: aspectRatio)
+        }
         let avail = availableRect(containerSize: containerSize, safeAreaTop: safeAreaTop)
-        guard avail.width > 0, avail.height > 0 else { return avail }
-        let height = min(avail.height, avail.width / aspectRatio)
+        return fitRect(in: avail, aspectRatio: aspectRatio)
+    }
+
+    /// The largest `aspectRatio` box that fits inside `box`, centred
+    /// there — the one FIT formula every stage-rect case in this file
+    /// shares, pulled out once `stageRect` grew pose-specific boxes of
+    /// its own to fit (build 3) rather than only ever `availableRect`'s.
+    private func fitRect(in box: CGRect, aspectRatio: CGFloat) -> CGRect {
+        guard box.width > 0, box.height > 0 else { return box }
+        let height = min(box.height, box.width / aspectRatio)
         let width = height * aspectRatio
         return CGRect(
-            x: avail.minX + (avail.width - width) / 2,
-            y: avail.minY + (avail.height - height) / 2,
+            x: box.minX + (box.width - width) / 2,
+            y: box.minY + (box.height - height) / 2,
             width: width,
             height: height
         )
     }
+
+    /// Pose 3's wide-video stage box (build 3): "FIT video aspect in
+    /// `[16, W − bar − 80 − 16] × [0, H − captionBand]`, centred" —
+    /// the wireframe's own words for excluding BOTH the rail/bar
+    /// column and the new chrome column (`chromeColumnWidth`, the
+    /// Mute/Filter/Bin column `zigzagCenters` places buttons in),
+    /// `pagePad` clear on each side, with `captionBand` reserved at
+    /// the bottom for the caption now sitting under the video instead
+    /// of on it (see the per-pose table's pose-3-wide-video row).
+    ///
+    /// Pose 3's TALL-video case (the default `aspectRatio`, handled by
+    /// `stageRect`'s own fallthrough to `availableRect`) needs none of
+    /// this: `availableRect` already excludes only the bar column, and
+    /// `fitRect`'s height-first binding on that wider box already
+    /// reduces to "FIT 9:16, full height" — the chrome column and
+    /// caption band never come into it, because a tall video's own
+    /// FIT box is already narrower than the leftover before either
+    /// would ever bind. Confirmed algebraically: at this window's own
+    /// proportions, `avail.width / (9/16)` is always well over
+    /// `avail.height`, so height is always the binding side there.
+    private func openWideWideVideoRect(containerSize: CGSize, safeAreaTop: CGFloat, aspectRatio: CGFloat) -> CGRect {
+        let column = railColumn(containerSize: containerSize, safeAreaTop: safeAreaTop)
+        let barWidth = column?.width ?? 0
+        let edge = column?.edge ?? .trailing
+        let pad = Self.pagePad
+        let excluded = barWidth + Self.chromeColumnWidth
+        let availableWidth = max(0, containerSize.width - excluded - pad * 2)
+        let minX: CGFloat
+        switch edge {
+        case .trailing: minX = pad
+        case .leading: minX = excluded + pad
+        }
+        let box = CGRect(x: minX, y: 0, width: availableWidth,
+                          height: max(0, containerSize.height - Self.captionBand))
+        return fitRect(in: box, aspectRatio: aspectRatio)
+    }
+
+    /// Pose 4W's stage box (build 3): "width `division.minX − 32`, x
+    /// = 16, centred on H" — a WIDTH-first box, not a FIT-into-box
+    /// one like every other case in this file: the left page's own
+    /// width is fixed first (`division.minX`, `pagePad` clear on each
+    /// side of that span), then the height follows from `aspectRatio`
+    /// alone, centred vertically in the full window height. This
+    /// differs from `fitRect` deliberately — a FIT box here could
+    /// bind on height first for a near-square `division.minX`, which
+    /// would narrow the video below the wireframe's own fixed width.
+    private func bookWideVideoRect(division: CGRect, containerSize: CGSize, aspectRatio: CGFloat) -> CGRect {
+        let width = max(0, division.minX - Self.pagePad * 2)
+        let height = width / aspectRatio
+        return CGRect(x: Self.pagePad, y: (containerSize.height - height) / 2, width: width, height: height)
+    }
+
+    // MARK: - Pose-table constants (build 3)
+    //
+    // Every number below is "measured/wireframe, no API" — read off
+    // `DUO_VIDEO_WIREFRAMES.png`/`DUO_POSES.md`, not any SDK property.
+    // There is no reserved-region kind, margin, or trait for a chrome
+    // column, a caption band, a page margin, a laptop rail's pitch, or
+    // a chin's own size; Apple's hinge/division/occlusion API (this
+    // file's header comment) says nothing about any of them. `ringInset`
+    // above is the one pre-existing constant of this kind; these join it.
+
+    /// Width of the Mute/Filter/Bin column pose 3/4/4W put beside the
+    /// rail/bar column — `chromeColumnRect`'s own width, and
+    /// `zigzagCenters`'s own x.
+    static let chromeColumnWidth: CGFloat = 80
+    /// Height reserved at a wide video's own bottom edge for its
+    /// caption, pose 3's wide-video case only (`openWideWideVideoRect`).
+    static let captionBand: CGFloat = 100
+    /// A page margin, used wherever the wireframe leaves a plain 16pt
+    /// clearance rather than reusing an existing gap constant — pose
+    /// 3's wide-video box, pose 4W's box, and (elsewhere) the caption
+    /// and right-page placements build 4 and later add.
+    static let pagePad: CGFloat = 16
+    /// `statusBlock`'s own fallback size (pose 5's time + ring block),
+    /// used only when no active `.occlusion` region exists to measure
+    /// it from directly — build 6.
+    static let statusBlockFallback = CGSize(width: 134, height: 82)
+    /// Pose 6's (laptop) horizontal rail row: the x-spacing between
+    /// consecutive buttons — build 8.
+    static let laptopRailPitch: CGFloat = 100
+    /// Pose 6's horizontal rail row: the x of its first button — build 8.
+    static let laptopRailLead: CGFloat = 70
+    /// Pose 5's chin: the gap above its own top edge, clear of the
+    /// rail's last button — build 7.
+    static let chinColumnGap: CGFloat = 40
+    /// Pose 5's chin: its own size once expanded in its column —
+    /// build 7.
+    static let columnChinSize: CGFloat = 56
 
     // MARK: - Rail column (step 3; extended by steps 4, 5, and the pose fixes)
     //
@@ -554,6 +683,80 @@ struct DuoLayout {
         }
         let bottomBand = StageGeometry.bottomBand(safeAreaTop: safeAreaTop, containerSize: containerSize)
         return containerSize.height - (bottomBand + Rail.seamClearance)
+    }
+
+    // MARK: - Chrome column + right page (build 3)
+    //
+    // Pose 3/4/4W put Mute, Filter, and Bin in their own column,
+    // `chromeColumnWidth` wide, immediately leading of wherever
+    // `railColumn` already put the rail/bar column — never computed
+    // independently of it, so the two columns can never drift apart
+    // or overlap. `FeedView.chromeColumn` is the one caller.
+
+    /// This frame's chrome column, or `nil` when `railColumn` found no
+    /// rail/bar column to sit beside (a regular iPhone, or any pose
+    /// without one). Full height, like `railColumnRect` — this is the
+    /// column's own hit area and background, not the stage's.
+    func chromeColumnRect(containerSize: CGSize, safeAreaTop: CGFloat) -> CGRect? {
+        guard let column = railColumn(containerSize: containerSize, safeAreaTop: safeAreaTop) else { return nil }
+        switch column.edge {
+        case .trailing:
+            return CGRect(x: containerSize.width - column.width - Self.chromeColumnWidth, y: 0,
+                          width: Self.chromeColumnWidth, height: containerSize.height)
+        case .leading:
+            return CGRect(x: column.width, y: 0, width: Self.chromeColumnWidth, height: containerSize.height)
+        }
+    }
+
+    /// Three points, x = the chrome column's own centre, each level
+    /// with a gap between two of the rail's five buttons — "each
+    /// button is level with a gap between two rail buttons"
+    /// (`DUO_POSES.md`'s own wording for the pose-3 wireframe).
+    /// `[]` when `chromeColumnRect`/`railVerticalExtent` found nothing
+    /// to anchor against.
+    ///
+    /// `pitch` is `Rail.itemHeight + Rail.spacing` (76 — the spec's
+    /// own annotation). Point `j` (0...2) sits at
+    /// `railTop + Rail.hit/2 + (j + 0.5) · pitch`: the rail's own
+    /// first button centres at `railTop + Rail.hit/2`, so adding a
+    /// half-pitch lands exactly on the gap after it, and each further
+    /// whole pitch moves down one more gap. Only 3 of the rail's 4
+    /// gaps are used — Mute, Filter, and Bin, not a fourth button.
+    func zigzagCenters(containerSize: CGSize, safeAreaTop: CGFloat) -> [CGPoint] {
+        guard let columnRect = chromeColumnRect(containerSize: containerSize, safeAreaTop: safeAreaTop),
+              let extent = railVerticalExtent(containerSize: containerSize, safeAreaTop: safeAreaTop)
+        else { return [] }
+        let pitch = Rail.itemHeight + Rail.spacing
+        return (0..<3).map { j in
+            let y = extent.top + Rail.hit / 2 + (CGFloat(j) + 0.5) * pitch
+            return CGPoint(x: columnRect.midX, y: y)
+        }
+    }
+
+    /// The book pose's right page (pose 4/4W only; `nil` otherwise, or
+    /// with no active division to anchor against): "`x ∈
+    /// [division.maxX, W − bar − 80]`, full height" — the fold's own
+    /// trailing edge to the leading edge of whichever column
+    /// (rail/bar, then chrome) sits on the window's own far side.
+    /// `DuoRightPage` (build 12) mounts here; nothing reads this
+    /// rect before then.
+    func rightPage(containerSize: CGSize, safeAreaTop: CGFloat) -> CGRect? {
+        guard pose == .book, let division else { return nil }
+        let column = railColumn(containerSize: containerSize, safeAreaTop: safeAreaTop)
+        let barWidth = column?.width ?? 0
+        switch column?.edge ?? .trailing {
+        case .trailing:
+            let minX = division.maxX
+            let maxX = max(minX, containerSize.width - barWidth - Self.chromeColumnWidth)
+            return CGRect(x: minX, y: 0, width: maxX - minX, height: containerSize.height)
+        case .leading:
+            // Not a configuration this pose has ever measured (the
+            // bar is always trailing on the book pose) — mirrored for
+            // the same reason `availableRect`/`railColumn` handle
+            // both edges generically.
+            let minX = division.maxX
+            return CGRect(x: minX, y: 0, width: max(0, containerSize.width - minX), height: containerSize.height)
+        }
     }
 }
 

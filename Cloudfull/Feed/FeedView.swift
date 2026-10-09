@@ -963,13 +963,33 @@ struct FeedView: View {
                 width: proxy.size.width + proxy.safeAreaInsets.leading + proxy.safeAreaInsets.trailing,
                 height: proxy.size.height + proxy.safeAreaInsets.top + proxy.safeAreaInsets.bottom
             )
-            VStack(spacing: 0) {
-                topChrome(duoLayout: duoLayout, safeAreaTop: realTopInset, containerSize: fullWindow)
-                if let shrinkToastMessage {
-                    shrinkToast(shrinkToastMessage)
-                        .padding(.top, 8)
+            // Build 3: pose 3/4/4W (`DuoLayout.classify` → `.openWide`/
+            // `.book`) move Mute, Filter, and Bin off this row entirely,
+            // into their own column beside the rail/bar column — see
+            // `chromeColumn`'s own comment. `topChrome` itself still
+            // renders, for the shrink-progress capsule alone; see that
+            // function's own comment on why.
+            let usesChromeColumn = duoLayout.pose == .openWide || duoLayout.pose == .book
+            ZStack(alignment: .top) {
+                VStack(spacing: 0) {
+                    topChrome(duoLayout: duoLayout, safeAreaTop: realTopInset, containerSize: fullWindow)
+                    if let shrinkToastMessage {
+                        shrinkToast(shrinkToastMessage)
+                            .padding(.top, 8)
+                    }
+                    Spacer(minLength: 0)
                 }
-                Spacer(minLength: 0)
+                if usesChromeColumn {
+                    // No `.frame`/coordinate wrapper needed: each of
+                    // this `Group`'s children carries its own
+                    // `.position(_:)`, which already places it directly
+                    // within this `ZStack`'s own space — the same
+                    // "0 at the true window top" space `topChrome`'s
+                    // `containerSize: fullWindow` argument already
+                    // assumes, via this view's own `.padding(.top:)`/
+                    // `.frame` pair below.
+                    chromeColumn(duoLayout: duoLayout, safeAreaTop: realTopInset, containerSize: fullWindow)
+                }
             }
             // The stack starts at the safe-area top, since this reader is
             // inside the safe area, but `topChromeTopPadding` measures
@@ -982,7 +1002,21 @@ struct FeedView: View {
 
     // MARK: - Top chrome
 
+    /// Build 3: suppresses Mute, Filter, the counter, and Bin at pose
+    /// 3/4/4W — `chromeColumn` renders those instead, positioned at
+    /// `DuoLayout.zigzagCenters` rather than flowing left to right.
+    /// This function still renders for one thing even then: the
+    /// shrink-progress capsule, which the round-3 wireframes
+    /// (`DUO_POSES.md`) do not mention at all (a rare, transient
+    /// state, not a fixture of the pose). Letting it keep this row,
+    /// rather than inventing a column position the wireframes never
+    /// specified, is the smaller assumption. Its row no longer
+    /// reserves the chrome column's own width — see `duoLayout
+    /// .availableRect`'s comment — so this is a known, accepted
+    /// imperfection if a shrink is active while the chrome column
+    /// also shows; flagged for the owner's own look at the sim.
     private func topChrome(duoLayout: DuoLayout, safeAreaTop: CGFloat, containerSize: CGSize) -> some View {
+        let usesChromeColumn = duoLayout.pose == .openWide || duoLayout.pose == .book
         // Four independent glass pills. Do not wrap these in a
         // `GlassEffectContainer`. XCUITest then resolves the far-right
         // `bin_open` button's frame relative to the container. Its
@@ -992,17 +1026,21 @@ struct FeedView: View {
         // origin, so it keeps working and hides the problem. A finger
         // tap is always fine; only the synthesized XCUITest tap
         // coordinates are wrong.
-        HStack(alignment: .top, spacing: 8) {
+        return HStack(alignment: .top, spacing: 8) {
             // A tap on the video also toggles mute, with a center flash.
             // This pill is the second mute control.
-            muteButton
-            FilterMenuView(store: optionsStore, hidesChrome: hidesGlobalChrome)
+            if !usesChromeColumn {
+                muteButton
+                FilterMenuView(store: optionsStore, hidesChrome: hidesGlobalChrome)
+            }
             if let job = activeShrinkJob, let text = shrinkActiveProgressText {
                 shrinkProgressCapsule(text, assetID: job.id)
             }
             Spacer(minLength: 8)
-            counterCapsule
-            binButton
+            if !usesChromeColumn {
+                counterCapsule
+                binButton
+            }
         }
         .padding(.horizontal, 12)
         // Clamped to the stage's own available width — clear of the
@@ -1028,6 +1066,48 @@ struct FeedView: View {
         // safe area already clear the corner on their own; this only
         // nudges the row further in when they do not.
         .containerCornerOffset(.top)
+    }
+
+    // MARK: - Chrome column (build 3)
+
+    /// Pose 3/4/4W's replacement for `topChrome`'s own Mute, Filter,
+    /// and Bin: the same three controls, unchanged, each centred on
+    /// one of `DuoLayout.zigzagCenters`'s three points instead of
+    /// flowing left to right — "each button is level with a gap
+    /// between two rail buttons" (`DUO_POSES.md`).
+    ///
+    /// `binButton`'s own queued-count badge rides inside its capsule
+    /// in the row layout; a narrow `chromeColumnWidth` (80pt) column
+    /// has no room for that, so it repeats as its own line under Bin
+    /// instead — the table's "counter one line 4pt under Bin." The
+    /// `22`pt offset below is a hand-picked stand-in for "Bin's own
+    /// half-height + 4pt + the counter's own half-height": no
+    /// wireframe measurement exists for Bin's own rendered size in
+    /// this column, so this needs the owner's own look at the sim to
+    /// confirm, same as every other "measured, no API" constant in
+    /// this file is confirmed before being trusted.
+    private func chromeColumn(duoLayout: DuoLayout, safeAreaTop: CGFloat, containerSize: CGSize) -> some View {
+        let centers = duoLayout.zigzagCenters(containerSize: containerSize, safeAreaTop: safeAreaTop)
+        return Group {
+            if centers.count == 3 {
+                muteButton
+                    .position(centers[0])
+                FilterMenuView(store: optionsStore, hidesChrome: hidesGlobalChrome)
+                    .position(centers[1])
+                binButton
+                    .position(centers[2])
+                if let binBadgeText {
+                    Text(binBadgeText)
+                        .font(.system(size: 11, weight: .medium))
+                        .monospacedDigit()
+                        .foregroundStyle(.white)
+                        .feedShadow()
+                        .lineLimit(1)
+                        .fixedSize()
+                        .position(x: centers[2].x, y: centers[2].y + 22)
+                }
+            }
+        }
     }
 
     /// Height of the empty band the fixed 9:16 stage leaves above and below
