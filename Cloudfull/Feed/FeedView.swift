@@ -217,7 +217,7 @@ struct FeedView: View {
             // capsule, the counters, the bin) hides while fullscreen is
             // on. Each page's own `bottomScrim` and `FeedPageContent` in
             // `pager` hide too.
-            overlayControls
+            overlayControls(duoLayout: duoLayout)
                 .opacity(isFullscreen ? 0 : 1)
                 .allowsHitTesting(!isFullscreen)
                 .accessibilityHidden(isFullscreen)
@@ -831,7 +831,7 @@ struct FeedView: View {
     // pass and can stop the view graph from updating. The app then draws
     // its first frame and never re-renders again, even while other
     // state, such as the deck itself, keeps changing correctly.
-    private var overlayControls: some View {
+    private func overlayControls(duoLayout: DuoLayout) -> some View {
         // A `GeometryReader` placed under `.ignoresSafeArea()` reports
         // `safeAreaInsets == .zero`: the modifier consumes the inset
         // before the proxy sees it. Reading `.top` off such a proxy
@@ -847,7 +847,7 @@ struct FeedView: View {
                 height: proxy.size.height + proxy.safeAreaInsets.top + proxy.safeAreaInsets.bottom
             )
             VStack(spacing: 0) {
-                topChrome(safeAreaTop: realTopInset, containerSize: fullWindow)
+                topChrome(duoLayout: duoLayout, safeAreaTop: realTopInset, containerSize: fullWindow)
                 if let shrinkToastMessage {
                     shrinkToast(shrinkToastMessage)
                         .padding(.top, 8)
@@ -865,7 +865,7 @@ struct FeedView: View {
 
     // MARK: - Top chrome
 
-    private func topChrome(safeAreaTop: CGFloat, containerSize: CGSize) -> some View {
+    private func topChrome(duoLayout: DuoLayout, safeAreaTop: CGFloat, containerSize: CGSize) -> some View {
         // Four independent glass pills. Do not wrap these in a
         // `GlassEffectContainer`. XCUITest then resolves the far-right
         // `bin_open` button's frame relative to the container. Its
@@ -888,6 +888,16 @@ struct FeedView: View {
             binButton
         }
         .padding(.horizontal, 12)
+        // Clamped to the stage's own available width — clear of the
+        // rail column, whichever case put one there (steps 3/5) —
+        // instead of the full window. On a regular iPhone, or an open
+        // Duo too narrow for a column, `availableRect` returns the
+        // full window unchanged, so `binButton`'s trailing edge lands
+        // exactly where it always has. On the Duo, this is also what
+        // keeps the rail's own column clear of the chrome above it:
+        // see `DuoLayout.railContentTop`'s comment on the open case.
+        .frame(width: duoLayout.availableRect(containerSize: containerSize, safeAreaTop: safeAreaTop).width,
+               alignment: .leading)
         .padding(.top, topChromeTopPadding(safeAreaTop: safeAreaTop, containerSize: containerSize))
     }
 

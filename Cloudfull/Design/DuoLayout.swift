@@ -143,41 +143,77 @@ struct DuoLayout {
     // MARK: - Rail column (step 3; extended by steps 4 and 5)
     //
     // The action rail (Keep, Share, Album, Shrink, Delete) moves off
-    // the stage and into its own column when `isClosedBar`: the
-    // column IS the system vertical bar — same edge, same width as
-    // `barEdge`/`barWidth`. The rail moves into furniture the system
-    // already reserved; nothing new is carved out of the stage.
-    //
-    // `railColumn(containerSize:safeAreaTop:)` is the one function
-    // every caller below reads — never `barEdge`/`barWidth` directly.
-    // `safeAreaTop` is unused here for now; an open Duo wide enough
-    // for a column of its own computed from the stage's own geometry,
-    // rather than reused from the system, is step 5's own addition to
-    // this same function, and that is the case that needs it.
+    // the stage and into its own column whenever one exists. The
+    // column itself comes from one of two sources, and every function
+    // below reads only `railColumn(containerSize:safeAreaTop:)` — never
+    // `barEdge`/`barWidth` directly — so the closed-bar case (step 3)
+    // and the open, computed case (step 5) share this one definition
+    // end to end (`availableRect`, the stage, the rail, the chin).
 
     /// Minimum width a rail column must have to hold the action rail
     /// comfortably: `Rail.hit` (40pt, each glyph's own hit box) plus
     /// 12pt clear on either side. Below this, `railColumn` reports no
     /// column, and every caller keeps the pre-Duo overlay layout.
+    ///
+    /// A regular iPhone never clears this (see `railColumn`'s own
+    /// comment on the open case), so this threshold is never a
+    /// Duo-only special case written by hand — it is the one number
+    /// that keeps a phone on the overlay path by geometry alone.
     static let minRailColumnWidth: CGFloat = 64
 
     /// Gap kept below whatever the rail column's top already holds —
-    /// the system's own time/connectivity ring when closed — before
-    /// the rail's own first button. A visual gap, not a safety margin
-    /// that top already guarantees on its own.
+    /// the system's own time/connectivity ring when closed, nothing
+    /// when open — before the rail's own first button. A visual gap,
+    /// not a safety margin that top already guarantees on its own.
     static let railTopClearance: CGFloat = 12
 
     /// Where the rail column sits, and how wide it is, this frame — or
     /// `nil` when no column applies.
     ///
     /// Closed (`isClosedBar`): the column IS the system vertical bar —
-    /// same edge, same width as `barEdge`/`barWidth`.
+    /// same edge, same width as `barEdge`/`barWidth`. The rail moves
+    /// into furniture the system already reserved; nothing new is
+    /// carved out of the stage.
     ///
-    /// Not closed (a regular iPhone, or an open Duo): no column yet.
-    /// `nil`.
+    /// Open (`barEdge == nil`): there is no system column to reuse, so
+    /// one is computed instead, on the trailing edge, sized to exactly
+    /// the width left over once a 9:16 stage claims the container's
+    /// full height, minus the band the top chrome already needs
+    /// (`StageGeometry.chromeTop` + `chromeHeight` + `chromeToVideoGap`
+    /// — the same quantity `StageGeometry.downShift` reserves for a
+    /// regular iPhone's own top band). That reservation is why this
+    /// function needs `safeAreaTop` at all: without it, a stage sized
+    /// to the container's bare full height would leave no natural band
+    /// left for `downShift` to claim, and the top chrome would sit on
+    /// the video instead of above it.
+    ///
+    /// The resulting width is also deliberately not "whatever is left
+    /// over," but exactly that one number: it is also the width that
+    /// would otherwise sit as dead pillarboxing on both sides of a
+    /// centred stage (see `availableRect`, which reads this function
+    /// rather than `barEdge`/`barWidth`). Carving it into a column
+    /// instead of splitting it as a pillarbox is what lands the stage
+    /// flush against the column with no gap between them — the same
+    /// relationship the closed case already has with its system bar,
+    /// from the one `availableRect`/`stageRect` formula both share.
+    ///
+    /// Below `minRailColumnWidth`, there is no column: `nil`. Every
+    /// regular iPhone always lands here — a phone screen is always
+    /// narrower than the width a 9:16 box needs to reach its own full
+    /// height, so the "leftover" below is always negative there,
+    /// decided by the screen's own proportions, never by a device
+    /// check.
     func railColumn(containerSize: CGSize, safeAreaTop: CGFloat) -> (edge: HorizontalEdge, width: CGFloat)? {
-        guard let barEdge, barWidth > 0 else { return nil }
-        return (barEdge, barWidth)
+        if let barEdge, barWidth > 0 {
+            return (barEdge, barWidth)
+        }
+        let requiredTopBand = StageGeometry.chromeTop(safeAreaTop: safeAreaTop)
+            + StageGeometry.chromeHeight + StageGeometry.chromeToVideoGap
+        let effectiveHeight = max(0, containerSize.height - requiredTopBand)
+        let fullHeightStageWidth = effectiveHeight * 9 / 16
+        let openWidth = containerSize.width - fullHeightStageWidth
+        guard openWidth >= Self.minRailColumnWidth else { return nil }
+        return (.trailing, openWidth)
     }
 
     /// The rail column's own rectangle this frame — the complement of
@@ -200,15 +236,25 @@ struct DuoLayout {
     /// The Y position, in this page's own coordinate space (0 at the
     /// top), where the rail's first button starts inside its column.
     ///
-    /// The system draws its own time + connectivity ring at the top of
-    /// the bar column. There is no SDK API that reports that cluster's
-    /// own height (only its width, via `barWidth`'s matching safe-area
-    /// inset), so this reads the frame's active `.occlusion` region
-    /// instead, the inner camera cutout the same column must also
-    /// clear, and falls back to `safeAreaTop` when no such region is
-    /// active. Either number is a lower bound on where the system's
-    /// own furniture ends; `railTopClearance` below it is the visual
-    /// gap.
+    /// Closed (`isClosedBar`): the system draws its own time +
+    /// connectivity ring at the top of the bar column. There is no SDK
+    /// API that reports that cluster's own height (only its width, via
+    /// `barWidth`'s matching safe-area inset), so this reads the
+    /// frame's active `.occlusion` region instead, the inner camera
+    /// cutout the same column must also clear, and falls back to
+    /// `safeAreaTop` when no such region is active. Either number is a
+    /// lower bound on where the system's own furniture ends;
+    /// `railTopClearance` below it is the visual gap.
+    ///
+    /// Open, with a computed column: nothing system-drawn sits inside
+    /// it, and — unlike the stage — nothing we draw does either:
+    /// `FeedView.topChrome`'s own width is clamped to
+    /// `availableRect(containerSize:safeAreaTop:).width`, the same
+    /// stage-only width this column's existence is carved out of, so
+    /// the top chrome never reaches into this column in the first
+    /// place. Content here starts below the ordinary top safe-area
+    /// inset, the same edge every other top-aligned piece of this feed
+    /// already clears.
     func railContentTop(safeAreaTop: CGFloat) -> CGFloat {
         let systemBottom = isClosedBar ? max(occlusion?.maxY ?? 0, safeAreaTop) : safeAreaTop
         return systemBottom + Self.railTopClearance
@@ -218,15 +264,14 @@ struct DuoLayout {
     /// frame, in the page's own coordinate space (0 at the top) —
     /// whichever layout the rail is using.
     ///
-    /// No rail column (a regular iPhone, or an open Duo — see
-    /// `railColumn`'s own comment on that case): the rail is the
-    /// pre-Duo overlay, bottom-anchored against the video's own seam —
-    /// see `FeedPageContent.actionRail`'s identical
-    /// `bottomBand + Rail.seamClearance` padding, which this mirrors
-    /// so the two can never disagree.
+    /// No rail column (a regular iPhone, or an open Duo too narrow for
+    /// one): the rail is the pre-Duo overlay, bottom-anchored against
+    /// the video's own seam — see `FeedPageContent.actionRail`'s
+    /// identical `bottomBand + Rail.seamClearance` padding, which this
+    /// mirrors so the two can never disagree.
     ///
-    /// A rail column (the closed bar, today): the rail is anchored
-    /// from the column's own top instead — see
+    /// A rail column (closed bar, or open and wide enough): the rail
+    /// is anchored from the column's own top instead — see
     /// `railContentTop(safeAreaTop:)` — so its bottom is that anchor
     /// plus the rail's own fixed height, `Rail.columnHeight`.
     ///
