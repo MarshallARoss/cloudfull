@@ -771,6 +771,66 @@ final class DeckViewModel: ObservableObject {
         return true
     }
 
+    // MARK: - Insert next (Duo right-page tap-to-play)
+
+    /// Makes `assetID` play immediately after the current page, for a tap
+    /// on a "Same day" grid tile or a "Biggest" list row (`DuoRightPage`,
+    /// the Duo book's pose 4/4W). `FeedView` then scrolls to the returned
+    /// id through its existing `advanceTargetID`/`advanceNonce` path, the
+    /// same one a trash tap's advance already uses.
+    ///
+    /// Inserts a **transient** `DeckEntry` right after `currentIndex`,
+    /// reusing `deck[currentIndex].position` rather than allocating a new
+    /// slot from `order.nextSlot`. `DeckEntry.id` is `"\(position)_
+    /// \(assetID)"` (see that type's own comment), so the duplicate
+    /// position still yields a unique `id`, as long as `assetID` differs
+    /// from the current entry's own — which every caller today already
+    /// guarantees: both the same-day grid and the Biggest list exclude the
+    /// video currently playing. Guarded here too, defensively: tapping the
+    /// video already on screen is a no-op, not a duplicate `id`.
+    ///
+    /// Invariants this method preserves:
+    /// - **Uniqueness.** `ForEach(deck)` never sees two entries share an
+    ///   `id`, because `assetID` differs from the entry already holding
+    ///   this position — today, exactly one: the current entry.
+    /// - **No new slot, nothing persisted.** `order.nextSlot` never
+    ///   advances, `appendCycle`/`appendLiteralCycle` are never called,
+    ///   and nothing is written to `DeckOrder`. `rebuildDeck`'s relaunch
+    ///   replay never reconstructs this entry: it lives only in the live,
+    ///   in-memory `deck` array for this session, exactly as the spec
+    ///   calls for ("session-only, never written to the persisted
+    ///   order").
+    /// - **Cursor.** `pageBecameCurrent`'s high-water mark only advances
+    ///   when a page's `position` exceeds the stored cursor. This entry's
+    ///   `position` duplicates one already reached, so landing on it can
+    ///   never move `state.cursor` forward by itself.
+    ///
+    /// Known risk, left for review rather than solved here (see the
+    /// build notes for this step): `removeFromFuture` — reached from
+    /// `like` and from the trash queue's exclusion callback — records an
+    /// exception **by slot number**, and `rebuildDeck` drops a slot on
+    /// replay by that number alone, regardless of which id the exception
+    /// actually named. If this transient entry's `assetID` is later liked
+    /// or trashed while it still sits in `deck`, the exception recorded at
+    /// its duplicated `position` would also mark the *original* entry at
+    /// that same slot for drop on the next relaunch, even though that
+    /// entry itself was never excluded. The same duplicate-position tail
+    /// case can also interact with `extendDeckAfterExhaustion`'s
+    /// `lastExtendedPosition` gate, if the insert lands on the deck's last
+    /// slot. Both paths assume `position` is a bijection with one dealt
+    /// id; this method deliberately breaks that for one slot, for the
+    /// lifetime of the transient entry.
+    @discardableResult
+    func insertNext(assetID: String) -> String {
+        guard deck.indices.contains(currentIndex) else { return "" }
+        let current = deck[currentIndex]
+        guard assetID != current.assetID else { return current.id }
+        let entry = DeckEntry(assetID: assetID, position: current.position)
+        deck.insert(entry, at: currentIndex + 1)
+        refreshPreloadableSlots()
+        return entry.id
+    }
+
     /// Marks a video seen. Called only once its player item actually
     /// reaches `.readyToPlay` — see `PlayerPageView`. A video that failed
     /// to load, such as a dropped iCloud stream or a network error, is
