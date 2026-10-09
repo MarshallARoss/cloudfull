@@ -8,6 +8,31 @@
 
 import SwiftUI
 
+/// Which of the iPhone Duo's physical poses this frame is in — see
+/// `design/DUO_POSES.md` for the pictures and names this mirrors.
+/// `classify(...)` (below `DuoLayout.current`) is the one place that
+/// derives this from the SDK's own geometry; nothing else in the app
+/// re-derives a pose from raw hinge/size-class/window values, so every
+/// pose fix lands in one function.
+///
+/// `.regularPhone` is also the value a regular iPhone — and any OS
+/// below iOS 27.1 — always reports (`DuoLayout.none.pose`), which is
+/// what keeps every `pose != .regularPhone` gate a true no-op there.
+enum DuoPose: String {
+    case regularPhone, closed, tent, openWide, book, openTall, laptop
+}
+
+/// A plain mirror of `DeviceHinge.Status` (`.closed`/`.partiallyOpen`/
+/// `.fullyOpen`), kept as its own stored-property-friendly enum because
+/// `DeviceHinge.Status` itself is `@available(iOS 27.1, *)` — see
+/// `ToolbarVerticalEdgeReader`'s own comment on why an `@available` type
+/// cannot back a stored property on a type whose deployment target is
+/// lower. `HingeReader` below is the one place that converts between the
+/// two.
+enum DuoHingeStatus: String {
+    case closed, partial, full
+}
+
 /// One frame's worth of iPhone Duo geometry, read once per feed from the
 /// root `GeometryProxy` and the environment, then threaded down through
 /// parameters exactly the way `safeAreaTop` already is (see
@@ -44,6 +69,25 @@ struct DuoLayout {
     /// (the fold), or `nil` when the device is not partially open.
     let division: CGRect?
 
+    /// This frame's classified pose — see `DuoPose` and `classify(...)`
+    /// below. Every new Duo branch gates on `pose != .regularPhone`
+    /// (spec hard rule), never on `barEdge`/`division`/`hinge`
+    /// directly, so a regular iPhone's path is decided by this one
+    /// field.
+    let pose: DuoPose
+
+    /// A plain mirror of `DeviceHingeContext.hinge?.status`, read by
+    /// `HingeReader` and threaded down the same way `barEdge` already
+    /// is. `nil` until the first `onHingeChange` delivery, which has no
+    /// `initial:` parameter — see `HingeReader`'s own comment — or on a
+    /// device/OS with no hinge at all.
+    let hinge: DuoHingeStatus?
+
+    /// `DeviceHinge.angle.degrees` alongside `hinge`, for the
+    /// `-cloudfull-log-rotation` probe only; nothing in `classify(...)`
+    /// reads this, only `hinge` itself.
+    let hingeDegrees: Double?
+
     /// `barEdge != nil`. The spelling most call sites reach for when all
     /// they need is the yes/no, not which edge.
     var isClosedBar: Bool { barEdge != nil }
@@ -51,8 +95,11 @@ struct DuoLayout {
     /// The "no Duo furniture" value: every field at its plain default.
     /// A regular iPhone's `FeedView`/`PhotoFeedView` can hand this
     /// straight to a child that expects a `DuoLayout` without ever
-    /// calling `current(proxy:toolbarVerticalEdge:)`.
-    static let none = DuoLayout(barEdge: nil, barWidth: 0, occlusion: nil, division: nil)
+    /// calling `current(proxy:toolbarVerticalEdge:horizontalSizeClass:hinge:hingeDegrees:stanceIsLandscape:)`.
+    /// `pose` is `.regularPhone` here — the hard rule every new branch
+    /// gates on.
+    static let none = DuoLayout(barEdge: nil, barWidth: 0, occlusion: nil, division: nil,
+                                pose: .regularPhone, hinge: nil, hingeDegrees: nil)
 
     /// Reads this frame's Duo geometry from `proxy` and the
     /// already-resolved `toolbarVerticalEdge` environment value.
@@ -65,8 +112,22 @@ struct DuoLayout {
     /// `EnvironmentValues` extension cannot be read from inside a
     /// plain, unavailable-gated function — only from a View's own
     /// environment-reading context.
+    /// `horizontalSizeClass`, `hinge`, and `stanceIsLandscape` are the
+    /// classifier's three extra inputs — see `classify(...)` below for
+    /// what each decides. The caller reads all three itself
+    /// (`@Environment(\.horizontalSizeClass)`, `HingeReader`'s stored
+    /// state, and `OrientationMonitor`'s `Stance.isLandscape`) for the
+    /// same reason it already reads `toolbarVerticalEdge` itself: only a
+    /// View's own environment/state context can read them.
     @available(iOS 27.1, *)
-    static func current(proxy: GeometryProxy, toolbarVerticalEdge: HorizontalEdge?) -> DuoLayout {
+    static func current(
+        proxy: GeometryProxy,
+        toolbarVerticalEdge: HorizontalEdge?,
+        horizontalSizeClass: UserInterfaceSizeClass?,
+        hinge: DuoHingeStatus?,
+        hingeDegrees: Double?,
+        stanceIsLandscape: Bool
+    ) -> DuoLayout {
         let insets = proxy.safeAreaInsets
         let width: CGFloat
         switch toolbarVerticalEdge {
@@ -80,12 +141,73 @@ struct DuoLayout {
         // changes.
         let occlusionFrame = proxy.reservedRegions(kind: .occlusion).first(where: \.isActive)?.frame
         let divisionFrame = proxy.reservedRegions(kind: .division).first(where: \.isActive)?.frame
+        let pose = classify(
+            sizeClass: horizontalSizeClass,
+            containerSize: proxy.size,
+            division: divisionFrame,
+            barEdge: toolbarVerticalEdge,
+            hinge: hinge,
+            stanceIsLandscape: stanceIsLandscape
+        )
         return DuoLayout(
             barEdge: toolbarVerticalEdge,
             barWidth: toolbarVerticalEdge == nil ? 0 : width,
             occlusion: occlusionFrame,
-            division: divisionFrame
+            division: divisionFrame,
+            pose: pose,
+            hinge: hinge,
+            hingeDegrees: hingeDegrees
         )
+    }
+
+    /// The pose classifier. Pure geometry/trait math, no device check —
+    /// see this file's header comment on why that is what keeps a
+    /// regular iPhone's result (`.regularPhone`) decided purely by its
+    /// own proportions and traits, never by a name.
+    ///
+    /// `sizeClass == .regular` only on the Duo's INNER display (the
+    /// same fact `PlayerPageView.isFullscreen` already leans on — see
+    /// that property's own comment). There, an active `division` means
+    /// the device is partially open: a division taller than it is wide
+    /// is the fold read top-to-bottom (a book spine down the middle),
+    /// a division wider than tall is the fold read left-to-right (a
+    /// laptop hinge along the bottom) — see this file's "Fold-orientation
+    /// check" in the build spec for the 951×669 / 669×951 arithmetic
+    /// this falls out of. No division at all means fully open: the
+    /// window's own shape (landscape or portrait) is `.openWide` or
+    /// `.openTall`.
+    ///
+    /// `sizeClass != .regular` is every compact-width case: a regular
+    /// iPhone in any orientation, or the Duo's OUTER display. A
+    /// `.partial` hinge together with a landscape device stance is the
+    /// tent (pose 2) — the hinge alone cannot tell tent from laptop
+    /// (both report `.partiallyOpen`; see `isFullscreen`'s own comment
+    /// on why `horizontalSizeClass` is what actually separates them),
+    /// but the OUTER display never goes `.regular`, so reaching this
+    /// branch at all already rules laptop out. Otherwise, any sign of
+    /// Duo furniture at all (`barEdge` or a non-nil `hinge`) is the
+    /// closed pose; with neither, this is a plain regular iPhone.
+    private static func classify(
+        sizeClass: UserInterfaceSizeClass?,
+        containerSize: CGSize,
+        division: CGRect?,
+        barEdge: HorizontalEdge?,
+        hinge: DuoHingeStatus?,
+        stanceIsLandscape: Bool
+    ) -> DuoPose {
+        if sizeClass == .regular {
+            if let division {
+                return division.height > division.width ? .book : .laptop
+            }
+            return containerSize.width > containerSize.height ? .openWide : .openTall
+        }
+        if hinge == .partial, stanceIsLandscape {
+            return .tent
+        }
+        if barEdge != nil || hinge != nil {
+            return .closed
+        }
+        return .regularPhone
     }
 
     /// The rectangle, inside a container of `containerSize`, that
@@ -423,5 +545,51 @@ struct ToolbarVerticalEdgeReader: View {
             .allowsHitTesting(false)
             .accessibilityHidden(true)
             .onChange(of: edge, initial: true) { _, newValue in onChange(newValue) }
+    }
+}
+
+/// The hinge's own equivalent of `ToolbarVerticalEdgeReader`: a
+/// zero-size, non-interactive view whose only job is converting
+/// `onHingeChange`'s SDK types into this file's plain, always-available
+/// `DuoHingeStatus`/`Double` pair, and reporting them up to a host
+/// view's own `@State`.
+///
+/// `onHingeChange(isEnabled:_:)` has no `initial:` parameter (confirmed
+/// against `SwiftUICore.swiftinterface`), unlike `.onChange(of:initial:)`
+/// above — so, unlike `toolbarVerticalEdge`, the first real value may
+/// arrive late, after the view mounts, rather than on the first frame.
+/// The classifier (`DuoLayout.classify`) only ever needs the hinge for
+/// the tent pose, which requires a `.partial` hinge AND a landscape
+/// device stance together — never true at launch — so a hinge reading
+/// that is still `nil` for the first frame or two costs nothing there;
+/// every other pose decides without it. Step 1's own build-list check
+/// is exactly this: note on the sim whether `onHingeChange` fires at
+/// mount at all.
+@available(iOS 27.1, *)
+struct HingeReader: View {
+    let onChange: (DuoHingeStatus?, Double?) -> Void
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+            .onHingeChange { _, new in
+                onChange(new.hinge.map { Self.mirror($0.status) }, new.hinge?.angle.degrees)
+            }
+    }
+
+    /// `DeviceHinge.Status` is a struct, not a Swift enum (three static
+    /// members, `.closed`/`.partiallyOpen`/`.fullyOpen`) — so a `switch`
+    /// over it cannot be exhaustive from the compiler's own point of
+    /// view. This reads the two cases `DuoLayout.classify` actually
+    /// distinguishes (`.closed`, `.full`) and folds anything else,
+    /// including `.partiallyOpen`, into `.partial` — the correct
+    /// default, since partial is the only status with more than one
+    /// member in practice.
+    private static func mirror(_ status: DeviceHinge.Status) -> DuoHingeStatus {
+        if status == .closed { return .closed }
+        if status == .fullyOpen { return .full }
+        return .partial
     }
 }

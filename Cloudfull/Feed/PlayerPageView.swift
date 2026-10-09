@@ -297,12 +297,33 @@ struct PlayerPageView: View {
     #if DEBUG
     private static let rotationLog = Logger(subsystem: "com.cloudfull.app", category: "Rotation")
 
-    /// `-cloudfull-log-rotation`: one line per window-size or
-    /// device-stance change, for example
-    /// "rotation_landscapeLeft_compact_466x678". This is how step 6's
-    /// `horizontalSizeClass != .regular` term in `isFullscreen` was
-    /// confirmed against the real sim, pose by pose, rather than
-    /// assumed from the SDK headers alone: read with
+    /// `CGRect?` as `"x,y,w,h"`, or `"none"` — the shared formatting
+    /// `logRotationPose` uses for both `duoLayout.division` and
+    /// `duoLayout.occlusion`, truncating the same way `windowSize`
+    /// already does in that message.
+    private func rectProbe(_ rect: CGRect?) -> String {
+        guard let rect else { return "none" }
+        return "\(Int(rect.minX)),\(Int(rect.minY)),\(Int(rect.width)),\(Int(rect.height))"
+    }
+
+    /// `"hinge-<status|nil>-<degrees|nil>"`, from `duoLayout.hinge`/
+    /// `duoLayout.hingeDegrees`. Both are `nil` together until the
+    /// first `onHingeChange` delivery — see `HingeReader`'s own
+    /// comment — or always, on a device/OS with no hinge.
+    private var hingeProbe: String {
+        let status = duoLayout.hinge?.rawValue ?? "nil"
+        let degrees = duoLayout.hingeDegrees.map { "\(Int($0))" } ?? "nil"
+        return "hinge-\(status)-\(degrees)"
+    }
+
+    /// `-cloudfull-log-rotation`: one line per window-size, device-stance,
+    /// pose, or hinge change, for example
+    /// "rotation_landscapeLeft_compact_466x678_pose-closed_div-none_occ-none_hinge-closed-0".
+    /// This is how step 6's `horizontalSizeClass != .regular` term in
+    /// `isFullscreen` was confirmed against the real sim, pose by pose,
+    /// rather than assumed from the SDK headers alone — and, as of step 1,
+    /// how `DuoLayout.classify`'s own pose and the fold-orientation
+    /// (`div-`) arithmetic are confirmed the same way. Read with
     /// `xcrun simctl spawn <UDID> log stream --predicate 'subsystem ==
     /// "com.cloudfull.app" and category == "Rotation"' --style compact`
     /// the same way `OrientationMonitor`'s own log is read. DEBUG-only
@@ -313,6 +334,7 @@ struct PlayerPageView: View {
         guard isActive, DiagnosticsGate.isOn("-cloudfull-log-rotation") else { return }
         let sizeClass = horizontalSizeClass.map { "\($0)" } ?? "nil"
         let message = "rotation_\(deviceStance.probeName)_\(sizeClass)_\(Int(windowSize.width))x\(Int(windowSize.height))"
+            + "_pose-\(duoLayout.pose.rawValue)_div-\(rectProbe(duoLayout.division))_occ-\(rectProbe(duoLayout.occlusion))_\(hingeProbe)"
         Self.rotationLog.notice("\(message, privacy: .public)")
         DiagnosticsLog.shared.log("Rotation", message)
     }
@@ -727,6 +749,19 @@ struct PlayerPageView: View {
             // size it already was. The `onChange(of: proxy.size)` log
             // call above would miss exactly that moment, so this is a
             // second, independent call site for the same diagnostic.
+            logRotationPose()
+        }
+        // Step 1: two more independent call sites for the same
+        // diagnostic. A pose can change with no change to `proxy.size`
+        // or `deviceStance` at all — the fold opening while the window
+        // itself stays whatever shape it already was — and the hinge
+        // can change with no change to the classified pose — every
+        // status short of the `.partial` + landscape combination the
+        // tent alone needs.
+        .onChange(of: duoLayout.pose) { _, _ in
+            logRotationPose()
+        }
+        .onChange(of: duoLayout.hinge) { _, _ in
             logRotationPose()
         }
         .onChange(of: isMuted) { _, newValue in

@@ -90,6 +90,23 @@ struct FeedView: View {
     /// `if #available` branch in `body`, which writes into this plain,
     /// always-available property instead.
     @State private var toolbarVerticalEdge: HorizontalEdge?
+    /// This frame's hinge reading, from `HingeReader` — `DuoLayout.swift`'s
+    /// own mirror of `ToolbarVerticalEdgeReader`, mounted the same way,
+    /// just below it. `nil` until the first `onHingeChange` delivery
+    /// (which has no `initial:` — see `HingeReader`'s own comment) or on
+    /// a device/OS with no hinge at all.
+    @State private var hingeStatus: DuoHingeStatus?
+    /// `DeviceHinge.angle.degrees` alongside `hingeStatus`, read by
+    /// `logRotationPose`'s DEBUG probe only.
+    @State private var hingeDegrees: Double?
+    /// `.regular` only on the Duo's inner display — the same size-class
+    /// read `PlayerPageView.isFullscreen`/`isLandscapeFit` already lean
+    /// on, needed here too: `DuoLayout.classify` cannot tell the inner
+    /// display's fully-open poses (`.openWide`/`.openTall`) or its
+    /// partially-open ones (`.book`/`.laptop`) from the outer display's
+    /// compact-width poses without it. A plain `@Environment` read, no
+    /// `#available` gate — size classes predate iOS 27.1.
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     /// The signal from whichever page's `PlayerPageView` currently reports
     /// `isFullscreen == true`, through `onFullscreenChanged`. This mirrors
     /// `isScrubbing`. Only the centered page can ever be fullscreen, so at
@@ -234,7 +251,14 @@ struct FeedView: View {
     /// had, with no availability check of its own to write.
     private func resolvedDuoLayout(rootProxy: GeometryProxy) -> DuoLayout {
         if #available(iOS 27.1, *) {
-            return DuoLayout.current(proxy: rootProxy, toolbarVerticalEdge: toolbarVerticalEdge)
+            return DuoLayout.current(
+                proxy: rootProxy,
+                toolbarVerticalEdge: toolbarVerticalEdge,
+                horizontalSizeClass: horizontalSizeClass,
+                hinge: hingeStatus,
+                hingeDegrees: hingeDegrees,
+                stanceIsLandscape: orientation.stance.isLandscape
+            )
         }
         return .none
     }
@@ -257,6 +281,15 @@ struct FeedView: View {
             // property on `FeedView` itself.
             if #available(iOS 27.1, *) {
                 ToolbarVerticalEdgeReader { toolbarVerticalEdge = $0 }
+                // Zero-size; only ever updates `hingeStatus`/`hingeDegrees`
+                // above. Mounted right next to `ToolbarVerticalEdgeReader`
+                // — see `HingeReader`'s own comment for why its first
+                // delivery, unlike that reader's, may arrive after this
+                // frame.
+                HingeReader { status, degrees in
+                    hingeStatus = status
+                    hingeDegrees = degrees
+                }
             }
             content(safeAreaTop: safeAreaTop, duoLayout: duoLayout)
             // The whole global chrome layer (mute, the shrink progress

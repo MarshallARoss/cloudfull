@@ -166,6 +166,14 @@ struct PhotoFeedView: View {
     /// bar (req 1 of the Duo plan). `PhotoTopBar` is the one piece that
     /// must stop clear of the bar's own time/connectivity ring.
     @State private var toolbarVerticalEdge: HorizontalEdge?
+    /// Fed to `DuoLayout.current` below, the same as
+    /// `FeedView.horizontalSizeClass`. Nothing in this view reads
+    /// `duoLayout.pose` itself today — Photos has no nightstand, and
+    /// `PhotoTopBar`'s own placement only ever needed `barEdge`/
+    /// `barWidth` — but the classifier needs this input to tell the
+    /// Duo's inner-display poses apart regardless, and a plain
+    /// `@Environment` read costs nothing.
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     #if DEBUG
     /// Mirrors whichever post last reported itself both current and
@@ -200,7 +208,18 @@ struct PhotoFeedView: View {
     /// own comment for why.
     private func resolvedDuoLayout(rootProxy: GeometryProxy) -> DuoLayout {
         if #available(iOS 27.1, *) {
-            return DuoLayout.current(proxy: rootProxy, toolbarVerticalEdge: toolbarVerticalEdge)
+            // No `HingeReader`/`OrientationMonitor` mounted here — this
+            // view has no tent/nightstand concept, the one pose that
+            // needs either input (see `DuoLayout.classify`) — so both
+            // are passed as their "nothing to report" values.
+            return DuoLayout.current(
+                proxy: rootProxy,
+                toolbarVerticalEdge: toolbarVerticalEdge,
+                horizontalSizeClass: horizontalSizeClass,
+                hinge: nil,
+                hingeDegrees: nil,
+                stanceIsLandscape: false
+            )
         }
         return .none
     }
