@@ -151,6 +151,22 @@ struct PhotoFeedView: View {
     /// `.task`, to seed `isLiveOn`, and never writes it.
     @AppStorage("settings.liveDefaultOn") private var liveDefaultOn = true
 
+    /// The vertical bar's edge on the iPhone Duo's closed screen; `nil`
+    /// on a regular iPhone, on the open Duo, and on anything below iOS
+    /// 27.1 (this plain stored property's default). Mirrors
+    /// `FeedView.toolbarVerticalEdge` — see that property's own comment
+    /// for why `ToolbarVerticalEdgeReader`, not a plain
+    /// `@Environment(\.toolbarVerticalEdge)` property, is what writes
+    /// this.
+    ///
+    /// Used only by `PhotoTopBar`'s own placement in `body`: everything
+    /// else in this view — the posts, their header, actions row, and
+    /// caption, and `PhotoImagePipeline`'s configured width — reads
+    /// `rootProxy.size.width` directly and stays full width, bar or no
+    /// bar (req 1 of the Duo plan). `PhotoTopBar` is the one piece that
+    /// must stop clear of the bar's own time/connectivity ring.
+    @State private var toolbarVerticalEdge: HorizontalEdge?
+
     #if DEBUG
     /// Mirrors whichever post last reported itself both current and
     /// playing as a Live post, for the `photo_live_state_` accessibility
@@ -176,6 +192,19 @@ struct PhotoFeedView: View {
     /// by more than one tick of this throttle.
     private let geometryComputeInterval: TimeInterval = 1.0 / 20
 
+    /// `DuoLayout.current`, behind the `#available` check its own
+    /// declaration requires. Returns `DuoLayout.none` on anything below
+    /// iOS 27.1. Mirrors `FeedView.resolvedDuoLayout` exactly, but has
+    /// only one caller here — `PhotoTopBar`'s width in `body` — since
+    /// nothing else in this view needs it. See `toolbarVerticalEdge`'s
+    /// own comment for why.
+    private func resolvedDuoLayout(rootProxy: GeometryProxy) -> DuoLayout {
+        if #available(iOS 27.1, *) {
+            return DuoLayout.current(proxy: rootProxy, toolbarVerticalEdge: toolbarVerticalEdge)
+        }
+        return .none
+    }
+
     var body: some View {
         // Counts how often a scroll invalidates this whole body. See
         // `PhotoPerfProbe`'s own doc comment for why that number, not the
@@ -187,12 +216,31 @@ struct PhotoFeedView: View {
         #endif
         GeometryReader { rootProxy in
             let safeAreaTop = rootProxy.safeAreaInsets.top
+            let duoLayout = resolvedDuoLayout(rootProxy: rootProxy)
+            // The photo itself, its header, actions row, and caption all
+            // measure against `rootProxy.size.width` — the full window,
+            // including the closed Duo's trailing vertical-bar column.
+            // Nothing here reads `duoLayout.availableRect`, the
+            // exclusion video's stage uses for the opposite requirement
+            // (stage beside the bar, rail in it): Photos wants the bar
+            // column filled with photo, not held clear of it. See
+            // `PhotoPostView.containerWidth` and `PhotoCaptionView`,
+            // which both receive this same number, unchanged.
+            //
             // The image pipeline requests and caches images at exactly the
             // post's own width. It must learn that width from the same
             // layout the posts use. This call is idempotent; only a real
             // change does work.
             let _ = PhotoImagePipeline.shared.configure(widthPoints: rootProxy.size.width, scale: displayScale)
             ZStack(alignment: .top) {
+                // Zero-size; only ever updates `toolbarVerticalEdge`
+                // above. See that property's own comment, and
+                // `FeedView`'s identical helper, for why the read is
+                // confined to this small view instead of a plain
+                // `@Environment` property on `PhotoFeedView` itself.
+                if #available(iOS 27.1, *) {
+                    ToolbarVerticalEdgeReader { toolbarVerticalEdge = $0 }
+                }
                 Color.black.ignoresSafeArea()
                 content(containerWidth: rootProxy.size.width, safeAreaTop: safeAreaTop, viewportHeight: rootProxy.size.height)
                 // An opaque band that keeps a scrolling post's caption
@@ -202,12 +250,27 @@ struct PhotoFeedView: View {
                 // It never intercepts a touch, so the pills still get
                 // every tap.
                 topChromeBand(safeAreaTop: safeAreaTop)
+                // The two chained `.frame`s below clamp this row to
+                // `duoLayout.availableRect`'s width and then pin it to
+                // the leading edge of the full window, so its trailing
+                // content — the space counter, the bin button — stops
+                // before the closed Duo's vertical bar column instead
+                // of drawing under the system's own time/connectivity
+                // ring that lives there. The photo underneath still
+                // fills that column (see the comment above); only this
+                // row holds back from it. `availableRect` returns the
+                // full window unchanged on a regular iPhone and on the
+                // open Duo, so both chained frames are no-ops there —
+                // `binButton` lands exactly where it always has.
                 PhotoTopBar(
                     trashService: trashService,
                     isLiveOn: $isLiveOn,
                     safeAreaTop: safeAreaTop,
                     onOpenBinRequested: { Usage.shared.binOpened(); showTrash = true }
                 )
+                .frame(width: duoLayout.availableRect(containerSize: rootProxy.size, safeAreaTop: safeAreaTop).width,
+                       alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 // Every mode mounts exactly one instance. `bottomBand: 0`
                 // because Photos has no 9:16 stage.
                 ChinNavigation(bottomBand: 0)
