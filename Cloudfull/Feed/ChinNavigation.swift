@@ -45,6 +45,25 @@ struct ChinNavigation: View {
     /// band; other hosts pass `0`.
     let bottomBand: CGFloat
 
+    /// The rail's own lowest reach this frame, in this view's own
+    /// coordinate space (0 at the top) — see `DuoLayout.railBottom`.
+    ///
+    /// `0`, the default: no rail shares this screen (`SettingsView`,
+    /// `PhotoFeedView`, and every build below iOS 27.1 or on a regular
+    /// iPhone). The chin keeps its plain, fixed anchor unconditionally,
+    /// with no dependence on this view's own geometry at all — see
+    /// `resolvedBottomPadding`'s guard.
+    ///
+    /// A positive value: `FeedView`'s Videos mode, the one place a
+    /// rail actually exists. The chin derives a minimum gap below it
+    /// instead, only pulling its own anchor closer to the page bottom
+    /// when the plain fixed anchor would not already clear the rail —
+    /// see `resolvedBottomPadding`. On every device this has been
+    /// measured against so far, the plain anchor already clears it, so
+    /// this is a safety net for a short or unusually shaped screen,
+    /// not an observed change on today's iPhones.
+    let railBottom: CGFloat
+
     @State private var isExpanded = false
     @ObservedObject private var modeStore = AppModeStore.shared
     // Collapses the switcher when either pager starts to scroll.
@@ -88,8 +107,9 @@ struct ChinNavigation: View {
         case shell
     }
 
-    init(bottomBand: CGFloat) {
+    init(bottomBand: CGFloat, railBottom: CGFloat = 0) {
         self.bottomBand = bottomBand
+        self.railBottom = railBottom
     }
 
     var body: some View {
@@ -154,11 +174,15 @@ struct ChinNavigation: View {
                 switcher(containerWidth: proxy.size.width)
                     // 12pt from the right edge, so the control does not
                     // sit under the trash can. The bottom padding centers
-                    // the shape on `captionCenterFromBottom`. The
-                    // control's center then aligns with the caption text
-                    // in Videos and Photos.
+                    // the shape on `captionCenterFromBottom`, pulled
+                    // closer to the page bottom only if the rail's own
+                    // reach this frame would otherwise sit under it —
+                    // see `resolvedBottomPadding`. The control's center
+                    // then aligns with the caption text in Videos and
+                    // Photos, exactly as before, on every screen that
+                    // does not need the adjustment.
                     .padding(.trailing, 12)
-                    .padding(.bottom, StageGeometry.captionCenterFromBottom - currentHeight / 2)
+                    .padding(.bottom, resolvedBottomPadding(containerHeight: proxy.size.height))
             }
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: .bottomTrailing)
         }
@@ -212,6 +236,38 @@ struct ChinNavigation: View {
     private static let collapsedTapTarget: CGFloat = 44
     private static let expandedHeight: CGFloat = 56
     private var currentHeight: CGFloat { isExpanded ? Self.expandedHeight : Self.collapsedHeight }
+
+    /// Minimum gap kept between this control's own top edge and the
+    /// rail's last button (`railBottom`), when one exists on this
+    /// screen. A visual gap, like `DuoLayout.railTopClearance` above
+    /// the rail itself — not a safety margin the rail's own geometry
+    /// does not already guarantee.
+    private static let railGap: CGFloat = 8
+
+    /// This control's own bottom padding — the distance between its
+    /// own bottom edge and the page's.
+    ///
+    /// `railBottom <= 0` (the default, every host but `FeedView`'s
+    /// Videos mode): returns the plain, fixed anchor unconditionally,
+    /// with no dependence on `containerHeight` at all — pixel-identical
+    /// to what this control has always done.
+    ///
+    /// `railBottom > 0`: that plain anchor still wins whenever it
+    /// already clears the rail's own reach by `railGap` or more — the
+    /// case on every iPhone and iPhone Duo screen this has been
+    /// measured against, since the rail (overlaid on the stage, or in
+    /// its own column; see `DuoLayout.railBottom`) does not reach as
+    /// far down as the chin's own fixed spot. Only a screen shaped
+    /// such that the rail's reach comes closer than that pulls this
+    /// control's own anchor down toward the page bottom instead,
+    /// capped at 0 (flush with the bottom edge, never past it).
+    private func resolvedBottomPadding(containerHeight: CGFloat) -> CGFloat {
+        let fixedAnchor = StageGeometry.captionCenterFromBottom - currentHeight / 2
+        guard railBottom > 0 else { return fixedAnchor }
+        let railClearFromBottom = containerHeight - railBottom
+        let maxAnchor = railClearFromBottom - Self.railGap - currentHeight
+        return min(fixedAnchor, max(0, maxAnchor))
+    }
 
     /// Inset between the expanded capsule's edge and the segmented control
     /// inside it, per side. FabBar uses the same 2pt around its own

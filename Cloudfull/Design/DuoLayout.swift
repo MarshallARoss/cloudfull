@@ -213,6 +213,34 @@ struct DuoLayout {
         let systemBottom = isClosedBar ? max(occlusion?.maxY ?? 0, safeAreaTop) : safeAreaTop
         return systemBottom + Self.railTopClearance
     }
+
+    /// The actual bottom edge of the rail's last button (Delete) this
+    /// frame, in the page's own coordinate space (0 at the top) —
+    /// whichever layout the rail is using.
+    ///
+    /// No rail column (a regular iPhone, or an open Duo — see
+    /// `railColumn`'s own comment on that case): the rail is the
+    /// pre-Duo overlay, bottom-anchored against the video's own seam —
+    /// see `FeedPageContent.actionRail`'s identical
+    /// `bottomBand + Rail.seamClearance` padding, which this mirrors
+    /// so the two can never disagree.
+    ///
+    /// A rail column (the closed bar, today): the rail is anchored
+    /// from the column's own top instead — see
+    /// `railContentTop(safeAreaTop:)` — so its bottom is that anchor
+    /// plus the rail's own fixed height, `Rail.columnHeight`.
+    ///
+    /// `ChinNavigation` reads this (as `railBottom`) to keep its own
+    /// top edge below the rail's, with a minimum gap, instead of
+    /// relying on a fixed offset that only happens to clear it on
+    /// whichever screen it was tuned against.
+    func railBottom(safeAreaTop: CGFloat, containerSize: CGSize) -> CGFloat {
+        if railColumnRect(containerSize: containerSize, safeAreaTop: safeAreaTop) != nil {
+            return railContentTop(safeAreaTop: safeAreaTop) + Rail.columnHeight
+        }
+        let bottomBand = StageGeometry.bottomBand(safeAreaTop: safeAreaTop, containerSize: containerSize)
+        return containerSize.height - (bottomBand + Rail.seamClearance)
+    }
 }
 
 /// Reads `EnvironmentValues.toolbarVerticalEdge` and reports it through

@@ -225,8 +225,15 @@ struct FeedView: View {
             // `FeedPageContent`. `FeedPageContent` is instantiated once
             // per mounted page and would produce up to three
             // `chin_nav_button` elements.
+            //
+            // `railBottom` is 0 (its default) on every other host
+            // (`SettingsView`, `PhotoFeedView`), which keeps the chin's
+            // plain fixed anchor there with no dependence on this
+            // view's own geometry at all. Only here, in Videos mode,
+            // is there a real rail for the chin to ever need to clear.
             ChinNavigation(bottomBand: StageGeometry.bottomBand(safeAreaTop: safeAreaTop,
-                                                               containerSize: rootProxy.size))
+                                                               containerSize: rootProxy.size),
+                           railBottom: duoLayout.railBottom(safeAreaTop: safeAreaTop, containerSize: rootProxy.size))
                 .opacity(isFullscreen ? 0 : 1)
                 .allowsHitTesting(!isFullscreen)
                 .accessibilityHidden(isFullscreen)
