@@ -64,6 +64,29 @@ struct ChinNavigation: View {
     /// not an observed change on today's iPhones.
     let railBottom: CGFloat
 
+    /// When non-nil, the collapsed resting position: `.position(x:y:)`
+    /// to this point instead of the usual bottom-trailing anchor
+    /// (`.padding(.trailing, 12)` + `resolvedBottomPadding`), and
+    /// `collapsedHeight` becomes `Rail.hit` instead of the plain
+    /// default, to match a rail button's own size.
+    ///
+    /// `nil` everywhere but `FeedView`'s open-tall rail column (the
+    /// bar-off pose): the owner's own review there — "the buttons are
+    /// too high," and separately, "[the chin] should at least be
+    /// bigger and align with the other rail items" — asked for this
+    /// control to sit beside the rail's own last item, the same size
+    /// as a rail button, rather than at the fixed bottom-trailing spot
+    /// every other host still uses unconditionally.
+    ///
+    /// Read only while collapsed (see `body`): an EXPANDED capsule
+    /// centred this close to the trailing edge would grow mostly
+    /// off-screen, since `.position()` centres the whole shape
+    /// wherever its own frame currently is. A tap in this pose falls
+    /// back to the ordinary bottom-trailing anchor the moment
+    /// `isExpanded` turns true, the same anchor the capsule has always
+    /// expanded from — no new expanded layout was built for this pose.
+    let railAlignedCenter: CGPoint?
+
     @State private var isExpanded = false
     @ObservedObject private var modeStore = AppModeStore.shared
     // Collapses the switcher when either pager starts to scroll.
@@ -107,9 +130,10 @@ struct ChinNavigation: View {
         case shell
     }
 
-    init(bottomBand: CGFloat, railBottom: CGFloat = 0) {
+    init(bottomBand: CGFloat, railBottom: CGFloat = 0, railAlignedCenter: CGPoint? = nil) {
         self.bottomBand = bottomBand
         self.railBottom = railBottom
+        self.railAlignedCenter = railAlignedCenter
     }
 
     var body: some View {
@@ -171,18 +195,28 @@ struct ChinNavigation: View {
                         .accessibilityHidden(true)
                 }
 
-                switcher(containerWidth: proxy.size.width)
-                    // 12pt from the right edge, so the control does not
-                    // sit under the trash can. The bottom padding centers
-                    // the shape on `captionCenterFromBottom`, pulled
-                    // closer to the page bottom only if the rail's own
-                    // reach this frame would otherwise sit under it —
-                    // see `resolvedBottomPadding`. The control's center
-                    // then aligns with the caption text in Videos and
-                    // Photos, exactly as before, on every screen that
-                    // does not need the adjustment.
-                    .padding(.trailing, 12)
-                    .padding(.bottom, resolvedBottomPadding(containerHeight: proxy.size.height))
+                if let railAlignedCenter, !isExpanded {
+                    // Pose 5 (the open-tall rail column): rests beside
+                    // the rail's own last item instead — see
+                    // `railAlignedCenter`'s own comment. Only while
+                    // collapsed; expanding falls through to the
+                    // ordinary anchor below, unchanged.
+                    switcher(containerWidth: proxy.size.width)
+                        .position(x: railAlignedCenter.x, y: railAlignedCenter.y)
+                } else {
+                    switcher(containerWidth: proxy.size.width)
+                        // 12pt from the right edge, so the control does not
+                        // sit under the trash can. The bottom padding centers
+                        // the shape on `captionCenterFromBottom`, pulled
+                        // closer to the page bottom only if the rail's own
+                        // reach this frame would otherwise sit under it —
+                        // see `resolvedBottomPadding`. The control's center
+                        // then aligns with the caption text in Videos and
+                        // Photos, exactly as before, on every screen that
+                        // does not need the adjustment.
+                        .padding(.trailing, 12)
+                        .padding(.bottom, resolvedBottomPadding(containerHeight: proxy.size.height))
+                }
             }
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: .bottomTrailing)
         }
@@ -230,12 +264,20 @@ struct ChinNavigation: View {
     // what the finger actually has to hit to 44pt, Apple's own minimum.
     // The glass circle stays the size it looks, so the wider tap target
     // costs nothing visually.
-    private static let collapsedHeight: CGFloat = 36
+    //
+    // `collapsedHeight` is an instance property, not `static`, only
+    // because `railAlignedCenter` (pose 5, the open-tall rail column)
+    // needs a different collapsed size — see that property's own
+    // comment. Every other host keeps the plain 36pt default, since
+    // `railAlignedCenter` is `nil` there.
+    private var collapsedHeight: CGFloat { railAlignedCenter != nil ? Rail.hit : 36 }
     /// The invisible square the collapsed button answers to. Apple's
-    /// Human Interface Guidelines set the minimum tap target at 44pt.
-    private static let collapsedTapTarget: CGFloat = 44
+    /// Human Interface Guidelines set the minimum tap target at 44pt —
+    /// `collapsedHeight` can grow past that (pose 5's `Rail.hit`, 40pt,
+    /// still does not) but this never shrinks below it.
+    private var collapsedTapTarget: CGFloat { max(44, collapsedHeight) }
     private static let expandedHeight: CGFloat = 56
-    private var currentHeight: CGFloat { isExpanded ? Self.expandedHeight : Self.collapsedHeight }
+    private var currentHeight: CGFloat { isExpanded ? Self.expandedHeight : collapsedHeight }
 
     /// Minimum gap kept between this control's own top edge and the
     /// rail's last button (`railBottom`), when one exists on this
@@ -336,8 +378,8 @@ struct ChinNavigation: View {
         // that margin actually answer touches, instead of being empty
         // space.
         .frame(
-            width: isExpanded ? width : Self.collapsedTapTarget,
-            height: isExpanded ? Self.expandedHeight : Self.collapsedTapTarget
+            width: isExpanded ? width : collapsedTapTarget,
+            height: isExpanded ? Self.expandedHeight : collapsedTapTarget
         )
         .contentShape(Rectangle())
     }
@@ -359,7 +401,7 @@ struct ChinNavigation: View {
             // two objects with a gap between them. One animated frame
             // gives a continuous shrink.
             Color.clear
-                .frame(width: isExpanded ? width : Self.collapsedHeight, height: currentHeight)
+                .frame(width: isExpanded ? width : collapsedHeight, height: currentHeight)
                 .feedGlass(in: Capsule())
                 .glassEffectID(GlassPart.shell, in: glassNamespace)
         }
@@ -418,7 +460,7 @@ struct ChinNavigation: View {
                 // element attached to it, would stay clipped to 36pt.
                 // The button would then be missing from the
                 // accessibility tree.
-                .frame(width: Self.collapsedHeight, height: Self.collapsedHeight)
+                .frame(width: collapsedHeight, height: collapsedHeight)
                 .contentShape(Circle())
         }
         // `.plain`, not `.glass`: the circle's glass is drawn by

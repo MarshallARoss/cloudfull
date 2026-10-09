@@ -204,6 +204,29 @@ struct FeedView: View {
     /// parameter — see `captionZone`'s `hidden:` argument.
     private var hidesGlobalChrome: Bool { isFullscreen || isLandscapeFit }
 
+    /// Pose 5's own chin position: beside the rail's own last item in
+    /// the open-tall column (bar off), `Rail.spacing` below it — the
+    /// same gap the rail's own five buttons use between each other —
+    /// x-centred on that same column. `nil` wherever the column does
+    /// not apply (every other pose, and every regular iPhone), which
+    /// leaves `ChinNavigation`'s own ordinary bottom-trailing anchor
+    /// as the only one in play there; see `ChinNavigation.railAlignedCenter`'s
+    /// own comment for why this is `nil` everywhere else, and why it
+    /// is read only while collapsed.
+    ///
+    /// The owner's own review of this pose asked for it directly:
+    /// "[the chin] should at least be bigger and align with the other
+    /// rail items" — same x-centre as the rail, below its last item,
+    /// with the rail's own spacing.
+    private func railAlignedChinCenter(duoLayout: DuoLayout, safeAreaTop: CGFloat, containerSize: CGSize) -> CGPoint? {
+        guard !duoLayout.isClosedBar,
+              let columnRect = duoLayout.railColumnRect(containerSize: containerSize, safeAreaTop: safeAreaTop),
+              let extent = duoLayout.railVerticalExtent(containerSize: containerSize, safeAreaTop: safeAreaTop)
+        else { return nil }
+        let centerY = extent.bottom + Rail.spacing + Rail.hit / 2
+        return CGPoint(x: columnRect.midX, y: centerY)
+    }
+
     /// `DuoLayout.current`, behind the `#available` check its own
     /// declaration requires. Returns `DuoLayout.none` on anything below
     /// iOS 27.1, so every caller downstream — today, `PlayerPageView` —
@@ -259,7 +282,8 @@ struct FeedView: View {
             // is there a real rail for the chin to ever need to clear.
             ChinNavigation(bottomBand: StageGeometry.bottomBand(safeAreaTop: safeAreaTop,
                                                                containerSize: rootProxy.size),
-                           railBottom: duoLayout.railBottom(safeAreaTop: safeAreaTop, containerSize: rootProxy.size))
+                           railBottom: duoLayout.railBottom(safeAreaTop: safeAreaTop, containerSize: rootProxy.size),
+                           railAlignedCenter: railAlignedChinCenter(duoLayout: duoLayout, safeAreaTop: safeAreaTop, containerSize: rootProxy.size))
                 .opacity(hidesGlobalChrome ? 0 : 1)
                 .allowsHitTesting(!hidesGlobalChrome)
                 .accessibilityHidden(hidesGlobalChrome)
@@ -940,6 +964,20 @@ struct FeedView: View {
         .frame(width: duoLayout.availableRect(containerSize: containerSize, safeAreaTop: safeAreaTop).width,
                alignment: .leading)
         .padding(.top, topChromeTopPadding(safeAreaTop: safeAreaTop, containerSize: containerSize))
+        // Keeps `muteButton` (the row's own leading edge) clear of the
+        // display's own rounded top corner — reported on the open-wide
+        // (landscape, bar-on) pose, where this row starts flush at the
+        // window's leading edge and the corner there is big enough to
+        // actually clip it. `containerCornerOffset`, not a hand-tuned
+        // margin: it is iOS 26's own API for exactly this (confirmed
+        // in the SwiftUICore swiftinterface — `GeometryProxy.
+        // containerCornerInsets`/`View.containerCornerOffset(_:sizeToFit:)`,
+        // both `@available(iOS 26.0, …)`, no gate needed against this
+        // app's own deployment target). A no-op on a regular iPhone
+        // and on the Duo's other poses, where the existing padding and
+        // safe area already clear the corner on their own; this only
+        // nudges the row further in when they do not.
+        .containerCornerOffset(.top)
     }
 
     /// Height of the empty band the fixed 9:16 stage leaves above and below
@@ -1971,6 +2009,14 @@ private struct FeedPageContent: View {
         .padding(.leading, 16)
         .padding(.bottom, 20)
         .padding(.trailing, trailingClearance)
+        // Keeps this block clear of the display's own rounded bottom
+        // corner — reported on the open-wide (landscape, bar-on) pose,
+        // where this caption sits flush at the window's leading edge
+        // and the corner there is big enough to actually clip it. See
+        // `FeedView.topChrome`'s identical `.containerCornerOffset`
+        // for the API itself; a no-op everywhere the existing padding
+        // and safe area already clear the corner on their own.
+        .containerCornerOffset(.bottom)
         .opacity((isScrubbing || hidden) ? 0 : 1)
         .animation(.easeOut(duration: 0.15), value: isScrubbing)
         .animation(.easeOut(duration: 0.15), value: hidden)

@@ -459,24 +459,22 @@ struct PlayerPageView: View {
             // down from `FeedView`, not `proxy.safeAreaInsets.top`,
             // which reads 0 under the pager's `.ignoresSafeArea()`. See
             // `resolvedDownShift`'s own doc comment (below `body`) for
-            // the full reasoning across every case this now covers —
-            // pulled out of this `let`, which the Swift type checker
-            // could not resolve inline in reasonable time once it grew
-            // branches for `isLandscapeFit` and `hasOpenColumn` too.
+            // the full reasoning — pulled out of this `let`, which the
+            // Swift type checker could not resolve inline in
+            // reasonable time once it grew a branch for
+            // `isLandscapeFit` too.
             //
-            // `hasOpenColumn` (bar off — the open-tall pose): true
-            // exactly when `availableRect` (`DuoLayout.swift`) reserves
-            // the top chrome's own band directly rather than as a side
-            // effect of the column's own width, the way an earlier
-            // version did — see that function's own comment.
-            let hasOpenColumn = !duoLayout.isClosedBar
-                && duoLayout.railColumnRect(containerSize: proxy.size, safeAreaTop: safeAreaTop) != nil
+            // The open-tall pose (bar off) reads this same path as the
+            // closed bar column and a regular iPhone, deliberately: the
+            // owner's own review asked for it to look like the closed
+            // pose, chrome overlaid on the video rather than pushing it
+            // down into its own band — see `DuoLayout.availableRect`'s
+            // own comment for the reservation this undoes. An earlier
+            // version read a different path here for that pose; it no
+            // longer needs one.
             let downShift = resolvedDownShift(
                 isFullscreen: isFullscreen,
                 isLandscapeFit: isLandscapeFit,
-                hasOpenColumn: hasOpenColumn,
-                stageMinY: stageRect.minY,
-                halfLeftover: halfLeftover,
                 stageHeight: stageHeight,
                 containerHeight: proxy.size.height
             )
@@ -486,17 +484,13 @@ struct PlayerPageView: View {
             // line stays inside the real bottom band instead of
             // drifting into the video.
             //
-            // One formula for every case, including the three above
-            // this comment: the exact complement of `topSpace` within
-            // the page, given `canvasHeight`. This is algebraically
-            // identical to `StageGeometry.bottomBand`'s own result
-            // whenever `topSpace` came from `StageGeometry.downShift`
-            // (both reduce to `naturalBand - downShift`), so the
-            // regular-iPhone and closed-bar cases are unchanged; for
-            // `hasOpenColumn` it correctly comes out to 0 today — the
-            // scrubber-vs-caption gap (plan item 86's "seam band") is
-            // its own, separate, not-yet-landed fix, deliberately left
-            // untouched here.
+            // One formula for every case: the exact complement of
+            // `topSpace` within the page, given `canvasHeight`. This is
+            // algebraically identical to `StageGeometry.bottomBand`'s
+            // own result whenever `topSpace` came from
+            // `StageGeometry.downShift` (both reduce to
+            // `naturalBand - downShift`), so every case this already
+            // covered is unchanged.
             let bottomSpace = max(0, proxy.size.height - topSpace - canvasHeight)
             ZStack {
                 Color.black
@@ -860,9 +854,9 @@ struct PlayerPageView: View {
 
     /// `body`'s own vertical shift for the stage — pulled out of
     /// `body` as a plain function, not a local `let` with its own
-    /// `if`/`else` branches, because the Swift type checker could not
-    /// resolve `body`'s own `some View` expression in reasonable time
-    /// with that much branching arithmetic inlined directly in it.
+    /// `if`/`else`, because the Swift type checker could not resolve
+    /// `body`'s own `some View` expression in reasonable time with
+    /// that much branching arithmetic inlined directly in it.
     ///
     /// `isFullscreen || isLandscapeFit`: zero. The rotated fullscreen
     /// canvas has no top chrome above it to make room for; the
@@ -871,30 +865,25 @@ struct PlayerPageView: View {
     /// band for either — both centre plainly in the available space,
     /// the same symmetric split `halfLeftover` already gives them.
     ///
-    /// `hasOpenColumn` (bar off — the open-tall pose): `stageMinY`
-    /// already IS the correct shifted position — `availableRect`
-    /// (`DuoLayout.swift`) reserves the top chrome's band directly
-    /// now, rather than as a side effect of the column's own width —
-    /// so this returns the gap between that and no shift at all
-    /// (`halfLeftover`), landing `topSpace` back on `stageMinY`
-    /// exactly.
-    ///
-    /// Otherwise (a regular iPhone, or the closed bar column): the
-    /// existing `StageGeometry.downShift`, unchanged.
+    /// Otherwise: the existing `StageGeometry.downShift`, for every
+    /// other case alike — a regular iPhone, the closed bar column, and
+    /// the open-tall column (bar off). An earlier version read a
+    /// separate path for the open-tall case, shifting the stage down
+    /// by its own top chrome's full band; the owner's own review asked
+    /// for that pose to look like the closed one instead, chrome
+    /// overlaid on the video rather than pushed below a reserved band
+    /// — see `DuoLayout.availableRect`'s own comment — so it now reads
+    /// this one path like everything else, getting whatever small
+    /// natural band `StageGeometry.downShift` finds on its own, same
+    /// as the closed bar column already did.
     private func resolvedDownShift(
         isFullscreen: Bool,
         isLandscapeFit: Bool,
-        hasOpenColumn: Bool,
-        stageMinY: CGFloat,
-        halfLeftover: CGFloat,
         stageHeight: CGFloat,
         containerHeight: CGFloat
     ) -> CGFloat {
         if isFullscreen || isLandscapeFit {
             return 0
-        }
-        if hasOpenColumn {
-            return stageMinY - halfLeftover
         }
         return StageGeometry.downShift(safeAreaTop: safeAreaTop, stageHeight: stageHeight, containerHeight: containerHeight)
     }
