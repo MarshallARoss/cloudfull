@@ -10,6 +10,7 @@ import SwiftUI
 import AVFoundation
 import Combine
 import UIKit
+import os
 
 /// One full-screen page in the video feed.
 /// It loads its own `AVPlayerItem`, plays the clip while active, and loops
@@ -157,13 +158,29 @@ struct PlayerPageView: View {
     /// computed properties, read from `.onChange` modifiers chained
     /// outside the `GeometryReader`, where no `proxy` is in scope.
     ///
-    /// Only an open Duo turned sideways can make this true: a regular
+    /// Only an open Duo held in a landscape-window pose ("partially
+    /// folded," Apple's book-like hold) can make this true: a regular
     /// iPhone's window stays portrait under the lock in every physical
     /// orientation (`project.pbxproj`'s `UISupportedInterfaceOrientations`),
-    /// and so does a CLOSED Duo's — see `isFullscreen`'s own comment on
-    /// why this is what separates the two sideways cases instead of
-    /// `deviceStance`.
+    /// and so does a CLOSED Duo's, and so does an open Duo folded like a
+    /// laptop (inner display, window still portrait even though the
+    /// device itself reports sideways — see `horizontalSizeClass`'s own
+    /// comment for that pose, which this value alone cannot catch).
     @State private var windowIsLandscape = false
+    /// The exact size behind `windowIsLandscape`, kept only so
+    /// `logRotationPose` can report real numbers — nothing in the
+    /// layout itself reads this; `body` already has `proxy.size`
+    /// directly wherever the layout needs it.
+    @State private var windowSize: CGSize = .zero
+    /// `.regular` only on the open Duo's INNER display — see this
+    /// property's own use in `isFullscreen` for why that distinction
+    /// matters, and `logRotationPose` for how it was confirmed.
+    ///
+    /// A plain `@Environment` property, unlike `toolbarVerticalEdge`
+    /// (`DuoLayout.swift`'s `ToolbarVerticalEdgeReader`): size classes
+    /// have existed since iOS 8, so there is no `@available` gate to
+    /// work around here.
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     /// Whether the fullscreen chrome (`FullscreenPlayerChrome`) is shown.
     /// Owned here, not in the chrome view. The tap gesture on the whole
     /// stage, which also drives tap-to-mute, can then toggle it. The
@@ -211,8 +228,41 @@ struct PlayerPageView: View {
     /// system already did. `isLandscapeFit` below is the window-rotated
     /// case's own path instead — decided from geometry, never from
     /// `deviceStance` or a device check.
+    ///
+    /// `horizontalSizeClass != .regular` (step 6, addition): a SECOND
+    /// window-shape pose exists where `windowIsLandscape` alone is not
+    /// enough — the open Duo folded like a laptop (bottom half flat,
+    /// top half up). There, the INNER display is in use, but its window
+    /// is still PORTRAIT (measured 2007×2853 px), while the device
+    /// itself still reports sideways from the same physical fold. Every
+    /// term above this one would read exactly as it does on a regular
+    /// iPhone or a closed Duo, and the hack would fire — confirmed on
+    /// the sim, and confirmed wrong: the owner saw the video read
+    /// sideways. `horizontalSizeClass` is what actually separates this
+    /// pose from the other two portrait-window cases this hack must
+    /// still serve: Apple gives the Duo's bigger INNER display `.regular`
+    /// — the same way an iPad's own window always reads `.regular` —
+    /// while a regular iPhone and the Duo's phone-sized OUTER display
+    /// both read `.compact`, in every orientation, because neither
+    /// window is ever wide enough to need the distinction iPad apps
+    /// already make with it. That is also why this reads
+    /// `horizontalSizeClass`, a plain `@Environment` value with no
+    /// `#available` gate, rather than a hinge status: the hinge alone
+    /// does not say WHICH display is active during `.partiallyOpen` —
+    /// both this laptop pose and the "folded like a tent" pose (outer
+    /// display, kept — see `windowIsLandscape`'s own comment) report
+    /// the same hinge status; the window's own traits already encode
+    /// which display is actually on screen, with no need to ask the
+    /// hinge at all. Confirmed by reading `UITraitCollection`/
+    /// `UIUserInterfaceSizeClass` in the 27.1 SDK headers and by the
+    /// `-cloudfull-log-rotation` readings below — not by guessing.
+    /// `!= .regular`, not `== .compact`: a `nil` reading (a preview, or
+    /// a transient moment before the environment resolves) keeps
+    /// today's behaviour on a regular iPhone rather than silently
+    /// disabling it.
     private var isFullscreen: Bool {
         isActive && videoIsLandscape && deviceStance.isLandscape && !windowIsLandscape
+            && horizontalSizeClass != .regular
             && fullscreenAllowed && !dismissedThisSpell && !isScrubbing
     }
 
@@ -243,6 +293,32 @@ struct PlayerPageView: View {
     private var isLandscapeFit: Bool {
         isActive && windowIsLandscape && videoIsLandscape && fullscreenAllowed && !isScrubbing
     }
+
+    #if DEBUG
+    private static let rotationLog = Logger(subsystem: "com.cloudfull.app", category: "Rotation")
+
+    /// `-cloudfull-log-rotation`: one line per window-size or
+    /// device-stance change, for example
+    /// "rotation_landscapeLeft_compact_466x678". This is how step 6's
+    /// `horizontalSizeClass != .regular` term in `isFullscreen` was
+    /// confirmed against the real sim, pose by pose, rather than
+    /// assumed from the SDK headers alone: read with
+    /// `xcrun simctl spawn <UDID> log stream --predicate 'subsystem ==
+    /// "com.cloudfull.app" and category == "Rotation"' --style compact`
+    /// the same way `OrientationMonitor`'s own log is read. DEBUG-only
+    /// and off by default, like every other `-cloudfull-log-` flag.
+    /// Only `isActive` logs, so three mounted pages never triple every
+    /// line.
+    private func logRotationPose() {
+        guard isActive, DiagnosticsGate.isOn("-cloudfull-log-rotation") else { return }
+        let sizeClass = horizontalSizeClass.map { "\($0)" } ?? "nil"
+        let message = "rotation_\(deviceStance.probeName)_\(sizeClass)_\(Int(windowSize.width))x\(Int(windowSize.height))"
+        Self.rotationLog.notice("\(message, privacy: .public)")
+        DiagnosticsLog.shared.log("Rotation", message)
+    }
+    #else
+    private func logRotationPose() {}
+    #endif
 
     /// Re-running `.task` must react to the asset changing, the page
     /// entering or leaving the preload window, and an explicit retry tap.
@@ -432,6 +508,8 @@ struct PlayerPageView: View {
                     // on the next rotation.
                     .onChange(of: proxy.size, initial: true) { _, newSize in
                         windowIsLandscape = newSize.width > newSize.height
+                        windowSize = newSize
+                        logRotationPose()
                     }
 
                 VStack(spacing: 0) {
@@ -645,6 +723,13 @@ struct PlayerPageView: View {
                 dismissedThisSpell = false
                 chromeRevealed = false
             }
+            // A pose can change `deviceStance` with no change to
+            // `proxy.size` at all — rotating a closed Duo, or a regular
+            // iPhone, sideways while the window itself stays whatever
+            // size it already was. The `onChange(of: proxy.size)` log
+            // call above would miss exactly that moment, so this is a
+            // second, independent call site for the same diagnostic.
+            logRotationPose()
         }
         .onChange(of: isMuted) { _, newValue in
             // `isMuted` is shared through `AppStorage` across every page,
