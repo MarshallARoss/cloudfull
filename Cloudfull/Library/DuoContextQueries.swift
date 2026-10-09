@@ -89,12 +89,8 @@ enum DuoContextQueries {
         if picked.count < 9, let interval = calendar.dateInterval(of: .weekOfYear, for: referenceDate) {
             usedWeekFallback = true
             weekInterval = interval
-            let weekPredicate = NSPredicate(
-                format: "creationDate >= %@ AND creationDate < %@",
-                interval.start as NSDate, interval.end as NSDate
-            )
             let weekCandidates = await Task.detached(priority: .userInitiated) {
-                Self.fetchVideos(matching: weekPredicate, fetchLimit: 40)
+                Self.fetchWeekNearestFirst(interval: interval, referenceDate: referenceDate, fetchLimit: 40)
             }.value
             picked = await excludingQueuedAndCurrent(weekCandidates, currentID: currentID)
         }
@@ -237,23 +233,28 @@ enum DuoContextQueries {
 
     // MARK: - PhotoKit fetch
 
-    /// The shared fetch body for both queries: narrow by `predicate`,
-    /// bound by `fetchLimit`, sorted oldest-first to match the grid's
-    /// reading order and `PhotoLibraryService.videoIndex(sort:)`'s own
-    /// ascending convention. Converts straight to `VideoFacts`, the same
-    /// Sendable shape `videoIndex(sort:)` returns, so both call sites
-    /// here reuse `FeedFilters.estimatedBytes` with no translation.
+    /// The shared fetch body for every query: narrow by `predicate`, bound
+    /// by `fetchLimit`. `ascending` defaults to oldest-first, matching the
+    /// grid's reading order and `PhotoLibraryService.videoIndex(sort:)`'s
+    /// own convention; `fetchWeekNearestFirst` passes `false` for its
+    /// backward half, so that bucket's cap keeps the videos nearest the
+    /// reference date instead of the week's earliest. Converts straight to
+    /// `VideoFacts`, the same Sendable shape `videoIndex(sort:)` returns,
+    /// so both call sites here reuse `FeedFilters.estimatedBytes` with no
+    /// translation.
     ///
     /// Call only from inside `Task.detached`, or from another
     /// `nonisolated static` body that already is: this makes a
     /// synchronous PhotoKit fetch.
-    private nonisolated static func fetchVideos(matching predicate: NSPredicate, fetchLimit: Int) -> [VideoFacts] {
+    private nonisolated static func fetchVideos(
+        matching predicate: NSPredicate, fetchLimit: Int, ascending: Bool = true
+    ) -> [VideoFacts] {
         #if DEBUG
         FetchCounters.bumpPhotoKit()
         #endif
         let options = PHFetchOptions()
         options.predicate = predicate
-        options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: true)]
+        options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: ascending)]
         options.fetchLimit = fetchLimit
         let result = PHAsset.fetchAssets(with: .video, options: options)
 
@@ -270,6 +271,41 @@ enum DuoContextQueries {
             ))
         }
         return facts
+    }
+
+    /// The week fallback's own fetch: nearest to `referenceDate` first, in
+    /// both directions, instead of the week's oldest-first order
+    /// `fetchVideos` uses everywhere else.
+    ///
+    /// A plain ascending fetch capped at `fetchLimit` can fill its whole
+    /// budget on days earlier in the week, before ever reaching
+    /// `referenceDate`'s own videos — exactly backwards, since this
+    /// fallback only runs because the day alone came up short, and the
+    /// point is to surface videos *near* that day. Splitting the budget
+    /// across an ascending fetch from `referenceDate` forward and a
+    /// descending fetch from `referenceDate` backward, then merging,
+    /// guarantees the day's own neighbours survive the cap however busy
+    /// the rest of the week is.
+    private nonisolated static func fetchWeekNearestFirst(
+        interval: DateInterval, referenceDate: Date, fetchLimit: Int
+    ) -> [VideoFacts] {
+        let half = max(fetchLimit / 2, 1)
+        let laterPredicate = NSPredicate(
+            format: "creationDate >= %@ AND creationDate < %@",
+            referenceDate as NSDate, interval.end as NSDate
+        )
+        let earlierPredicate = NSPredicate(
+            format: "creationDate >= %@ AND creationDate < %@",
+            interval.start as NSDate, referenceDate as NSDate
+        )
+        let later = fetchVideos(matching: laterPredicate, fetchLimit: half, ascending: true)
+        // Descending, so this bucket's own cap keeps the videos nearest
+        // `referenceDate`, not the week's very earliest ones.
+        let earlier = fetchVideos(matching: earlierPredicate, fetchLimit: half, ascending: false)
+        // Reverse `earlier` back to oldest-first before joining, so the
+        // merged result keeps the same ascending reading order every
+        // other result in this file returns.
+        return earlier.reversed() + later
     }
 
     private nonisolated static func dayPredicate(containing date: Date, calendar: Calendar) -> NSPredicate? {
