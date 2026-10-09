@@ -51,6 +51,16 @@ struct PlayerPageView: View {
     /// video moves down by the same amount as the top chrome.
     /// `FeedView.topChrome` uses the same measurement.
     let safeAreaTop: CGFloat
+    /// The device's real safe-area insets on every edge, measured by
+    /// `FeedView` at the same root `GeometryReader` as `safeAreaTop`,
+    /// for the same reason (this page's own reader reports them as
+    /// zero, under the pager's `.ignoresSafeArea()`). Used only by the
+    /// 1H fullscreen ring's own bottom-leading placement (step 9,
+    /// `design/duo/duo_audit_apple_checklist.md` §5) — `.bottom`/
+    /// `.leading` read as the home indicator's and the camera cutout's
+    /// real clearance once the window is genuinely landscape (R4), not
+    /// a flat, device-measured constant.
+    let fullscreenSafeArea: EdgeInsets
     /// This frame's iPhone Duo geometry, measured by `FeedView` at the
     /// same root `GeometryReader` as `safeAreaTop`, for the same reason:
     /// this page's own reader sits under the pager's
@@ -1054,12 +1064,6 @@ struct PlayerPageView: View {
         return StageGeometry.downShift(safeAreaTop: safeAreaTop, stageHeight: stageHeight, containerHeight: containerHeight)
     }
 
-    /// How far the loading ring steps off dead centre in fullscreen, to
-    /// clear the 68pt mute-flash badge that already owns that spot.
-    /// The offset is the badge's 34pt radius, plus the ring's 15pt radius
-    /// (a 20pt ring inside 5pt of disc padding), plus 8pt of clearance.
-    private static let fullscreenLoaderDrop: CGFloat = 57
-
     /// How far above the video's bottom edge the loading ring's own bottom
     /// sits, measured in the stage's own space.
     ///
@@ -1195,26 +1199,6 @@ struct PlayerPageView: View {
                 // The ring draws its own dark disc, which is also why
                 // `.feedShadow()` is absent: the disc keeps the ring
                 // visible over `FeedView.bottomScrim`.
-                // In fullscreen, move the ring down by
-                // `fullscreenLoaderDrop` so the ring does not overlap the
-                // mute badge. The badge is a 68pt circle at dead centre of
-                // this same ZStack (`showMuteBadge` below). The badge is a
-                // 700 ms flash on a tap. A tap in fullscreen also reveals
-                // the chrome. So this pairing of fullscreen, still
-                // buffering, and a user tap is not rare.
-                //
-                // R4: the offset now reads on screen exactly as written —
-                // a plain downward shift from dead centre, clearing the
-                // mute badge's 34pt radius with room to spare. Before
-                // real rotation, this same offset was applied in the
-                // UN-rotated canvas's own local space, which a
-                // `.rotationEffect` then turned into a sideways step on
-                // screen (see this file's own git history); with no
-                // rotation left to apply, that indirection is gone.
-                // Flagged for the owner's own fullscreen feel-check: a
-                // horizontal offset might sit better in a short landscape
-                // window than a vertical one now that it reads literally.
-                .offset(y: isFullscreen ? Self.fullscreenLoaderDrop : 0)
                 .allowsHitTesting(false)
                 .accessibilityLabel("Loading video")
                 .accessibilityHidden(!showSpinner)
@@ -1256,23 +1240,29 @@ struct PlayerPageView: View {
                 // inside `FeedView.bottomScrim`. The ring's own dark disc
                 // keeps it visible there.
                 //
-                // Centred in fullscreen, and it has to be. R4: the window
-                // itself is really landscape now (no more un-rotated
-                // layout turned ±90° through a `.rotationEffect` — see
-                // `canvasWidth`'s own comment), so this corner is already
-                // a real screen corner either way the phone is held. A
-                // loader anchored to a corner would still jump between
-                // `.landscapeLeft` and `.landscapeRight` (the content
-                // itself never rotates to compensate any more); centre is
-                // the one point that reads the same in both.
-                // A ternary on the alignment value, never an if/else
-                // around the view. The modifier chain keeps one identity.
-                // This is the rule the identity comment on `stageContent`
-                // in `body` protects.
-                .frame(maxWidth: .infinity, maxHeight: .infinity,
-                       alignment: isFullscreen ? .center : .bottomLeading)
-                .padding(.leading, isFullscreen ? 0 : 10)
-                .padding(.bottom, isFullscreen ? 0 : loaderLift(bottomBand: bottomBand))
+                // Step 9 (`design/duo/duo_audit_apple_checklist.md` §5):
+                // bottom-leading in fullscreen too now, the owner's own
+                // "one rule" pick over keeping fullscreen centred — not a
+                // Duo-only branch; every phone gets the same placement.
+                // Safe to do now that the window is really landscape
+                // (R4): `fullscreenSafeArea.bottom`/`.leading` read as
+                // the home indicator's and the camera cutout's real
+                // clearance for THIS view's own current frame, not a
+                // flat, screenshot-measured constant — the same
+                // reasoning `loaderLift` already applies for the
+                // non-fullscreen case, just reading real safe-area
+                // insets instead of the rail's own layout numbers, since
+                // there is no rail column to mirror off of once the
+                // whole canvas is the stage.
+                //
+                // A ternary on the padding VALUES, never an if/else
+                // around the view or a different alignment per branch.
+                // The modifier chain keeps one identity. This is the
+                // rule the identity comment on `stageContent` in `body`
+                // protects.
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+                .padding(.leading, isFullscreen ? fullscreenSafeArea.leading + 10 : 10)
+                .padding(.bottom, isFullscreen ? fullscreenSafeArea.bottom + 10 : loaderLift(bottomBand: bottomBand))
                 // `spinnerRevealKey` folds `isLoading` and `isActive` into
                 // the task's own identity. So SwiftUI's `.task(id:)`
                 // cancel-and-restart cancels a pending reveal the instant

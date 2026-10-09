@@ -293,6 +293,18 @@ struct FeedView: View {
         // safe area inside it, so both draw over the same rectangle.
         GeometryReader { rootProxy in
             let safeAreaTop = rootProxy.safeAreaInsets.top
+            // Step 9 (`design/duo/duo_audit_apple_checklist.md` §5): the
+            // 1H fullscreen ring's own bottom-leading inset, expressed
+            // as the real safe-area insets instead of a flat constant —
+            // same reasoning as `safeAreaTop` just above (this reader
+            // sits above the pager's own `.ignoresSafeArea()`, the one
+            // place these numbers are not already zeroed by it).
+            // Fullscreen is a real landscape window now (R4): SwiftUI
+            // reports `.bottom`/`.leading` relative to THIS view's own
+            // current frame, so these already read as the home
+            // indicator's and the camera cutout's real clearance in
+            // that orientation, not a device-specific guess.
+            let fullscreenSafeArea = rootProxy.safeAreaInsets
             // Classified synchronously from this same proxy, every pass —
             // no debounce. Audit finding F3's own fix
             // (`design/duo/duo_audit_apple_checklist.md`): an earlier
@@ -323,7 +335,7 @@ struct FeedView: View {
                     hingeDegrees = degrees
                 }
             }
-            content(safeAreaTop: safeAreaTop, duoLayout: duoLayout)
+            content(safeAreaTop: safeAreaTop, fullscreenSafeArea: fullscreenSafeArea, duoLayout: duoLayout)
             // The whole global chrome layer (mute, the shrink progress
             // capsule, the counters, the bin) hides while `isFullscreen`
             // (the rotation hack) is on — see `hidesGlobalChrome`'s own
@@ -541,7 +553,7 @@ struct FeedView: View {
     }
 
     @ViewBuilder
-    private func content(safeAreaTop: CGFloat, duoLayout: DuoLayout) -> some View {
+    private func content(safeAreaTop: CGFloat, fullscreenSafeArea: EdgeInsets, duoLayout: DuoLayout) -> some View {
         if !viewModel.hasDealtFirstDeck {
             // The first deal waits on a background library enumeration.
             // An empty deck means "no videos" only once the app has
@@ -583,17 +595,18 @@ struct FeedView: View {
                 noMatchesState
             }
         } else {
-            pager(safeAreaTop: safeAreaTop, duoLayout: duoLayout)
+            pager(safeAreaTop: safeAreaTop, fullscreenSafeArea: fullscreenSafeArea, duoLayout: duoLayout)
         }
     }
 
     /// `safeAreaTop` is the real inset, measured once in `body`. It is
     /// threaded into every `PlayerPageView` because their own readers sit
     /// under this pager's `.ignoresSafeArea()` and would otherwise read 0.
-    /// `duoLayout` is threaded the same way, for the same reason: this
-    /// pager's own `.ignoresSafeArea()` would otherwise hide the bar
-    /// column's safe-area inset from a reader placed any lower.
-    private func pager(safeAreaTop: CGFloat, duoLayout: DuoLayout) -> some View {
+    /// `fullscreenSafeArea`/`duoLayout` are threaded the same way, for
+    /// the same reason: this pager's own `.ignoresSafeArea()` would
+    /// otherwise hide the bar column's safe-area inset, or the 1H ring's
+    /// own fullscreen insets, from a reader placed any lower.
+    private func pager(safeAreaTop: CGFloat, fullscreenSafeArea: EdgeInsets, duoLayout: DuoLayout) -> some View {
         ScrollViewReader { scrollProxy in
         ScrollView(.vertical) {
             LazyVStack(spacing: 0) {
@@ -644,6 +657,7 @@ struct FeedView: View {
                                 pageAllowsLandscape = newValue
                             },
                             safeAreaTop: safeAreaTop,
+                            fullscreenSafeArea: fullscreenSafeArea,
                             duoLayout: duoLayout,
                             onDoubleTap: { doubleTapKeepNonces[entry.id, default: 0] += 1 },
                             isSuspended: isFeedSuspended
@@ -1193,7 +1207,7 @@ struct FeedView: View {
     /// `statusBlock.minX − 8` the same way `topChrome`'s identical
     /// `Spacer` already fills its own row.
     private func pose5TopRow(duoLayout: DuoLayout, safeAreaTop: CGFloat, containerSize: CGSize) -> some View {
-        let statusBlock = duoLayout.statusBlock(containerSize: containerSize)
+        let statusBlock = duoLayout.statusBlock(containerSize: containerSize, safeAreaTop: safeAreaTop)
         let stageMinX = duoLayout.stageRect(containerSize: containerSize, safeAreaTop: safeAreaTop).minX
         let leading = stageMinX + 16
         let trailing = statusBlock.minX - 8
@@ -2287,13 +2301,17 @@ private struct FeedPageContent: View {
     /// own check for this step, "Duo 1V + 5: no scrubber line crosses
     /// the text."
     ///
-    /// Build 5 is explicitly "(Duo only)": `duoLayout.pose !=
-    /// .regularPhone` gates the whole lift, the hard rule every new
-    /// Duo branch follows. Without this gate, a regular iPhone whose
-    /// OWN band happens to fall under 50 (an iPhone SE, close to
-    /// 16:9) would also start reading 48pt here instead of its
-    /// today's flat 20pt — a real behaviour change on a device this
-    /// branch must leave untouched.
+    /// Re-adapted (`design/duo/duo_audit_apple_checklist.md` §5): this
+    /// used to be described as "(Duo only)," which reads like a device
+    /// check. It is not one — `duoLayout.pose != .regularPhone` is
+    /// `DuoLayout.classify`'s own SPACE-derived result (R1, Decision
+    /// B), the same hard-rule gate every new Duo branch in this app
+    /// already follows, never a device name or model check. Without
+    /// it, a regular iPhone whose own band happens to fall under 50
+    /// (an iPhone SE, close to 16:9) would also read 48pt here instead
+    /// of its today's flat 20pt — a real behaviour change on a device
+    /// this branch must leave untouched. The gate stays for that
+    /// reason; only the "(Duo only)" framing was ever imprecise.
     private func captionZone(trailingClearance: CGFloat, hidden: Bool, bandHeight: CGFloat) -> some View {
         let liftsForScrubber = duoLayout.pose != .regularPhone && bandHeight < 50
         let bottomPadding: CGFloat = liftsForScrubber ? 20 + 28 : 20
@@ -2467,10 +2485,11 @@ private struct FeedPageContent: View {
     ///
     /// X-centred on the column — on the closed bar, the same centre
     /// line the system's own time + connectivity ring uses; on the
-    /// open-tall column, `DuoLayout.openColumnWidth`'s own fixed width
-    /// puts that centre at a known, fixed distance from the trailing
-    /// edge (`DuoLayout.ringInset`) instead, measured from a
-    /// screenshot rather than read from an API, since none exists.
+    /// open-tall column, `DuoLayout.railColumn`'s own open-branch
+    /// centres the column on the active `.occlusion` region's real
+    /// `midX` instead (F6), reading the ring's actual position rather
+    /// than a screenshot-measured constant, since no SDK API reports
+    /// it directly.
     ///
     /// Anchored top or bottom per `DuoLayout.railVerticalExtent`, not
     /// decided here: bar ON anchors from the bottom (the ring sits

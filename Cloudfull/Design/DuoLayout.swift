@@ -272,9 +272,10 @@ struct DuoLayout {
     /// band below a separate chrome row. An earlier version reserved
     /// that band here specifically for the open column, once its width
     /// stopped doing so as a side effect of being sized to "whatever a
-    /// 9:16 stage leaves over" (see `openColumnWidth`'s own comment on
-    /// why that sizing changed); this undoes that reservation, so the
-    /// open column now behaves exactly like the closed bar column
+    /// 9:16 stage leaves over" (see `railColumn`'s own comment on its
+    /// open branch for why that sizing changed); this undoes that
+    /// reservation, so the open column now behaves exactly like the
+    /// closed bar column
     /// already did — no height carve-out, chrome overlaid on the
     /// stage, `StageGeometry.downShift`'s own small natural band (from
     /// the stage's own aspect ratio) the only clearance either case
@@ -312,9 +313,10 @@ struct DuoLayout {
     /// what keeps the stage from overflowing the squat screen. On an
     /// open Duo wide enough for a computed column (same function), this
     /// same centring is what turns the leftover width, once
-    /// `openColumnWidth`'s fixed column is removed from it, into even
-    /// margins on both sides of the stage — see that constant's own
-    /// comment for why that is the goal, not a flush-left stage.
+    /// `railColumn`'s own computed column is removed from it, into even
+    /// margins on both sides of the stage — see that function's own
+    /// open-branch comment for why that is the goal, not a flush-left
+    /// stage.
     ///
     /// The non-default `aspectRatio` is step 6's own addition: an open
     /// Duo turned sideways really rotates its window (see
@@ -432,10 +434,13 @@ struct DuoLayout {
     // Every number below is "measured/wireframe, no API" — read off
     // `DUO_VIDEO_WIREFRAMES.png`/`DUO_POSES.md`, not any SDK property.
     // There is no reserved-region kind, margin, or trait for a chrome
-    // column, a caption band, a page margin, a laptop rail's pitch, or
-    // a chin's own size; Apple's hinge/division/occlusion API (this
-    // file's header comment) says nothing about any of them. `ringInset`
-    // above is the one pre-existing constant of this kind; these join it.
+    // column, a caption band, a page margin, or a chin's own size;
+    // Apple's hinge/division/occlusion API (this file's header comment)
+    // says nothing about any of them. These are plain design constants,
+    // the same category `Rail.hit`/`Rail.spacing` already are —
+    // unlike the ring's own position, which `railColumn`'s open branch
+    // now reads from `.occlusion` instead of a fixed number (F6, §5 of
+    // the audit).
 
     /// Width of the Mute/Filter/Bin column pose 3/4/4W put beside the
     /// rail/bar column — `chromeColumnRect`'s own width, and
@@ -449,10 +454,6 @@ struct DuoLayout {
     /// 3's wide-video box, pose 4W's box, and (elsewhere) the caption
     /// and right-page placements build 4 and later add.
     static let pagePad: CGFloat = 16
-    /// `statusBlock`'s own fallback size (pose 5's time + ring block),
-    /// used only when no active `.occlusion` region exists to measure
-    /// it from directly — build 6.
-    static let statusBlockFallback = CGSize(width: 134, height: 82)
     /// Pose 6's (laptop) horizontal rail row: the x-spacing between
     /// consecutive buttons — build 8.
     static let laptopRailPitch: CGFloat = 100
@@ -484,50 +485,23 @@ struct DuoLayout {
         containerSize.height * 9 / 16
     }
 
-    /// Measured, no API: half the open (bar-off) column's own width,
-    /// and the distance from the trailing edge to the system
-    /// connectivity ring's own x-centre on the inner display's
-    /// portrait pose ("open-tall"). `openColumnWidth` below is
-    /// `2 × ringInset`, which is what makes a column that wide,
-    /// centred on itself, land its own centre exactly `ringInset` from
-    /// the trailing edge — the ring's own centre, fixing the owner's
-    /// report that the rail sat "pushed in" from it.
+    /// Re-adapted (`design/duo/duo_audit_apple_checklist.md` §5/F6):
+    /// replaces the old `ringInset`/`openColumnWidth` pair — a fixed
+    /// 50pt/100pt read off one Duo-sim screenshot, which drifts off the
+    /// real ring in a Mirroring window, another display, or a larger
+    /// Dynamic Type size (F6's own finding). The open (bar-off)
+    /// column's own width is now derived live, in `railColumn` below:
+    /// from the active `.occlusion` region's own `midX` when one is on
+    /// the trailing half (the ring/status cluster's real measured
+    /// position, the same field `statusBlock` already reads for pose
+    /// 5), or from `Rail.hit` (the button's own hit target, a design
+    /// constant, not a device size) plus this margin when there is
+    /// none to read.
     ///
-    /// There is no SDK API for the ring's own position on this pose —
-    /// see `railVerticalExtent`'s own comment on the equivalent gap for
-    /// its height. This number came from a screenshot instead: on a
-    /// 2007px-wide (3×, 669pt) inner portrait frame, the ring's own
-    /// centre measured at ≈ 1857px, ≈ 619pt, ≈ 50pt from the trailing
-    /// edge.
-    static let ringInset: CGFloat = 50
-
-    /// The open (bar-off) column's own fixed width — `2 × ringInset` —
-    /// unlike the CLOSED bar column, which is whatever width the
-    /// system gives it.
-    ///
-    /// An earlier version sized this column to "whatever is left
-    /// over," the same width `fullHeightStageWidth` subtracts from the
-    /// container — correct by coincidence on a narrow leftover, wrong
-    /// on a wide one: the owner found the rail centred far from the
-    /// ring, with a large unused gap on the video's own leading edge,
-    /// because "the column's centre" and "the ring's own position"
-    /// have no reason to agree once the leftover is wide. A column
-    /// this width, always, keeps the rail's own centre at a fixed,
-    /// known distance from the trailing edge (`ringInset`) regardless
-    /// of how wide the window's own leftover is. `railColumn`'s own
-    /// gate below still only forms a column at all when that leftover
-    /// comfortably fits one — see its own comment — so `stageRect`'s
-    /// unchanged horizontal centring turns whatever leftover remains,
-    /// after this fixed column, into even margins on both sides of
-    /// the video instead of a flush-left stage. That symmetry, not a
-    /// new centring rule, is what fixes the owner's other report (the
-    /// video touching the leading edge).
-    static let openColumnWidth: CGFloat = ringInset * 2
-
-    /// Minimum leading margin `railColumn`'s open-branch gate
-    /// guarantees the stage, on each side, once `openColumnWidth` is
-    /// removed from the natural leftover. See that function's own
-    /// gate for the arithmetic.
+    /// Also the minimum leading margin `railColumn`'s open-branch gate
+    /// guarantees the stage, on each side, once the computed column is
+    /// removed from the natural leftover. See that function's own gate
+    /// for the arithmetic.
     static let minStageMargin: CGFloat = 16
 
     /// Minimum gap kept between the rail's own last button and the
@@ -586,19 +560,25 @@ struct DuoLayout {
     /// carved out of the stage.
     ///
     /// Open (`barEdge == nil`): there is no system column to reuse, so
-    /// one is computed instead: `openColumnWidth`, fixed, on the
-    /// trailing edge — see that constant's own comment for why fixed,
-    /// rather than "whatever is left over," is now the rule. The gate
-    /// below is still geometry-only, never a device check: it asks
-    /// whether the natural leftover — `fullHeightStageWidth`'s own
-    /// subtraction, the same test the earlier version used end to end
-    /// — is big enough to carve out `openColumnWidth` AND still leave
-    /// the stage `minStageMargin` on each side. Below that, there is
-    /// no column: `nil`, and every caller keeps the pre-Duo overlay
-    /// layout. A regular iPhone's own leftover here is always
-    /// negative — a phone screen is always narrower than the width a
-    /// 9:16 box needs to reach its own full height — so it never
-    /// clears this, decided purely by the screen's own proportions.
+    /// one is computed instead, on the trailing edge, sized so its own
+    /// CENTRE lands on the active `.occlusion` region's own `midX` when
+    /// one is on the trailing half (F6: "the safe-area inset already
+    /// read in `DuoLayout.current`" for the bar case; the occlusion's
+    /// own real position for the open case) — never a fixed,
+    /// screenshot-measured width. With no occlusion to read, the
+    /// column falls back to `Rail.hit + minStageMargin × 2`, a size
+    /// built from the rail button's own design constant, not a device
+    /// number. The gate below is still geometry-only, never a device
+    /// check: it asks whether the natural leftover —
+    /// `fullHeightStageWidth`'s own subtraction, the same test the
+    /// earlier version used end to end — is big enough to carve out
+    /// the computed column AND still leave the stage `minStageMargin`
+    /// on each side. Below that, there is no column: `nil`, and every
+    /// caller keeps the pre-Duo overlay layout. A regular iPhone's own
+    /// leftover here is always negative — a phone screen is always
+    /// narrower than the width a 9:16 box needs to reach its own full
+    /// height — so it never clears this, decided purely by the
+    /// screen's own proportions.
     ///
     /// `safeAreaTop` is unused in this branch — `fullHeightStageWidth`
     /// no longer reserves a top-chrome band (see `availableRect`'s own
@@ -610,8 +590,18 @@ struct DuoLayout {
             return (barEdge, barWidth)
         }
         let openWidth = containerSize.width - Self.fullHeightStageWidth(containerSize: containerSize)
-        guard openWidth >= Self.openColumnWidth + Self.minStageMargin * 2 else { return nil }
-        return (.trailing, Self.openColumnWidth)
+        let computedWidth: CGFloat
+        if let occlusion, occlusion.minX > containerSize.width / 2 {
+            // A column centred on `occlusion.midX`, so its own centre
+            // lands exactly on the ring's real position regardless of
+            // how wide the window is — the same goal `openColumnWidth`
+            // used to reach with a fixed, sim-measured number.
+            computedWidth = max(Rail.hit, (containerSize.width - occlusion.midX) * 2)
+        } else {
+            computedWidth = Rail.hit + Self.minStageMargin * 2
+        }
+        guard openWidth >= computedWidth + Self.minStageMargin * 2 else { return nil }
+        return (.trailing, computedWidth)
     }
 
     /// The rail column's own rectangle this frame, full height — the
@@ -770,14 +760,21 @@ struct DuoLayout {
     /// Pose 5's own top-chrome anchor (build 6): "the active
     /// `.occlusion` region whose `minX > W/2`" — the spike that
     /// measured this proved it is the time + connectivity ring block
-    /// on pose 5, `statusBlockFallback`'s own 134×82 size. Falls back
-    /// to that fixed size, at the window's own top-trailing corner
-    /// (`x = W − 134, y = 0`), when this frame's own `occlusion` is
-    /// either absent or sits on the wrong half — a frame the owner's
-    /// own sim readings already caught transiently reporting a stale
-    /// cross-display rect (see `current(...)`'s own division filter
-    /// for the equivalent fix on that field; `occlusion` has no such
-    /// filter yet, so this check doubles as one for this one caller).
+    /// on pose 5. Re-adapted (`design/duo/duo_audit_apple_checklist.md`
+    /// §5): the old fallback was a fixed, screenshot-measured 134×82
+    /// box at the window's own top-trailing corner — a device size
+    /// (F6's own category of finding, even though this particular
+    /// constant post-dates F6's own list). With no `.occlusion` to read
+    /// — absent, or sitting on the wrong half, a frame the owner's own
+    /// sim readings already caught transiently reporting a stale
+    /// cross-display rect; see `current(...)`'s own division filter for
+    /// the equivalent fix on that field, since `occlusion` has no such
+    /// filter yet, so this check doubles as one for this one caller —
+    /// this now returns a zero-width rect pinned to the true trailing
+    /// edge, `safeAreaTop` tall: `pose5TopRow`'s own `trailing =
+    /// statusBlock.minX − 8` lands the row 8pt from the real trailing
+    /// edge, and `statusBlock.midY` centres it in the real safe-area
+    /// top inset instead of a guessed height.
     ///
     /// No separate log call here: this type stays a pure value with
     /// no side effects, by design (this file's own header comment);
@@ -785,16 +782,11 @@ struct DuoLayout {
     /// prints the raw `occlusion` field on every pose/hinge change,
     /// which already shows whether this fell back — `occ-none`, or an
     /// `occ-` rect whose own `x` sits left of half the printed `W`.
-    func statusBlock(containerSize: CGSize) -> CGRect {
+    func statusBlock(containerSize: CGSize, safeAreaTop: CGFloat) -> CGRect {
         if let occlusion, occlusion.minX > containerSize.width / 2 {
             return occlusion
         }
-        return CGRect(
-            x: containerSize.width - Self.statusBlockFallback.width,
-            y: 0,
-            width: Self.statusBlockFallback.width,
-            height: Self.statusBlockFallback.height
-        )
+        return CGRect(x: containerSize.width, y: 0, width: 0, height: safeAreaTop)
     }
 }
 
