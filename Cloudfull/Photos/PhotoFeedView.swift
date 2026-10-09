@@ -221,10 +221,10 @@ struct PhotoFeedView: View {
     /// own comment for why.
     private func resolvedDuoLayout(rootProxy: GeometryProxy) -> DuoLayout {
         if #available(iOS 27.1, *) {
-            // No `HingeReader`/`OrientationMonitor` mounted here — this
-            // view has no tent/nightstand concept, the one pose that
-            // needs either input (see `DuoLayout.classify`) — so both
-            // are passed as their "nothing to report" values.
+            // No `HingeReader` mounted here — this view has no
+            // tent/nightstand concept, the one pose that needs the hinge
+            // (see `DuoLayout.classify`) — so both hinge inputs are
+            // passed as their "nothing to report" values.
             return DuoLayout.current(
                 proxy: rootProxy,
                 toolbarVerticalEdge: toolbarVerticalEdge,

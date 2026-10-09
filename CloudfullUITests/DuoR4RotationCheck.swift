@@ -79,14 +79,21 @@ final class DuoR4RotationCheck: FeedUITestCase {
         save(app.screenshot().image, "r4_17pro_tall_portrait")
 
         XCUIDevice.shared.orientation = .landscapeLeft
-        guard let tallDeclined = waitForFullscreenState(assetID: tallPage.assetID, timeout: 8, expectActive: false) else {
-            XCTFail("fullscreen_state_ never appeared for the tall video after rotating")
+        // R5: the probe now reports the WINDOW's own orientation, not a
+        // raw device reading — "portrait" here is the correct, expected
+        // proof the app declined, matching M6Tests'
+        // `testPortraitVideoIgnoresRotation`. This is also the exact
+        // scenario (landing on a portrait page right after visiting a
+        // wide one) that caught the R4 `pageAllowsLandscape` race —
+        // see FeedView's own fix comment on `onAllowsLandscapeChanged`.
+        guard let tallDeclined = waitForFullscreenState(assetID: tallPage.assetID, timeout: 8, expectActive: false, expectStance: "portrait") else {
+            XCTFail("fullscreen_state_ never settled on inactive/portrait for the tall video after rotating")
             return
         }
         Thread.sleep(forTimeInterval: 1.5)
         save(app.screenshot().image, "r4_17pro_tall_landscape")
         XCTAssertFalse(tallDeclined.active, "tall video incorrectly went fullscreen on rotation")
-        XCTAssertEqual(tallDeclined.stance, "landscapeLeft", "rotation never reached the app")
+        XCTAssertEqual(tallDeclined.stance, "portrait", "the window rotated for a portrait video")
 
         XCUIDevice.shared.orientation = .portrait
     }
@@ -131,6 +138,48 @@ final class DuoR4RotationCheck: FeedUITestCase {
         XCUIDevice.shared.orientation = .portrait
     }
 
+    // MARK: - Does dismiss really rotate the window back without a new device turn?
+
+    /// Diagnostic for M6Tests' `testFullscreenDisablesPagingAndDismissButtonExits`
+    /// failure: does tapping `fullscreen_dismiss` actually rotate the
+    /// WINDOW back to portrait immediately (R4's own claim), or does the
+    /// window stay landscape-shaped until the device itself ALSO turns
+    /// back? Holds the post-dismiss state for an external simctl
+    /// screenshot, the same cross-check pattern as
+    /// `testHoldWideLandscapeForExternalCapture`.
+    func testDismissRotatesWindowWithoutDeviceTurning() throws {
+        app.launchArguments = ["-cloudfull-log-rotation"]
+        app.launch()
+        grantPhotoAccessIfAsked()
+
+        guard let start = centeredPage(timeout: 20) else { XCTFail("No centered page"); return }
+        guard let widePage = scrollToAsset(Self.landscapeAssetID, from: start, budget: 60) else {
+            XCTFail("Never reached the landscape fixture"); return
+        }
+        XCUIDevice.shared.orientation = .landscapeLeft
+        guard let wideActive = waitForFullscreenState(assetID: widePage.assetID, timeout: 8) else {
+            XCTFail("fullscreen_state_ never appeared after rotating"); return
+        }
+        XCTAssertTrue(wideActive.active)
+
+        let dismissButton = app.buttons["fullscreen_dismiss"]
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        XCTAssertTrue(dismissButton.waitForExistence(timeout: 5), "fullscreen_dismiss did not appear")
+        dismissButton.tap()
+
+        // Device orientation is deliberately left at .landscapeLeft here —
+        // the whole question is whether the window rotates WITHOUT a new
+        // device turn.
+        writeSentinel("DISMISS_HOLD_READY")
+        Thread.sleep(forTimeInterval: 15.0)
+        if let fs = elementSnapshots(withPrefix: "fullscreen_state_").first?.identifier {
+            ProbeLog.emit("diag_post_dismiss_state", fs)
+        }
+        writeSentinel("DISMISS_HOLD_DONE")
+
+        XCUIDevice.shared.orientation = .portrait
+    }
+
     private func writeSentinel(_ name: String) {
         let dir = "/private/tmp/claude-501/-Users-barrychanleerwilliams-Downloads-cloudfull/cc902d69-3e6c-435e-a364-3e3da7a81e44/scratchpad/screens"
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
@@ -169,12 +218,13 @@ final class DuoR4RotationCheck: FeedUITestCase {
     /// Polls until the probe's `assetID` matches `assetID` and, if
     /// `expectActive` is non-nil, its `active` field also matches.
     private func waitForFullscreenState(
-        assetID: String, timeout: TimeInterval = 8, expectActive: Bool? = nil
+        assetID: String, timeout: TimeInterval = 8, expectActive: Bool? = nil, expectStance: String? = nil
     ) -> (active: Bool, stance: String, assetID: String)? {
         let deadline = Date().addingTimeInterval(timeout)
         repeat {
             if let reading = sampleFullscreenStateRaw(), reading.assetID == assetID,
-               expectActive == nil || reading.active == expectActive {
+               expectActive == nil || reading.active == expectActive,
+               expectStance == nil || reading.stance == expectStance {
                 Thread.sleep(forTimeInterval: 0.3)
                 if let again = sampleFullscreenStateRaw(), again == reading {
                     return again
@@ -182,7 +232,7 @@ final class DuoR4RotationCheck: FeedUITestCase {
             }
             Thread.sleep(forTimeInterval: 0.2)
         } while Date() < deadline
-        return sampleFullscreenStateRaw()
+        return nil
     }
 
     private func save(_ image: UIImage, _ name: String) {

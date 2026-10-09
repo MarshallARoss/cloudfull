@@ -70,11 +70,11 @@ struct FeedView: View {
 
     // MARK: - Landscape fullscreen
 
-    /// Publishes the device's physical stance. `start()` runs inside the
-    /// existing `.task`; `stop()` runs in `.onDisappear`.
-    /// `UIDevice.current.orientation` is read only inside this type, never
-    /// during a body pass.
-    @StateObject private var orientation = OrientationMonitor()
+    /// R5 (`design/duo/duo_audit_apple_checklist.md` Decision A/C):
+    /// `OrientationMonitor` is gone — no device orientation is read
+    /// anywhere in this file. `isFullscreen`/`allowsLandscape` below
+    /// read the window's own real shape and traits, through
+    /// `PlayerPageView`'s own `isFullscreen`/`allowsLandscapeCandidate`.
     @Environment(\.scenePhase) private var scenePhase
     /// The vertical bar's edge on the iPhone Duo's closed screen; `nil`
     /// on a regular iPhone, on the open Duo, and on anything below iOS
@@ -434,7 +434,6 @@ struct FeedView: View {
             // the main actor.
             AlbumListCache.shared.prewarm()
             currentPageID = viewModel.currentEntryID
-            orientation.start()
             #if DEBUG
             // A no-op unless `-cloudfull-reset-stalls` was passed at
             // launch. When it was, the watchdog zeroes its counters and
@@ -443,24 +442,11 @@ struct FeedView: View {
             MainThreadWatchdog.shared.feedDidAppear()
             #endif
         }
-        .onDisappear {
-            orientation.stop()
-        }
-        // Device-orientation notifications do not arrive while the app is
-        // backgrounded. A user who rotates back to portrait while
-        // backgrounded would otherwise return to a stale landscape
-        // stance. This is the one place the monitor is polled rather than
-        // pushed. Returning to the foreground is exactly when a missed
-        // change must be reconciled.
+        // The cursor write happens off the page-change tick, so the app
+        // leaving the foreground is what makes it durable.
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active {
-                orientation.refresh()
-            } else {
-                // The cursor write happens off the page-change tick, so
-                // the app leaving the foreground is what makes it
-                // durable.
-                viewModel.flushPendingWrites()
-            }
+            guard phase != .active else { return }
+            viewModel.flushPendingWrites()
         }
         // `viewModel.currentEntryID` is the single source of truth for
         // which slot the view model considers current. This is the other
@@ -488,6 +474,14 @@ struct FeedView: View {
             if shareCoordinator.probeState == .preparing {
                 shareCoordinator.cancelShare()
             }
+            // R4 fix: the other half of the race guard in
+            // `onAllowsLandscapeChanged` below — see that closure's own
+            // comment. A page change always starts from "no landscape
+            // grant," the same way `PlayerPageView.dismissedThisSpell`
+            // resets on its own page-change edge; the new centered
+            // page's own report (once its video's shape is known) sets
+            // this back to `true` if it actually qualifies.
+            pageAllowsLandscape = false
         }
         // The one place options reach the deck. `apply` is idempotent, so
         // a duplicate notification costs nothing. `start()` reads the
@@ -626,10 +620,29 @@ struct FeedView: View {
                             isPreloadable: isPreloadable,
                             viewModel: viewModel,
                             onScrubbingChanged: { isScrubbing = $0 },
-                            deviceStance: orientation.stance,
                             fullscreenAllowed: fullscreenAllowed,
                             onFullscreenChanged: { isFullscreen = $0 },
-                            onAllowsLandscapeChanged: { pageAllowsLandscape = $0 },
+                            // R4 fix: `entry.id == currentPageID` is
+                            // re-checked LIVE here, not the `isActive`
+                            // snapshot this closure captured at creation
+                            // time — the pager may already have moved on
+                            // by the time this fires. Without this
+                            // guard, a page swiped past quickly (rapid
+                            // swipes, or a UI test) can report `true`
+                            // and leave `pageAllowsLandscape` stuck
+                            // granting landscape for a page that never
+                            // asked for it; confirmed on the 17 Pro sim
+                            // (a portrait video's window genuinely
+                            // rotated to landscape after scrolling past
+                            // a wide one). `.onChange(of: currentPageID)`
+                            // above is this guard's other half: it resets
+                            // the flag on every page change, since a
+                            // dropped stale report here must not leave a
+                            // stale `true` standing either.
+                            onAllowsLandscapeChanged: { newValue in
+                                guard entry.id == currentPageID else { return }
+                                pageAllowsLandscape = newValue
+                            },
                             safeAreaTop: safeAreaTop,
                             duoLayout: duoLayout,
                             onDoubleTap: { doubleTapKeepNonces[entry.id, default: 0] += 1 },

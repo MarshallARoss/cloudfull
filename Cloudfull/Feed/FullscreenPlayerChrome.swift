@@ -8,11 +8,13 @@
 
 import SwiftUI
 
-/// The minimal chrome shown over a rotated, fullscreen video.
+/// The minimal chrome shown over a full-bleed, fullscreen video.
 /// `PlayerPageView` mounts this view only while `isFullscreen` is true,
-/// inside the same rotated canvas as the video itself, so it rotates with
-/// the video and reads upright in the user's hand. This view never reads
-/// `deviceStance` or applies its own rotation.
+/// inside the same canvas as the video itself. The window is really
+/// landscape by then (R4, real interface rotation — see
+/// `PlayerPageView.windowIsLandscape`'s own comment), so this lays out
+/// directly in that space and reads upright with no rotation of its
+/// own to apply. This view never reads a device or window orientation.
 ///
 /// Hidden by default. A tap anywhere on the stage toggles `revealed`; that
 /// tap gesture lives on `PlayerPageView`, not here, since this view only

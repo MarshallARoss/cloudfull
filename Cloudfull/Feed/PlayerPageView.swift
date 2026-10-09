@@ -30,21 +30,9 @@ struct PlayerPageView: View {
     /// This disabled state, not gesture priority, stops a drag along the
     /// scrubber strip from changing the page mid-scrub.
     let onScrubbingChanged: (Bool) -> Void
-    /// The device's raw physical stance, fed from `OrientationMonitor`
-    /// through `FeedView`. This value is not gated by any other condition.
-    ///
-    /// R4: no longer a layout input — `isFullscreen` and
-    /// `allowsLandscapeCandidate` below read the window's own real shape
-    /// and traits, never a device orientation. Kept only for
-    /// `fullscreenStateIdentifier`'s DEBUG probe, so the probe can still
-    /// report the stance the app actually saw, and for `logRotationPose`.
-    /// `OrientationMonitor` itself is still wired in `FeedView`; removing
-    /// it and moving the UI tests that drive it onto
-    /// `XCUIDevice.shared.orientation` is R5's own step.
-    let deviceStance: Stance
     /// False while a sheet is up (trash, share, album picker, shrink
-    /// confirm). Passed as its own parameter, separate from `deviceStance`,
-    /// for the same reason: the raw stance and the allowed state can differ.
+    /// confirm). A page can be `isActive` with a sheet open, so this is
+    /// its own parameter rather than derived from that.
     let fullscreenAllowed: Bool
     /// Reports fullscreen state to `FeedView`, which applies
     /// `.scrollDisabled(isScrubbing || isFullscreen)` and hides the global
@@ -370,6 +358,36 @@ struct PlayerPageView: View {
     #if DEBUG
     private static let rotationLog = Logger(subsystem: "com.cloudfull.app", category: "Rotation")
 
+    /// R5 (`design/duo/duo_audit_apple_checklist.md` Decision A/C):
+    /// replaces `deviceStance` as the DEBUG probes' orientation reading,
+    /// now that `OrientationMonitor` is gone. Reads the WINDOW's own
+    /// real interface orientation — never a device orientation, and
+    /// never for layout (`isFullscreen`/`allowsLandscapeCandidate`
+    /// already read window shape and traits directly) — so this is a
+    /// plain UIKit scene-geometry read, not the kind of
+    /// `UIDevice.current.orientation` round-trip `OrientationMonitor`'s
+    /// own header comment warned never to make from a body pass.
+    ///
+    /// `.landscapeLeft`/`.landscapeRight` are SWAPPED on the way out:
+    /// `UIInterfaceOrientation`'s left/right naming is the opposite of
+    /// the matching `UIDeviceOrientation` case — Apple's own, long-
+    /// standing convention, confirmed empirically on this runtime (the
+    /// simulator's own XCUITest log reports "Setting device orientation
+    /// to Landscape Left … Interface orientation changed to Landscape
+    /// Right" for the same physical turn). Swapping back is what keeps
+    /// this probe reading in the same device-orientation terms
+    /// `deviceStance.probeName` used to report, so `CloudfullUITests/M6Tests.swift`'s
+    /// own `rotate(to:)` helper (which still thinks in device-orientation
+    /// terms) needs no further change beyond R5's own.
+    private var windowOrientationProbeName: String {
+        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else { return "portrait" }
+        switch scene.effectiveGeometry.interfaceOrientation {
+        case .landscapeLeft: return "landscapeRight"
+        case .landscapeRight: return "landscapeLeft"
+        default: return "portrait"
+        }
+    }
+
     /// `CGRect?` as `"x,y,w,h"`, or `"none"` — the shared formatting
     /// `logRotationPose` uses for both `duoLayout.division` and
     /// `duoLayout.occlusion`, truncating the same way `windowSize`
@@ -412,7 +430,7 @@ struct PlayerPageView: View {
         guard isActive, DiagnosticsGate.isOn("-cloudfull-log-rotation") else { return }
         let hSC = horizontalSizeClass.map { "\($0)" } ?? "nil"
         let vSC = verticalSizeClass.map { "\($0)" } ?? "nil"
-        let message = "rotation_\(deviceStance.probeName)_hSC-\(hSC)_vSC-\(vSC)_\(Int(windowSize.width))x\(Int(windowSize.height))"
+        let message = "rotation_\(windowOrientationProbeName)_hSC-\(hSC)_vSC-\(vSC)_\(Int(windowSize.width))x\(Int(windowSize.height))"
             + "_pose-\(duoLayout.pose.rawValue)_div-\(rectProbe(duoLayout.division))_occ-\(rectProbe(duoLayout.occlusion))_\(hingeProbe)"
         Self.rotationLog.notice("\(message, privacy: .public)")
         DiagnosticsLog.shared.log("Rotation", message)
@@ -851,26 +869,15 @@ struct PlayerPageView: View {
             videoIsLandscape = false
             videoAspectRatio = 9.0 / 16.0
         }
-        // `deviceStance` no longer drives any latch reset — see
-        // `dismissedThisSpell`'s own comment on why ("reset it on page
-        // change" replaces it). This call site stays only for the
-        // diagnostic: a pose can change `deviceStance` with no change to
-        // `proxy.size` at all — rotating a closed Duo, or a regular
-        // iPhone, sideways while the window itself stays whatever size
-        // it already was (the mask may not grant landscape for this
-        // page at all). The `onChange(of: proxy.size)` log call above
-        // would miss exactly that moment, so this is a second,
-        // independent call site for the same diagnostic.
-        .onChange(of: deviceStance) { _, _ in
-            logRotationPose()
-        }
-        // Step 1: two more independent call sites for the same
-        // diagnostic. A pose can change with no change to `proxy.size`
-        // or `deviceStance` at all — the fold opening while the window
-        // itself stays whatever shape it already was — and the hinge
-        // can change with no change to the classified pose — every
-        // status short of the `.partial` + landscape combination the
-        // tent alone needs.
+        // R5: `OrientationMonitor`/`deviceStance` are gone, so there is
+        // no device-orientation call site left to pair with the
+        // `onChange(of: proxy.size)` log call above. Two independent
+        // call sites remain for the same diagnostic: a pose can change
+        // with no change to `proxy.size` at all — the fold opening while
+        // the window itself stays whatever shape it already was — and
+        // the hinge can change with no change to the classified pose —
+        // every status short of the `.partial` + landscape combination
+        // the tent alone needs.
         .onChange(of: duoLayout.pose) { _, _ in
             logRotationPose()
         }
@@ -1372,12 +1379,16 @@ struct PlayerPageView: View {
                 .accessibilityIdentifier(isActive ? scrubberProbeIdentifier : "")
 
             // `fullscreen_state_<active|inactive>_<stance>_<assetID>`,
-            // present unconditionally on the centred page. Reports the raw
-            // monitor stance (`deviceStance`), never the gated
-            // `isFullscreen` value. This lets a test with a portrait video
-            // that rotates distinguish the app seeing the rotation and
-            // declining fullscreen from the rotation never reaching the
-            // app.
+            // present unconditionally on the centred page. R5:
+            // `<stance>` now reports `windowOrientationProbeName` — the
+            // WINDOW's own real orientation, not a raw device reading
+            // independent of `isFullscreen`. A portrait video that
+            // correctly declines fullscreen now reports "portrait" here
+            // too, since the window genuinely never rotates for it; see
+            // that property's own comment for the full reasoning, and
+            // `CloudfullUITests/M6Tests.swift`'s `testPortraitVideoIgnoresRotation`
+            // for how that test proves the decline is correct rather
+            // than a missed rotation.
             Color.clear
                 .frame(width: 1, height: 1)
                 .accessibilityIdentifier(isActive ? fullscreenStateIdentifier : "")
@@ -1395,7 +1406,7 @@ struct PlayerPageView: View {
 
     #if DEBUG
     private var fullscreenStateIdentifier: String {
-        "fullscreen_state_\(isFullscreen ? "active" : "inactive")_\(deviceStance.probeName)_\(assetID)"
+        "fullscreen_state_\(isFullscreen ? "active" : "inactive")_\(windowOrientationProbeName)_\(assetID)"
     }
     #endif
 

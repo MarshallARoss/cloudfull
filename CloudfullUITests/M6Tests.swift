@@ -7,7 +7,6 @@
 //
 
 import XCTest
-import CoreFoundation
 
 /// UI tests for landscape fullscreen playback.
 ///
@@ -206,15 +205,28 @@ final class M6Tests: FeedUITestCase {
         }
         let assetID = portraitPage.assetID
 
-        rotate(to: .landscapeLeft)
-        guard let declined = fullscreenState(timeout: 8) else {
-            XCTFail("fullscreen_state_ probe never appeared after rotating a portrait video")
+        // R5: not `rotate(to:)` — `RotationPolicy` never grants landscape
+        // for a portrait video, so the window never adopts "landscapeLeft"
+        // and that helper's own poll would just time out. Set the device
+        // orientation directly instead.
+        XCUIDevice.shared.orientation = .landscapeLeft
+        // Polls for "portrait" specifically (`waitForStance`'s own
+        // comment): the window can read a stale, still-transitioning
+        // stance for a moment right after the orientation change, before
+        // settling on correctly staying portrait.
+        guard let declined = waitForStance("portrait", assetID: assetID, timeout: 8) else {
+            XCTFail("fullscreen_state_ never settled on stance 'portrait' after rotating a portrait video — it may have incorrectly rotated")
             return
         }
-        // The stance field proves the rotation reached the app and the app
-        // declined fullscreen, rather than the rotation never arriving.
+        // The stance field now reports the WINDOW's own real orientation
+        // (`PlayerPageView.windowOrientationProbeName`), not a raw device
+        // reading independent of app behavior. "portrait" here IS the
+        // proof the app correctly declined — the other three tests in
+        // this suite already prove `XCUIDevice.shared.orientation`
+        // reaches the app and drives real rotation; this one proves a
+        // portrait video is correctly excluded from it.
         XCTAssertFalse(declined.active, "fullscreen_state_ read active for a portrait video")
-        XCTAssertEqual(declined.stance, "landscapeLeft", "fullscreen_state_ stance did not read landscapeLeft — the rotation may never have reached the app")
+        XCTAssertEqual(declined.stance, "portrait", "fullscreen_state_ stance did not stay portrait — the window rotated for a portrait video")
         XCTAssertEqual(declined.assetID, assetID)
 
         XCTAssertFalse(element("fullscreen_overlay").exists, "fullscreen_overlay exists for a portrait video")
@@ -330,15 +342,26 @@ final class M6Tests: FeedUITestCase {
         }
         dismissButton.tap()
 
-        guard let dismissed = fullscreenState(timeout: 8) else {
-            XCTFail("fullscreen_state_ probe missing after tapping fullscreen_dismiss")
+        // R4 (real rotation): dismissing sets `dismissedThisSpell`, which
+        // makes `FeedView.allowsLandscape` false for this page right
+        // away, so `RotationPolicy` withdraws landscape and the WINDOW
+        // itself rotates back to portrait — it does not wait for the
+        // phone to turn back. This is the owner-flagged behavior change
+        // the R4 commit called out: the phone is still physically
+        // landscapeLeft, but the probe (the window's own orientation)
+        // settles on portrait after dismiss, not landscapeLeft. The
+        // `dismissedThisSpell` latch itself now resets on page change,
+        // not on the device returning to portrait — see that property's
+        // own comment in PlayerPageView.swift. `waitForStance` (not a
+        // single `fullscreenState()` read) because the system-driven
+        // rotation back to portrait takes a moment to settle, the same
+        // as any other rotation this suite waits for.
+        guard let dismissed = waitForStance("portrait", assetID: assetID, timeout: 8) else {
+            XCTFail("fullscreen_state_ never settled on stance 'portrait' after tapping fullscreen_dismiss")
             return
         }
         XCTAssertFalse(dismissed.active, "fullscreen_state_ still reads active after tapping fullscreen_dismiss")
-        // The device is still in landscapeLeft, so the stance reads
-        // landscapeLeft. The `dismissedThisSpell` latch keeps fullscreen
-        // off and stops it from engaging again.
-        XCTAssertEqual(dismissed.stance, "landscapeLeft", "device stance changed on its own after tapping fullscreen_dismiss")
+        XCTAssertEqual(dismissed.stance, "portrait", "the window did not rotate back to portrait immediately after tapping fullscreen_dismiss")
         XCTAssertEqual(dismissed.assetID, assetID)
 
         XCTAssertFalse(element("fullscreen_overlay").exists, "fullscreen_overlay is still present after tapping fullscreen_dismiss")
@@ -390,76 +413,87 @@ final class M6Tests: FeedUITestCase {
         poolTotal + max(10, poolTotal / 4)
     }
 
-    // MARK: - Test-side rotation through the DEBUG Darwin hook
+    // MARK: - Test-side rotation (R5)
     //
-    // XCUIDevice.shared.orientation does not reach the app process on the
-    // iOS simulator. Setting it alone produces no orientation change
-    // inside the app. No `orientation_landscapeLeft` line appears in the
-    // device log, and a probe read afterward still reports portrait.
+    // R5 (design/duo/duo_audit_apple_checklist.md Decision A/C): real
+    // interface rotation landed in R3/R4, and `OrientationMonitor` — the
+    // DEBUG Darwin hook this class used to drive, because
+    // `XCUIDevice.shared.orientation` alone produced no orientation
+    // change inside the app on an older runtime — is gone. Confirmed on
+    // this runtime (iOS 27.1): setting `XCUIDevice.shared.orientation`
+    // alone now drives a REAL interface rotation. The simulator's own
+    // XCUITest log reports it directly: "Setting device orientation to
+    // Landscape Left … Interface orientation changed to Landscape
+    // Right" — proof the rotation reaches the app, with no app-side hook
+    // needed at all.
     //
-    // `OrientationMonitor`'s DEBUG Darwin hook exists for exactly this
-    // case. This helper posts the three notification names that the hook
-    // listens for. Driving the hook from the test side, not from the app,
-    // is deliberate. `XCUIDevice.shared.orientation` is still set first on
-    // every call.
-    //
-    // If a future runtime delivers the orientation change correctly, the
-    // app already sees the real rotation before this hook ever posts.
-    // Behavior stays correct either way. Only this class uses the hook.
-    //
-    // Driving the hook exercises all code that reads `stance` publishing
-    // in the app. That code includes `isFullscreen`, the rotated canvas,
-    // `FullscreenPlayerChrome`, hiding the global chrome, disabling
-    // paging, and the dismiss latch. Each goes through the same code path
-    // a real rotation drives. These tests do not prove that a
-    // physical rotation reaches the app on the simulator.
-    private func postDarwinOrientationStance(_ stance: String) {
-        let name: String
-        switch stance {
-        case "landscapeLeft": name = "com.cloudfull.app.debug.orientationStance.landscapeLeft"
-        case "landscapeRight": name = "com.cloudfull.app.debug.orientationStance.landscapeRight"
-        default: name = "com.cloudfull.app.debug.orientationStance.portrait"
-        }
-        CFNotificationCenterPostNotification(
-            CFNotificationCenterGetDarwinNotifyCenter(),
-            CFNotificationName(name as CFString),
-            nil,
-            nil,
-            true
-        )
-    }
+    // That log line is also why `probeName(for:)` below SWAPS left and
+    // right: `UIInterfaceOrientation.landscapeLeft`/`.landscapeRight` are
+    // defined as the opposite of the matching
+    // `UIDeviceOrientation` case (Apple's own, long-standing convention,
+    // confirmed empirically above) — see
+    // `PlayerPageView.windowOrientationProbeName`'s own comment, the
+    // probe's actual source, for the same swap applied on the app side.
+    // Keeping that swap here is what lets this file's own `wantStance`
+    // values read in device-orientation terms, unchanged from before R5.
 
-    /// Sets `XCUIDevice.shared.orientation` and posts the matching DEBUG
-    /// Darwin notification, described in the section comment above. Every
-    /// `rotate(to:)` and `rotateMeasuringEngageMs(to:)` call performs this
-    /// action before polling. Returns the stance string that the probe
-    /// reports for the orientation.
-    private func applyDeviceStance(_ orientation: UIDeviceOrientation) -> String {
-        let wantStance: String
+    /// The stance string `fullscreen_state_` reports for a given DEVICE
+    /// orientation, once the window has actually adopted it. Shared by
+    /// every rotation helper below.
+    private static func probeName(for orientation: UIDeviceOrientation) -> String {
         switch orientation {
-        case .landscapeLeft: wantStance = "landscapeLeft"
-        case .landscapeRight: wantStance = "landscapeRight"
-        default: wantStance = "portrait"
+        case .landscapeLeft: return "landscapeLeft"
+        case .landscapeRight: return "landscapeRight"
+        default: return "portrait"
         }
-        XCUIDevice.shared.orientation = orientation
-        postDarwinOrientationStance(wantStance)
-        return wantStance
     }
 
-    /// Sets the device stance, using `applyDeviceStance(_:)` above, then
-    /// polls `fullscreenState()` until the probe's stance field reports
-    /// the requested stance, up to `timeout` seconds (default 8). Fails
-    /// the test if the stance never arrives, so a rotation that never
-    /// reached the app cannot read as the app declining fullscreen.
+    /// Sets `XCUIDevice.shared.orientation`, then polls `fullscreenState()`
+    /// until the probe's stance field reports the matching name, up to
+    /// `timeout` seconds (default 8). Fails the test if the stance never
+    /// arrives, so a rotation that never reached the app cannot read as
+    /// the app declining fullscreen.
+    ///
+    /// NOT for a page expected to DECLINE fullscreen (a portrait video):
+    /// there `RotationPolicy` never grants landscape, so the window
+    /// never adopts the requested stance and this would simply time out.
+    /// `testPortraitVideoIgnoresRotation` sets
+    /// `XCUIDevice.shared.orientation` directly instead, for exactly
+    /// that reason.
     private func rotate(to orientation: UIDeviceOrientation, timeout: TimeInterval = 8, file: StaticString = #filePath, line: UInt = #line) {
-        let wantStance = applyDeviceStance(orientation)
+        let wantStance = Self.probeName(for: orientation)
+        XCUIDevice.shared.orientation = orientation
+        guard waitForStance(wantStance, assetID: nil, timeout: timeout) != nil else {
+            XCTFail("fullscreen_state_ never reported stance '\(wantStance)' within \(timeout)s of setting the device orientation — the rotation may not have reached the app, or this page does not permit landscape", file: file, line: line)
+            return
+        }
+    }
+
+    /// Polls `fullscreenState()` until its stance (and, if given, its
+    /// assetID) match, up to `timeout` seconds. Returns `nil`, never
+    /// failing the test itself, so callers choose their own failure
+    /// message.
+    ///
+    /// R5's own fix: a system-driven rotation (real or a real decline)
+    /// does not always land within `fullscreenState()`'s own single
+    /// 0.3 s double-read settle window — a page that correctly declines
+    /// landscape, or a page whose mask just withdrew it (dismiss), can
+    /// both read a stale, still-transitioning stance for a moment first.
+    /// Polling for the SPECIFIC expected value, not just "whatever
+    /// settles first", is what `rotate(to:)` already did for the engage
+    /// case; this is the same polling, reusable for the decline and
+    /// post-dismiss cases too.
+    private func waitForStance(
+        _ wantStance: String, assetID: String?, timeout: TimeInterval
+    ) -> (active: Bool, stance: String, assetID: String)? {
         let deadline = Date().addingTimeInterval(timeout)
         repeat {
-            if let reading = fullscreenState(timeout: 1), reading.stance == wantStance {
-                return
+            if let reading = fullscreenState(timeout: 1), reading.stance == wantStance,
+               assetID == nil || reading.assetID == assetID {
+                return reading
             }
         } while Date() < deadline
-        XCTFail("fullscreen_state_ never reported stance '\(wantStance)' within \(timeout)s of setting the device stance — the rotation may not have reached the app", file: file, line: line)
+        return nil
     }
 
     /// Used only by test 1. Measures `fullscreen_engage_ms`: the
@@ -476,7 +510,8 @@ final class M6Tests: FeedUITestCase {
     /// number if used here.
     private func rotateMeasuringEngageMs(to orientation: UIDeviceOrientation, timeout: TimeInterval = 8, file: StaticString = #filePath, line: UInt = #line) -> Int? {
         let start = Date()
-        let wantStance = applyDeviceStance(orientation)
+        let wantStance = Self.probeName(for: orientation)
+        XCUIDevice.shared.orientation = orientation
         let deadline = start.addingTimeInterval(timeout)
         repeat {
             if let reading = sampleFullscreenStateRaw(), reading.active, reading.stance == wantStance {
@@ -484,7 +519,7 @@ final class M6Tests: FeedUITestCase {
             }
             Thread.sleep(forTimeInterval: 0.02)
         } while Date() < deadline
-        XCTFail("fullscreen_state_ never read active with stance '\(wantStance)' within \(timeout)s of setting the device stance", file: file, line: line)
+        XCTFail("fullscreen_state_ never read active with stance '\(wantStance)' within \(timeout)s of setting the device orientation", file: file, line: line)
         return nil
     }
 
