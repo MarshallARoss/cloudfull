@@ -166,6 +166,17 @@ struct PhotoFeedView: View {
     /// bar (req 1 of the Duo plan). `PhotoTopBar` is the one piece that
     /// must stop clear of the bar's own time/connectivity ring.
     @State private var toolbarVerticalEdge: HorizontalEdge?
+    /// The window's own measured width, from `.onGeometryChange` below —
+    /// R2 (`design/duo/duo_audit_apple_checklist.md` F5): `configure`
+    /// used to run as a `let _ =` side effect inside `body` itself, on
+    /// every body pass, reading `rootProxy.size.width` directly. Moved
+    /// out to `.onGeometryChange`/`.onChange(of: displayScale)` so it
+    /// only re-runs on a real width or scale change, not on every
+    /// unrelated re-render — and so `.onChange(of: displayScale)` has a
+    /// width to re-configure with when ONLY the scale changes (an
+    /// external display, or the inner/outer swap on Duo), which a
+    /// `body`-inline read could never trigger on its own.
+    @State private var measuredPostWidth: CGFloat = 0
     /// Fed to `DuoLayout.current` below, the same as
     /// `FeedView.horizontalSizeClass`/`verticalSizeClass`. Nothing in
     /// this view reads `duoLayout.pose` itself today — Photos has no
@@ -250,9 +261,9 @@ struct PhotoFeedView: View {
             //
             // The image pipeline requests and caches images at exactly the
             // post's own width. It must learn that width from the same
-            // layout the posts use. This call is idempotent; only a real
-            // change does work.
-            let _ = PhotoImagePipeline.shared.configure(widthPoints: rootProxy.size.width, scale: displayScale)
+            // layout the posts use. R2: the actual `configure` call moved
+            // to `.onGeometryChange`/`.onChange(of: displayScale)` below
+            // — see `measuredPostWidth`'s own comment for why.
             ZStack(alignment: .top) {
                 // Zero-size; only ever updates `toolbarVerticalEdge`
                 // above. See that property's own comment, and
@@ -334,6 +345,22 @@ struct PhotoFeedView: View {
             .ignoresSafeArea()
             .frame(width: rootProxy.size.width, height: rootProxy.size.height)
             .coordinateSpace(name: Self.viewportSpace)
+            // R2: `configure`'s real call site — see `measuredPostWidth`'s
+            // own comment. `action` only fires on a genuine width change,
+            // `configure` itself is idempotent on top of that (its own
+            // doc comment), so this never does redundant work.
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { _, newWidth in
+                measuredPostWidth = newWidth
+                PhotoImagePipeline.shared.configure(widthPoints: newWidth, scale: displayScale)
+            }
+        }
+        // R2's other half: a scale-only change (an external display, or
+        // the inner/outer swap on Duo) moves no width at all, so the
+        // `.onGeometryChange` above never fires on its own. Re-configure
+        // with the last measured width once one is known.
+        .onChange(of: displayScale) { _, newScale in
+            guard measuredPostWidth > 0 else { return }
+            PhotoImagePipeline.shared.configure(widthPoints: measuredPostWidth, scale: newScale)
         }
         // Photos unmounts the moment the chin nav leaves it, since
         // `RootView` switches on the mode. This is the exact edge on
