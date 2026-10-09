@@ -970,6 +970,10 @@ struct FeedView: View {
             // renders, for the shrink-progress capsule alone; see that
             // function's own comment on why.
             let usesChromeColumn = duoLayout.pose == .openWide || duoLayout.pose == .book
+            // Build 6: pose 5 (`.openTall`) moves the same three
+            // controls into one row, y-centred on `DuoLayout
+            // .statusBlock` — see `pose5TopRow`'s own comment.
+            let usesPose5TopRow = duoLayout.pose == .openTall
             ZStack(alignment: .top) {
                 VStack(spacing: 0) {
                     topChrome(duoLayout: duoLayout, safeAreaTop: realTopInset, containerSize: fullWindow)
@@ -990,6 +994,9 @@ struct FeedView: View {
                     // `.frame` pair below.
                     chromeColumn(duoLayout: duoLayout, safeAreaTop: realTopInset, containerSize: fullWindow)
                 }
+                if usesPose5TopRow {
+                    pose5TopRow(duoLayout: duoLayout, safeAreaTop: realTopInset, containerSize: fullWindow)
+                }
             }
             // The stack starts at the safe-area top, since this reader is
             // inside the safe area, but `topChromeTopPadding` measures
@@ -1005,18 +1012,21 @@ struct FeedView: View {
     /// Build 3: suppresses Mute, Filter, the counter, and Bin at pose
     /// 3/4/4W — `chromeColumn` renders those instead, positioned at
     /// `DuoLayout.zigzagCenters` rather than flowing left to right.
-    /// This function still renders for one thing even then: the
+    /// Build 6 adds pose 5 to the same suppression — `pose5TopRow`
+    /// renders those instead, y-centred on `DuoLayout.statusBlock`.
+    /// This function still renders for one thing even so: the
     /// shrink-progress capsule, which the round-3 wireframes
     /// (`DUO_POSES.md`) do not mention at all (a rare, transient
-    /// state, not a fixture of the pose). Letting it keep this row,
-    /// rather than inventing a column position the wireframes never
+    /// state, not a fixture of any one pose). Letting it keep this
+    /// row, rather than inventing a position the wireframes never
     /// specified, is the smaller assumption. Its row no longer
     /// reserves the chrome column's own width — see `duoLayout
     /// .availableRect`'s comment — so this is a known, accepted
-    /// imperfection if a shrink is active while the chrome column
-    /// also shows; flagged for the owner's own look at the sim.
+    /// imperfection if a shrink is active while the chrome column or
+    /// pose-5 row also shows; flagged for the owner's own look at the
+    /// sim.
     private func topChrome(duoLayout: DuoLayout, safeAreaTop: CGFloat, containerSize: CGSize) -> some View {
-        let usesChromeColumn = duoLayout.pose == .openWide || duoLayout.pose == .book
+        let suppressDefaultRow = duoLayout.pose == .openWide || duoLayout.pose == .book || duoLayout.pose == .openTall
         // Four independent glass pills. Do not wrap these in a
         // `GlassEffectContainer`. XCUITest then resolves the far-right
         // `bin_open` button's frame relative to the container. Its
@@ -1029,7 +1039,7 @@ struct FeedView: View {
         return HStack(alignment: .top, spacing: 8) {
             // A tap on the video also toggles mute, with a center flash.
             // This pill is the second mute control.
-            if !usesChromeColumn {
+            if !suppressDefaultRow {
                 muteButton
                 FilterMenuView(store: optionsStore, hidesChrome: hidesGlobalChrome)
             }
@@ -1037,7 +1047,7 @@ struct FeedView: View {
                 shrinkProgressCapsule(text, assetID: job.id)
             }
             Spacer(minLength: 8)
-            if !usesChromeColumn {
+            if !suppressDefaultRow {
                 counterCapsule
                 binButton
             }
@@ -1108,6 +1118,44 @@ struct FeedView: View {
                 }
             }
         }
+    }
+
+    // MARK: - Pose 5 top row (build 6)
+
+    /// Pose 5's (open-tall) replacement for `topChrome`'s own Mute,
+    /// Filter, and Bin: "one row, y-centre = `statusBlock.midY`;
+    /// Mute at `stage.minX + 16`, Filter next to it (`Rail.spacing`);
+    /// Bin trailing edge = `statusBlock.minX − 8`; counter left of
+    /// Bin" (`DUO_POSES.md`'s per-pose table). Counter-left-of-Bin is
+    /// already this row's own child order — the same as `topChrome`'s
+    /// own `counterCapsule`, `binButton` pair — so nothing extra is
+    /// needed for that part.
+    ///
+    /// Anchored the same way `actionRailColumn`/`chromeColumn`'s own
+    /// siblings are: a target rect from the leading edge
+    /// (`stage.minX + 16`) to the trailing edge (`statusBlock.minX −
+    /// 8`), `.frame(width:height:alignment:.center)` to give the row
+    /// a known box, then `.position(x: rect.midX, y: statusBlock
+    /// .midY)`. The row's own `Spacer(minLength: 8)` between Mute/
+    /// Filter and the counter/Bin pair pushes Bin's own trailing
+    /// edge out to fill `rect.width` exactly, landing it on
+    /// `statusBlock.minX − 8` the same way `topChrome`'s identical
+    /// `Spacer` already fills its own row.
+    private func pose5TopRow(duoLayout: DuoLayout, safeAreaTop: CGFloat, containerSize: CGSize) -> some View {
+        let statusBlock = duoLayout.statusBlock(containerSize: containerSize)
+        let stageMinX = duoLayout.stageRect(containerSize: containerSize, safeAreaTop: safeAreaTop).minX
+        let leading = stageMinX + 16
+        let trailing = statusBlock.minX - 8
+        let width = max(0, trailing - leading)
+        return HStack(spacing: Rail.spacing) {
+            muteButton
+            FilterMenuView(store: optionsStore, hidesChrome: hidesGlobalChrome)
+            Spacer(minLength: 8)
+            counterCapsule
+            binButton
+        }
+        .frame(width: width, height: 40, alignment: .center)
+        .position(x: leading + width / 2, y: statusBlock.midY)
     }
 
     /// Height of the empty band the fixed 9:16 stage leaves above and below

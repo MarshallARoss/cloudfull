@@ -758,6 +758,36 @@ struct DuoLayout {
             return CGRect(x: minX, y: 0, width: max(0, containerSize.width - minX), height: containerSize.height)
         }
     }
+
+    /// Pose 5's own top-chrome anchor (build 6): "the active
+    /// `.occlusion` region whose `minX > W/2`" — the spike that
+    /// measured this proved it is the time + connectivity ring block
+    /// on pose 5, `statusBlockFallback`'s own 134×82 size. Falls back
+    /// to that fixed size, at the window's own top-trailing corner
+    /// (`x = W − 134, y = 0`), when this frame's own `occlusion` is
+    /// either absent or sits on the wrong half — a frame the owner's
+    /// own sim readings already caught transiently reporting a stale
+    /// cross-display rect (see `current(...)`'s own division filter
+    /// for the equivalent fix on that field; `occlusion` has no such
+    /// filter yet, so this check doubles as one for this one caller).
+    ///
+    /// No separate log call here: this type stays a pure value with
+    /// no side effects, by design (this file's own header comment);
+    /// `PlayerPageView`'s `-cloudfull-log-rotation` probe already
+    /// prints the raw `occlusion` field on every pose/hinge change,
+    /// which already shows whether this fell back — `occ-none`, or an
+    /// `occ-` rect whose own `x` sits left of half the printed `W`.
+    func statusBlock(containerSize: CGSize) -> CGRect {
+        if let occlusion, occlusion.minX > containerSize.width / 2 {
+            return occlusion
+        }
+        return CGRect(
+            x: containerSize.width - Self.statusBlockFallback.width,
+            y: 0,
+            width: Self.statusBlockFallback.width,
+            height: Self.statusBlockFallback.height
+        )
+    }
 }
 
 /// Reads `EnvironmentValues.toolbarVerticalEdge` and reports it through
