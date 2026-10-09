@@ -108,9 +108,41 @@ extension CloudfullAppDelegate: UNUserNotificationCenterDelegate {
 /// through `performActionFor`.
 final class CloudfullSceneDelegate: NSObject, UIWindowSceneDelegate {
     func scene(_ scene: UIScene, willConnectTo session: UISceneSession, options connectionOptions: UIScene.ConnectionOptions) {
+        // `RotationPolicy.shared` outlives any one scene connection; this
+        // just hands it the one scene it needs to poke when its own
+        // `allowsLandscape` changes. See that type's own comment.
+        if let windowScene = scene as? UIWindowScene {
+            RotationPolicy.shared.scene = windowScene
+        }
         if let item = connectionOptions.shortcutItem {
             Self.open(item)
         }
+    }
+
+    /// Decision A, real interface rotation with a dynamic orientation
+    /// mask (`design/duo/duo_audit_apple_checklist.md` §3). Replaces the
+    /// app's `UISupportedInterfaceOrientations` Info.plist value for
+    /// this scene — see that key's own build-setting comment in
+    /// `project.pbxproj`, which now lists all three orientations so this
+    /// override has landscape to grant.
+    ///
+    /// `RotationPolicy.shared` is the one switch; see its own doc
+    /// comment. R3's own build keeps `allowsLandscape` fixed at `false`
+    /// — the mask always resolves to `.portrait`, no visible change yet.
+    /// R4 is the step that lets `FeedView` drive it from the active
+    /// page's own content.
+    ///
+    /// Confirmed against `UIWindowScene.h` in the iOS 27.1 SDK: the
+    /// Objective-C selector is the single-parameter
+    /// `supportedInterfaceOrientationsForWindowScene:`, which Swift
+    /// imports as `supportedInterfaceOrientations(for:)` — NOT
+    /// `windowScene(_:supportedInterfaceOrientationsFor:)`, the shape of
+    /// the older, two-argument `UIApplicationDelegate` method
+    /// (`application(_:supportedInterfaceOrientationsFor:)`) this is
+    /// easy to confuse it with. Verified by compiling a conforming type
+    /// against the real SDK, not assumed from the header's prose alone.
+    func supportedInterfaceOrientations(for windowScene: UIWindowScene) -> UIInterfaceOrientationMask {
+        RotationPolicy.shared.allowsLandscape ? .allButUpsideDown : .portrait
     }
 
     func sceneDidBecomeActive(_ scene: UIScene) {
