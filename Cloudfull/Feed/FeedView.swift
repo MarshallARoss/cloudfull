@@ -99,6 +99,11 @@ struct FeedView: View {
     /// `DeviceHinge.angle.degrees` alongside `hingeStatus`, read by
     /// `logRotationPose`'s DEBUG probe only.
     @State private var hingeDegrees: Double?
+    /// The last `DuoPose` this view actually published into a
+    /// `DuoLayout` handed to a child — see `settledDuoLayout`'s own
+    /// comment. `nil` only until the first settle completes, right
+    /// after this view mounts.
+    @State private var settledDuoPose: DuoPose?
     /// `.regular` only on the Duo's inner display — the same size-class
     /// read `PlayerPageView.isFullscreen`/`isLandscapeFit` already lean
     /// on, needed here too: `DuoLayout.classify` cannot tell the inner
@@ -273,7 +278,17 @@ struct FeedView: View {
         // safe area inside it, so both draw over the same rectangle.
         GeometryReader { rootProxy in
             let safeAreaTop = rootProxy.safeAreaInsets.top
-            let duoLayout = resolvedDuoLayout(rootProxy: rootProxy)
+            let rawDuoLayout = resolvedDuoLayout(rootProxy: rootProxy)
+            // Build 1 fix: `pose` alone, debounced — see `settledDuoPose`'s
+            // own comment and the `.task(id:)` below, mirroring
+            // `FullscreenPlayerChrome`'s own cancel-and-restart auto-hide
+            // task. Before the first settle completes (`nil`), this falls
+            // back to the raw value outright: there is no previous
+            // published pose to protect against a transient flip away
+            // from, and withholding a Duo's very first classified pose
+            // for 250 ms after a cold launch would show the wrong layout
+            // instead of none at all.
+            let duoLayout = rawDuoLayout.withPose(settledDuoPose ?? rawDuoLayout.pose)
             ZStack {
             // Zero-size; only ever updates `toolbarVerticalEdge` above.
             // See that property's own comment for why the read is
@@ -366,6 +381,24 @@ struct FeedView: View {
             #endif
             }
             .frame(width: rootProxy.size.width, height: rootProxy.size.height)
+            // Build 1 fix: the owner's own sim readings showed `pose`
+            // flipping to a transiently wrong label for a few frames
+            // mid-fold — two independent `GeometryReader`s (this view's
+            // own `rootProxy` and each page's own, inside
+            // `PlayerPageView`) can disagree for a frame while the
+            // window is still resizing, and a stale cross-display
+            // division frame could reach `classify` before this file's
+            // own containment filter (`DuoLayout.current`) existed.
+            // Rather than chase every such transient at its source, this
+            // publishes a new pose only once the classifier has agreed
+            // on it for a full 250 ms: `.task(id:)` cancels and restarts
+            // on every change of `rawDuoLayout.pose`, so a flip that
+            // reverts before the sleep elapses never commits at all.
+            .task(id: rawDuoLayout.pose) {
+                try? await Task.sleep(nanoseconds: 250_000_000)
+                guard !Task.isCancelled else { return }
+                settledDuoPose = rawDuoLayout.pose
+            }
         }
         // Hides the status bar and home indicator while `hidesGlobalChrome`
         // is on — `isFullscreen` or `isLandscapeFit`, the same chrome-hide

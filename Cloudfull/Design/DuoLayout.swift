@@ -92,6 +92,25 @@ struct DuoLayout {
     /// they need is the yes/no, not which edge.
     var isClosedBar: Bool { barEdge != nil }
 
+    /// A copy of this value with only `pose` replaced — every other
+    /// field (`barEdge`, `occlusion`, `division`, `hinge`, …) stays
+    /// this frame's own live reading.
+    ///
+    /// Step 1's own measured fix: `FeedView`/`PhotoFeedView` debounce
+    /// `pose` before threading a `DuoLayout` further down (see
+    /// `FeedView.settledDuoLayout`'s own comment for why), but every
+    /// OTHER field keeps updating live, every frame — the owner's sim
+    /// readings showed the raw geometry itself (window size, the
+    /// division frame, the hinge) settling quickly; it was only the
+    /// discrete, named `pose` that visibly flickered between two
+    /// labels for a few frames mid-fold. This is the one place that
+    /// substitutes a debounced pose into an otherwise-live reading,
+    /// so no caller needs its own copy of this struct's field list.
+    func withPose(_ pose: DuoPose) -> DuoLayout {
+        DuoLayout(barEdge: barEdge, barWidth: barWidth, occlusion: occlusion, division: division,
+                  pose: pose, hinge: hinge, hingeDegrees: hingeDegrees)
+    }
+
     /// The "no Duo furniture" value: every field at its plain default.
     /// A regular iPhone's `FeedView`/`PhotoFeedView` can hand this
     /// straight to a child that expects a `DuoLayout` without ever
@@ -140,7 +159,27 @@ struct DuoLayout {
         // at the call site and costs nothing if the SDK's default ever
         // changes.
         let occlusionFrame = proxy.reservedRegions(kind: .occlusion).first(where: \.isActive)?.frame
-        let divisionFrame = proxy.reservedRegions(kind: .division).first(where: \.isActive)?.frame
+        // Build 1 fix: the owner's own sim readings caught a division
+        // frame from the INNER display's own coordinate space (669 pt
+        // wide) reported once while this frame's own window was still
+        // the OUTER display's compact 466-pt one — a stale cross-display
+        // reading, one layout pass behind the window size that already
+        // changed. Such a frame does not fit inside this frame's own
+        // window at all (its far edge lands past this window's own
+        // edge), so `book`/`laptop`'s `division.height > division.width`
+        // test must never see it: a plain `nil` here, same as "no fold
+        // active," is what every other `division` reader downstream
+        // (`DuoLayout.division` itself, and anything that reads it off
+        // this frame's `DuoLayout`) already expects. `CGRect.contains`
+        // is the containment test — not `intersects`, which the bad
+        // frame above would still pass, since its leading edge does
+        // overlap this window's own leading edge even though its
+        // trailing edge does not.
+        let windowBounds = CGRect(origin: .zero, size: proxy.size)
+        let rawDivisionFrame = proxy.reservedRegions(kind: .division).first(where: \.isActive)?.frame
+        let divisionFrame = rawDivisionFrame.flatMap { (frame: CGRect) -> CGRect? in
+            windowBounds.contains(frame) ? frame : nil
+        }
         let pose = classify(
             sizeClass: horizontalSizeClass,
             containerSize: proxy.size,
