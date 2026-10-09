@@ -528,6 +528,7 @@ struct FeedView: View {
                             onAdvanceRequested: { advanceToNextPage(from: entry) },
                             onOpenBinRequested: { Usage.shared.binOpened(); showTrash = true },
                             safeAreaTop: safeAreaTop,
+                            duoLayout: duoLayout,
                             keepRequestNonce: doubleTapKeepNonces[entry.id] ?? 0
                         )
                         .opacity(isFullscreen ? 0 : 1)
@@ -1559,6 +1560,13 @@ private struct FeedPageContent: View {
     /// `StageGeometry.bottomBand` put the rail's bottom edge exactly
     /// where `PlayerPageView` puts the video's bottom edge.
     let safeAreaTop: CGFloat
+    /// This frame's iPhone Duo geometry, threaded the same way
+    /// `safeAreaTop` is — see `PlayerPageView.duoLayout`'s identical
+    /// comment. `DuoLayout.none` on a regular iPhone, which keeps
+    /// `body`'s overlay layout exactly what it was before this
+    /// parameter existed. See `DuoLayout.railColumnRect` and this
+    /// file's `body`/`actionRailColumn` for how it is used.
+    let duoLayout: DuoLayout
     /// Bumped by `FeedView` on every double tap of this page's video — see
     /// `FeedView.doubleTapKeepNonces`. Watched below; each bump is one
     /// `keepFromDoubleTap()`.
@@ -1736,6 +1744,13 @@ private struct FeedPageContent: View {
         // size that view feeds `StageGeometry`.
         GeometryReader { proxy in
             let bottomBand = StageGeometry.bottomBand(safeAreaTop: safeAreaTop, containerSize: proxy.size)
+            // `nil` on a regular iPhone, and on an open Duo too narrow
+            // for one: every call below falls back to the pre-Duo
+            // overlay, unchanged. Non-`nil` on the closed Duo (the
+            // system's own bar column) and on an open Duo wide enough
+            // (a computed column) — see `DuoLayout.railColumn`'s own
+            // comment for why those two share this one rectangle.
+            let railColumnRect = duoLayout.railColumnRect(containerSize: proxy.size, safeAreaTop: safeAreaTop)
             VStack(spacing: 0) {
                 Spacer(minLength: 0)
                 // `exhaustedCard` sits directly above the caption and
@@ -1745,18 +1760,29 @@ private struct FeedPageContent: View {
                     exhaustedCard
                         .padding(.bottom, 24)
                 }
-                HStack(alignment: .bottom, spacing: 0) {
-                    captionZone
-                    VStack(alignment: .trailing, spacing: 0) {
-                        if isActive, let calloutMessage = shareCoordinator.calloutMessage {
-                            railCallout(calloutMessage)
+                if let railColumnRect {
+                    // The rail lives in its own column (`actionRailColumn`
+                    // below), not over the stage, so the caption only
+                    // needs to stay clear of that column, not of a rail
+                    // that is no longer on the video.
+                    captionZone(trailingClearance: railColumnRect.width + 16)
+                } else {
+                    HStack(alignment: .bottom, spacing: 0) {
+                        captionZone(trailingClearance: 16)
+                        VStack(alignment: .trailing, spacing: 0) {
+                            if isActive, let calloutMessage = shareCoordinator.calloutMessage {
+                                railCallout(calloutMessage)
+                            }
+                            actionRail(bottomBand: bottomBand)
                         }
-                        actionRail(bottomBand: bottomBand)
+                        .animation(.easeInOut(duration: 0.2), value: shareCoordinator.calloutMessage)
                     }
-                    .animation(.easeInOut(duration: 0.2), value: shareCoordinator.calloutMessage)
                 }
             }
             .frame(width: proxy.size.width, height: proxy.size.height)
+            if let railColumnRect {
+                actionRailColumn(rect: railColumnRect)
+            }
             #if DEBUG
             pageFactsProbe
             #endif
@@ -1842,7 +1868,15 @@ private struct FeedPageContent: View {
             .joined(separator: " · ")
     }
 
-    private var captionZone: some View {
+    /// `trailingClearance` is how far the caption must stay off the
+    /// trailing edge: the overlay rail's own 16pt margin when the rail
+    /// is on the video (a regular iPhone, or an open Duo too narrow
+    /// for a column), or the rail COLUMN's full width plus that same
+    /// 16pt when the rail has moved there instead. See
+    /// `FeedPageContent.body` for which case applies, and
+    /// `DuoLayout.railColumnRect` for where the column's width comes
+    /// from.
+    private func captionZone(trailingClearance: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(dateLine)                           // "<date> · <time> · <place>"
                 .font(.system(size: 16, weight: .semibold))
@@ -1862,9 +1896,7 @@ private struct FeedPageContent: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.leading, 16)
         .padding(.bottom, 20)
-        // The caption uses the full width because the rail is on the
-        // video, not in the chin.
-        .padding(.trailing, 16)
+        .padding(.trailing, trailingClearance)
         .opacity(isScrubbing ? 0 : 1)
         .animation(.easeOut(duration: 0.15), value: isScrubbing)
         .allowsHitTesting(false)
@@ -1936,6 +1968,43 @@ private struct FeedPageContent: View {
         }
         .padding(.trailing, 10)
         .padding(.bottom, bottomBand + Rail.seamClearance)
+    }
+
+    /// `actionRail`'s column layout (steps 3/5): the same five
+    /// buttons, the same `Rail.spacing`, placed inside the rail
+    /// column instead of over the stage.
+    ///
+    /// X-centred on the column — the same centre line the system's
+    /// own time + connectivity ring uses when the column is the
+    /// closed bar — and stacked downward from
+    /// `DuoLayout.railContentTop(safeAreaTop:)`, not bottom-anchored
+    /// against the video's seam the way `actionRail(bottomBand:)` is.
+    /// The column's natural top (below whatever already sits there)
+    /// is the one edge that means the same thing whether the column
+    /// is the closed bar or the open, computed one — see
+    /// `DuoLayout.railColumn(containerSize:safeAreaTop:)` — the bottom
+    /// is not, so this never anchors from it.
+    ///
+    /// `rect` is in `FeedPageContent.body`'s own `GeometryReader`
+    /// coordinate space — the same space `captionZone` and
+    /// `pageFactsProbe` already render in — so `.position(x:y:)`
+    /// below lands this exactly on `rect` without needing its own
+    /// `GeometryReader`.
+    private func actionRailColumn(rect: CGRect) -> some View {
+        VStack(spacing: Rail.spacing) {
+            if isActive, let calloutMessage = shareCoordinator.calloutMessage {
+                railCallout(calloutMessage)
+            }
+            likeButton(rail)
+            shareButton
+            albumButton
+            shrinkButton(rail)
+            deleteButton(rail)
+        }
+        .animation(.easeInOut(duration: 0.2), value: shareCoordinator.calloutMessage)
+        .padding(.top, duoLayout.railContentTop(safeAreaTop: safeAreaTop))
+        .frame(width: rect.width, height: rect.height, alignment: .top)
+        .position(x: rect.midX, y: rect.midY)
     }
 
     /// Adding to an album is also possible through the system share sheet

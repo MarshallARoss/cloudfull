@@ -89,30 +89,31 @@ struct DuoLayout {
     }
 
     /// The rectangle, inside a container of `containerSize`, that
-    /// excludes the vertical bar column. Anything that must stay clear
-    /// of the bar — today, the video stage — measures against this
-    /// instead of the full container while `isClosedBar` is true.
+    /// excludes the rail column — see `railColumn(containerSize:safeAreaTop:)`
+    /// for what that is in each case. Anything that must stay clear of
+    /// it — the video stage, the top chrome — measures against this
+    /// instead of the full container.
     ///
-    /// Returns the full container unchanged when the bar is off, so a
-    /// regular iPhone's math is untouched.
-    func availableRect(containerSize: CGSize) -> CGRect {
-        guard let barEdge, barWidth > 0 else {
+    /// Returns the full container unchanged when no column applies, so
+    /// a regular iPhone's math is untouched.
+    func availableRect(containerSize: CGSize, safeAreaTop: CGFloat) -> CGRect {
+        guard let column = railColumn(containerSize: containerSize, safeAreaTop: safeAreaTop) else {
             return CGRect(origin: .zero, size: containerSize)
         }
-        switch barEdge {
+        switch column.edge {
         case .leading:
-            return CGRect(x: barWidth, y: 0,
-                          width: max(0, containerSize.width - barWidth),
+            return CGRect(x: column.width, y: 0,
+                          width: max(0, containerSize.width - column.width),
                           height: containerSize.height)
         case .trailing:
             return CGRect(x: 0, y: 0,
-                          width: max(0, containerSize.width - barWidth),
+                          width: max(0, containerSize.width - column.width),
                           height: containerSize.height)
         }
     }
 
     /// The largest 9:16 box that fits inside
-    /// `availableRect(containerSize:)`, centred there.
+    /// `availableRect(containerSize:safeAreaTop:)`, centred there.
     ///
     /// On a regular iPhone `availableRect` is the full container, which
     /// is always taller (relative to its width) than 16:9, so this
@@ -120,10 +121,14 @@ struct DuoLayout {
     /// binding side there, matching `PlayerPageView`'s pre-Duo stage.
     /// On the Duo's closed screen, once the bar column is excluded,
     /// height can become the binding side instead, which is what keeps
-    /// the stage from overflowing the squat screen. See
+    /// the stage from overflowing the squat screen. On an open Duo wide
+    /// enough for a computed column (same function), the box lands
+    /// flush against that column with no pillarbox between them — see
+    /// `railColumn`'s own comment for why that falls out of the same
+    /// formula rather than needing a separate "flush left" rule. See
     /// `PlayerPageView.body` for the caller.
-    func stageRect(containerSize: CGSize) -> CGRect {
-        let avail = availableRect(containerSize: containerSize)
+    func stageRect(containerSize: CGSize, safeAreaTop: CGFloat) -> CGRect {
+        let avail = availableRect(containerSize: containerSize, safeAreaTop: safeAreaTop)
         guard avail.width > 0, avail.height > 0 else { return avail }
         let height = min(avail.height, avail.width * 16 / 9)
         let width = height * 9 / 16
@@ -133,6 +138,80 @@ struct DuoLayout {
             width: width,
             height: height
         )
+    }
+
+    // MARK: - Rail column (step 3; extended by steps 4 and 5)
+    //
+    // The action rail (Keep, Share, Album, Shrink, Delete) moves off
+    // the stage and into its own column when `isClosedBar`: the
+    // column IS the system vertical bar — same edge, same width as
+    // `barEdge`/`barWidth`. The rail moves into furniture the system
+    // already reserved; nothing new is carved out of the stage.
+    //
+    // `railColumn(containerSize:safeAreaTop:)` is the one function
+    // every caller below reads — never `barEdge`/`barWidth` directly.
+    // `safeAreaTop` is unused here for now; an open Duo wide enough
+    // for a column of its own computed from the stage's own geometry,
+    // rather than reused from the system, is step 5's own addition to
+    // this same function, and that is the case that needs it.
+
+    /// Minimum width a rail column must have to hold the action rail
+    /// comfortably: `Rail.hit` (40pt, each glyph's own hit box) plus
+    /// 12pt clear on either side. Below this, `railColumn` reports no
+    /// column, and every caller keeps the pre-Duo overlay layout.
+    static let minRailColumnWidth: CGFloat = 64
+
+    /// Gap kept below whatever the rail column's top already holds —
+    /// the system's own time/connectivity ring when closed — before
+    /// the rail's own first button. A visual gap, not a safety margin
+    /// that top already guarantees on its own.
+    static let railTopClearance: CGFloat = 12
+
+    /// Where the rail column sits, and how wide it is, this frame — or
+    /// `nil` when no column applies.
+    ///
+    /// Closed (`isClosedBar`): the column IS the system vertical bar —
+    /// same edge, same width as `barEdge`/`barWidth`.
+    ///
+    /// Not closed (a regular iPhone, or an open Duo): no column yet.
+    /// `nil`.
+    func railColumn(containerSize: CGSize, safeAreaTop: CGFloat) -> (edge: HorizontalEdge, width: CGFloat)? {
+        guard let barEdge, barWidth > 0 else { return nil }
+        return (barEdge, barWidth)
+    }
+
+    /// The rail column's own rectangle this frame — the complement of
+    /// `availableRect(containerSize:safeAreaTop:)` — or `nil` when
+    /// `railColumn(containerSize:safeAreaTop:)` found none.
+    ///
+    /// `FeedPageContent.actionRailColumn` renders inside this instead
+    /// of over the stage.
+    func railColumnRect(containerSize: CGSize, safeAreaTop: CGFloat) -> CGRect? {
+        guard let column = railColumn(containerSize: containerSize, safeAreaTop: safeAreaTop) else { return nil }
+        switch column.edge {
+        case .leading:
+            return CGRect(x: 0, y: 0, width: column.width, height: containerSize.height)
+        case .trailing:
+            return CGRect(x: containerSize.width - column.width, y: 0,
+                          width: column.width, height: containerSize.height)
+        }
+    }
+
+    /// The Y position, in this page's own coordinate space (0 at the
+    /// top), where the rail's first button starts inside its column.
+    ///
+    /// The system draws its own time + connectivity ring at the top of
+    /// the bar column. There is no SDK API that reports that cluster's
+    /// own height (only its width, via `barWidth`'s matching safe-area
+    /// inset), so this reads the frame's active `.occlusion` region
+    /// instead, the inner camera cutout the same column must also
+    /// clear, and falls back to `safeAreaTop` when no such region is
+    /// active. Either number is a lower bound on where the system's
+    /// own furniture ends; `railTopClearance` below it is the visual
+    /// gap.
+    func railContentTop(safeAreaTop: CGFloat) -> CGFloat {
+        let systemBottom = isClosedBar ? max(occlusion?.maxY ?? 0, safeAreaTop) : safeAreaTop
+        return systemBottom + Self.railTopClearance
     }
 }
 

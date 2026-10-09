@@ -244,7 +244,14 @@ struct PlayerPageView: View {
             // is always the binding side there, because a phone screen is
             // always taller than 16:9. This stays pixel-identical to the
             // pre-Duo math by construction, not by a separate code path.
-            let stageRect = duoLayout.stageRect(containerSize: proxy.size)
+            //
+            // An open Duo wide enough excludes a column of its own —
+            // see `DuoLayout.railColumn(containerSize:safeAreaTop:)` —
+            // which is why `safeAreaTop` is passed here too: that
+            // column's width is sized to leave the stage exactly the
+            // real top chrome's own band, not just the bare screen
+            // height.
+            let stageRect = duoLayout.stageRect(containerSize: proxy.size, safeAreaTop: safeAreaTop)
             let stageWidth = stageRect.width
             let stageHeight = stageRect.height
             // In fullscreen the canvas is the screen's own dimensions with
