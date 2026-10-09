@@ -76,6 +76,20 @@ struct FeedView: View {
     /// during a body pass.
     @StateObject private var orientation = OrientationMonitor()
     @Environment(\.scenePhase) private var scenePhase
+    /// The vertical bar's edge on the iPhone Duo's closed screen; `nil`
+    /// on a regular iPhone, on the open Duo, and on anything below iOS
+    /// 27.1 (this plain stored property's default).
+    ///
+    /// Not read with a plain `@Environment(\.toolbarVerticalEdge)`
+    /// property: Swift refuses `@available` on a stored property, and
+    /// that environment key only exists from iOS 27.1, so a stored
+    /// property for it cannot be declared unconditionally on a type
+    /// whose own deployment target is lower. `ToolbarVerticalEdgeReader`
+    /// below is the standard workaround — a zero-size helper view that
+    /// is itself `@available`-marked, mounted only inside an
+    /// `if #available` branch in `body`, which writes into this plain,
+    /// always-available property instead.
+    @State private var toolbarVerticalEdge: HorizontalEdge?
     /// The signal from whichever page's `PlayerPageView` currently reports
     /// `isFullscreen == true`, through `onFullscreenChanged`. This mirrors
     /// `isScrubbing`. Only the centered page can ever be fullscreen, so at
@@ -167,6 +181,18 @@ struct FeedView: View {
             && shareCoordinator.probeState == .idle
     }
 
+    /// `DuoLayout.current`, behind the `#available` check its own
+    /// declaration requires. Returns `DuoLayout.none` on anything below
+    /// iOS 27.1, so every caller downstream — today, `PlayerPageView` —
+    /// reads the same "no Duo furniture" value a regular iPhone always
+    /// had, with no availability check of its own to write.
+    private func resolvedDuoLayout(rootProxy: GeometryProxy) -> DuoLayout {
+        if #available(iOS 27.1, *) {
+            return DuoLayout.current(proxy: rootProxy, toolbarVerticalEdge: toolbarVerticalEdge)
+        }
+        return .none
+    }
+
     var body: some View {
         // The one place that measures the device's real top safe-area
         // inset. This reader sits above the pager's `.ignoresSafeArea()`,
@@ -177,8 +203,16 @@ struct FeedView: View {
         // safe area inside it, so both draw over the same rectangle.
         GeometryReader { rootProxy in
             let safeAreaTop = rootProxy.safeAreaInsets.top
+            let duoLayout = resolvedDuoLayout(rootProxy: rootProxy)
             ZStack {
-            content(safeAreaTop: safeAreaTop)
+            // Zero-size; only ever updates `toolbarVerticalEdge` above.
+            // See that property's own comment for why the read is
+            // confined to this helper rather than a plain `@Environment`
+            // property on `FeedView` itself.
+            if #available(iOS 27.1, *) {
+                ToolbarVerticalEdgeReader { toolbarVerticalEdge = $0 }
+            }
+            content(safeAreaTop: safeAreaTop, duoLayout: duoLayout)
             // The whole global chrome layer (mute, the shrink progress
             // capsule, the counters, the bin) hides while fullscreen is
             // on. Each page's own `bottomScrim` and `FeedPageContent` in
@@ -372,7 +406,7 @@ struct FeedView: View {
     }
 
     @ViewBuilder
-    private func content(safeAreaTop: CGFloat) -> some View {
+    private func content(safeAreaTop: CGFloat, duoLayout: DuoLayout) -> some View {
         if !viewModel.hasDealtFirstDeck {
             // The first deal waits on a background library enumeration.
             // An empty deck means "no videos" only once the app has
@@ -414,14 +448,17 @@ struct FeedView: View {
                 noMatchesState
             }
         } else {
-            pager(safeAreaTop: safeAreaTop)
+            pager(safeAreaTop: safeAreaTop, duoLayout: duoLayout)
         }
     }
 
     /// `safeAreaTop` is the real inset, measured once in `body`. It is
     /// threaded into every `PlayerPageView` because their own readers sit
     /// under this pager's `.ignoresSafeArea()` and would otherwise read 0.
-    private func pager(safeAreaTop: CGFloat) -> some View {
+    /// `duoLayout` is threaded the same way, for the same reason: this
+    /// pager's own `.ignoresSafeArea()` would otherwise hide the bar
+    /// column's safe-area inset from a reader placed any lower.
+    private func pager(safeAreaTop: CGFloat, duoLayout: DuoLayout) -> some View {
         ScrollViewReader { scrollProxy in
         ScrollView(.vertical) {
             LazyVStack(spacing: 0) {
@@ -452,6 +489,7 @@ struct FeedView: View {
                             fullscreenAllowed: fullscreenAllowed,
                             onFullscreenChanged: { isFullscreen = $0 },
                             safeAreaTop: safeAreaTop,
+                            duoLayout: duoLayout,
                             onDoubleTap: { doubleTapKeepNonces[entry.id, default: 0] += 1 },
                             isSuspended: isFeedSuspended
                         )

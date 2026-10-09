@@ -256,4 +256,43 @@ enum StageGeometry {
     /// stage would put the ring on the caption. The ring compares itself
     /// against this number and lifts when it needs to.
     static let captionTopFromBottom: CGFloat = 60
+
+    // MARK: - Real-stage-height bands (iPhone Duo)
+
+    /// `naturalBand(containerSize:)`'s math, but taking the stage's own
+    /// height directly instead of re-deriving a 9:16 box from the
+    /// container's width.
+    ///
+    /// On a regular iPhone the two agree exactly: width is always the
+    /// binding side there, so the stage height this takes is always
+    /// `containerSize.width * 16 / 9`, the same number
+    /// `naturalBand(containerSize:)` computes internally. On the iPhone
+    /// Duo's closed screen, once `DuoLayout.stageRect` excludes the bar
+    /// column, height can become the binding side instead — a case
+    /// `naturalBand(containerSize:)` cannot see, because it only ever
+    /// looks at the container's width. `PlayerPageView` reads this form;
+    /// every other caller (`FeedView`'s chrome, `ChinNavigation`) is
+    /// untouched and keeps reading `naturalBand(containerSize:)`.
+    static func naturalBand(stageHeight: CGFloat, containerHeight: CGFloat) -> CGFloat {
+        max(0, (containerHeight - stageHeight) / 2)
+    }
+
+    /// `downShift(safeAreaTop:containerSize:)`'s math, over the real
+    /// stage height. See `naturalBand(stageHeight:containerHeight:)`
+    /// for why this form exists alongside the container-derived one.
+    static func downShift(safeAreaTop: CGFloat, stageHeight: CGFloat, containerHeight: CGFloat) -> CGFloat {
+        let band = naturalBand(stageHeight: stageHeight, containerHeight: containerHeight)
+        let requiredTopBand = chromeTop(safeAreaTop: safeAreaTop) + chromeHeight + chromeToVideoGap
+        let shortfall = requiredTopBand - band
+        guard shortfall > 0 else { return 0 }
+        return min(shortfall, band)
+    }
+
+    /// `bottomBand(safeAreaTop:containerSize:)`'s math, over the real
+    /// stage height. See `naturalBand(stageHeight:containerHeight:)`
+    /// for why this form exists alongside the container-derived one.
+    static func bottomBand(safeAreaTop: CGFloat, stageHeight: CGFloat, containerHeight: CGFloat) -> CGFloat {
+        max(0, naturalBand(stageHeight: stageHeight, containerHeight: containerHeight)
+            - downShift(safeAreaTop: safeAreaTop, stageHeight: stageHeight, containerHeight: containerHeight))
+    }
 }

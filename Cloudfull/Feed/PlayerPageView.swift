@@ -49,6 +49,15 @@ struct PlayerPageView: View {
     /// video moves down by the same amount as the top chrome.
     /// `FeedView.topChrome` uses the same measurement.
     let safeAreaTop: CGFloat
+    /// This frame's iPhone Duo geometry, measured by `FeedView` at the
+    /// same root `GeometryReader` as `safeAreaTop`, for the same reason:
+    /// this page's own reader sits under the pager's
+    /// `.ignoresSafeArea()`, which would otherwise hide the bar column's
+    /// safe-area inset. `DuoLayout.none` on a regular iPhone, which
+    /// keeps `body`'s stage math reading exactly what it read before
+    /// this parameter existed. See `DuoLayout.stageRect` and this
+    /// file's `body` for how it is used.
+    let duoLayout: DuoLayout
     /// Fires on a double tap anywhere on the stage.
     /// `FeedView` routes it to this page's own `FeedPageContent`, which owns
     /// the keep logic and the rail heart. The rail heart's bounce is the
