@@ -87,6 +87,20 @@ struct ChinNavigation: View {
     /// expanded from — no new expanded layout was built for this pose.
     let railAlignedCenter: CGPoint?
 
+    /// Step 7 (`design/duo/duo_build_spec.md` §3c, `design/duo/duo_audit_apple_checklist.md`
+    /// §5): pose 5's (open-tall, Videos host only) own replacement for
+    /// the collapsed round button — a vertical stack of the three mode
+    /// buttons, always open, each switching mode directly on tap. Both
+    /// non-nil together, or both `nil`; `FeedView` is the one caller
+    /// that ever sets them, computed from `DuoLayout.railVerticalExtent`/
+    /// `railColumnRect` so this view needs no `DuoLayout` import of its
+    /// own. `columnTabsTop` is the stack's own TOP edge ("Delete bottom
+    /// + 40," the per-pose table's own words) in this view's coordinate
+    /// space; `columnX` is the column's own horizontal centre (the same
+    /// one the rail itself is centred on).
+    let columnTabsTop: CGFloat?
+    let columnX: CGFloat?
+
     @State private var isExpanded = false
     @ObservedObject private var modeStore = AppModeStore.shared
     // Collapses the switcher when either pager starts to scroll.
@@ -130,10 +144,15 @@ struct ChinNavigation: View {
         case shell
     }
 
-    init(bottomBand: CGFloat, railBottom: CGFloat = 0, railAlignedCenter: CGPoint? = nil) {
+    init(
+        bottomBand: CGFloat, railBottom: CGFloat = 0, railAlignedCenter: CGPoint? = nil,
+        columnTabsTop: CGFloat? = nil, columnX: CGFloat? = nil
+    ) {
         self.bottomBand = bottomBand
         self.railBottom = railBottom
         self.railAlignedCenter = railAlignedCenter
+        self.columnTabsTop = columnTabsTop
+        self.columnX = columnX
     }
 
     var body: some View {
@@ -195,7 +214,13 @@ struct ChinNavigation: View {
                         .accessibilityHidden(true)
                 }
 
-                if let railAlignedCenter, !isExpanded {
+                if let columnTabsTop, let columnX {
+                    // Step 7: pose 5's own column tabs replace the
+                    // collapsed chin outright — see `columnTabsTop`'s
+                    // own comment. No capsule, no expand/collapse: three
+                    // always-visible buttons, each a direct mode switch.
+                    columnTabs(top: columnTabsTop, x: columnX)
+                } else if let railAlignedCenter, !isExpanded {
                     // Pose 5 (the open-tall rail column): rests beside
                     // the rail's own last item instead — see
                     // `railAlignedCenter`'s own comment. Only while
@@ -342,6 +367,75 @@ struct ChinNavigation: View {
         case .videos: return "video"
         case .photos: return "photo.on.rectangle"
         case .settings: return "gearshape"
+        }
+    }
+
+    // MARK: - Step 7: pose 5's own column tabs (§3c)
+
+    /// Pitch (centre-to-centre distance) between consecutive tabs: the
+    /// per-pose table's own "Rail.itemHeight + 12" — a smaller gap than
+    /// the rail's own `Rail.spacing` (20pt, used by `zigzagCenters`'
+    /// identical pitch formula), since this stack of three buttons is
+    /// its own, denser group, not a continuation of the rail.
+    private static let columnTabPitch: CGFloat = Rail.itemHeight + 12
+
+    /// Half the gap between the rail's own last button and this
+    /// column's own first tab — the per-pose table's own "halfway
+    /// between": `columnTabsTop` is already "Delete bottom + 40," so a
+    /// hairline at `columnTabsTop - hairlineGap` sits equidistant from
+    /// both Delete's own bottom edge and the first tab's own top edge.
+    private static let hairlineGap: CGFloat = 20
+
+    /// Pose 5's own replacement for the collapsed round button — see
+    /// `columnTabsTop`'s own comment. Three `RailItem`-styled buttons,
+    /// always visible, each a direct `selectAnimated` call; no capsule,
+    /// no expand/collapse.
+    private func columnTabs(top: CGFloat, x: CGFloat) -> some View {
+        let modes: [AppMode] = [.videos, .photos, .settings]
+        let spacing = Self.columnTabPitch - Rail.itemHeight
+        let totalHeight = Rail.itemHeight * CGFloat(modes.count) + spacing * CGFloat(modes.count - 1)
+        return ZStack {
+            // The per-pose table's own "hairline (44×1, white 30%)
+            // halfway between" — a plain divider between the rail's
+            // own actions and this column's mode switcher, the same
+            // `Capsule`-as-hairline shape `FullscreenPlayerChrome`'s
+            // own progress hairline already uses.
+            Capsule()
+                .fill(Color.white.opacity(0.3))
+                .frame(width: 44, height: 1)
+                .position(x: x, y: top - Self.hairlineGap)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+
+            VStack(spacing: spacing) {
+                ForEach(modes, id: \.self) { mode in
+                    Button(action: { selectAnimated(mode) }) {
+                        RailItem(
+                            systemName: Self.glyph(for: mode),
+                            label: Self.label(for: mode),
+                            tint: mode == displayMode ? .white : .white.opacity(0.4)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("chin_nav_column_\(mode.rawValue)")
+                    .accessibilityLabel(Self.label(for: mode))
+                    .accessibilityAddTraits(mode == displayMode ? .isSelected : [])
+                }
+            }
+            .position(x: x, y: top + totalHeight / 2)
+        }
+    }
+
+    /// The same three words `ChinTabSegmentedControl`'s own tab titles
+    /// use (`chin_nav_videos`/`_photos`/`_settings`'s own labels) —
+    /// kept as its own small switch, not a shared helper, since that
+    /// control's own titles live behind a UIKit segment, not a plain
+    /// Swift function this view could call.
+    private static func label(for mode: AppMode) -> String {
+        switch mode {
+        case .videos: return "Videos"
+        case .photos: return "Photos"
+        case .settings: return "Settings"
         }
     }
 

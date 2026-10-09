@@ -264,6 +264,22 @@ struct FeedView: View {
         return CGPoint(x: columnRect.midX, y: centerY)
     }
 
+    /// Step 7's own anchor (`design/duo/duo_build_spec.md` §3c): the
+    /// column tabs' own top edge ("Delete bottom + 40") and horizontal
+    /// centre (the rail column's own `midX`). Explicitly gated on
+    /// `.openTall` — pose 5 only, per §3c's own words ("pose 5, Videos
+    /// host only") — unlike `railAlignedChinCenter` just above, whose
+    /// own `!isClosedBar` gate is pose-generic; `ChinNavigation.body`
+    /// still checks `columnTabsTop`/`columnX` first, so the two can
+    /// never disagree even though both are computed.
+    private func columnTabsAnchor(duoLayout: DuoLayout, safeAreaTop: CGFloat, containerSize: CGSize) -> (top: CGFloat, x: CGFloat)? {
+        guard duoLayout.pose == .openTall,
+              let columnRect = duoLayout.railColumnRect(containerSize: containerSize, safeAreaTop: safeAreaTop)
+        else { return nil }
+        let top = duoLayout.railBottom(safeAreaTop: safeAreaTop, containerSize: containerSize) + 40
+        return (top, columnRect.midX)
+    }
+
     /// `DuoLayout.current`, behind the `#available` check its own
     /// declaration requires. Returns `DuoLayout.none` on anything below
     /// iOS 27.1, so every caller downstream — today, `PlayerPageView` —
@@ -318,6 +334,10 @@ struct FeedView: View {
             // `.animation(.default, value: duoLayout.pose)` below, not a
             // debounce, is what smooths a real transition's layout jump.
             let duoLayout = resolvedDuoLayout(rootProxy: rootProxy)
+            // Computed once here, not inline at the `ChinNavigation`
+            // call site, so its two fields (`.top`/`.x`) do not each
+            // force a second call to `columnTabsAnchor(duoLayout:safeAreaTop:containerSize:)`.
+            let chinColumnTabs = columnTabsAnchor(duoLayout: duoLayout, safeAreaTop: safeAreaTop, containerSize: rootProxy.size)
             ZStack {
             // Zero-size; only ever updates `toolbarVerticalEdge` above.
             // See that property's own comment for why the read is
@@ -358,7 +378,9 @@ struct FeedView: View {
             ChinNavigation(bottomBand: StageGeometry.bottomBand(safeAreaTop: safeAreaTop,
                                                                containerSize: rootProxy.size),
                            railBottom: duoLayout.railBottom(safeAreaTop: safeAreaTop, containerSize: rootProxy.size),
-                           railAlignedCenter: railAlignedChinCenter(duoLayout: duoLayout, safeAreaTop: safeAreaTop, containerSize: rootProxy.size))
+                           railAlignedCenter: railAlignedChinCenter(duoLayout: duoLayout, safeAreaTop: safeAreaTop, containerSize: rootProxy.size),
+                           columnTabsTop: chinColumnTabs?.top,
+                           columnX: chinColumnTabs?.x)
                 .opacity(hidesGlobalChrome ? 0 : 1)
                 .allowsHitTesting(!hidesGlobalChrome)
                 .accessibilityHidden(hidesGlobalChrome)
