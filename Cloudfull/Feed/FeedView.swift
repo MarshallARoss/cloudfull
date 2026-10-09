@@ -1971,6 +1971,22 @@ private struct FeedPageContent: View {
         // size that view feeds `StageGeometry`.
         GeometryReader { proxy in
             let bottomBand = StageGeometry.bottomBand(safeAreaTop: safeAreaTop, containerSize: proxy.size)
+            // Build 5: the REAL band below the stage, from the real
+            // stage height (`duoLayout.stageRect`'s own `.height`),
+            // not `bottomBand`'s width-derived assumption above —
+            // identical to it on a regular iPhone (width always
+            // binds there), but different once a Duo pose's own
+            // excluded column makes HEIGHT the binding side instead.
+            // `captionZone` compares this against
+            // `ScrubberView.minimumSeamBand` (50) to decide whether
+            // the on-video scrubber line this pose falls back to
+            // (`PlayerPageView.bottomSpace` the same size) needs the
+            // caption lifted clear of it — see that function's own
+            // comment.
+            let realStageHeight = duoLayout.stageRect(containerSize: proxy.size, safeAreaTop: safeAreaTop).height
+            let realBottomBand = StageGeometry.bottomBand(
+                safeAreaTop: safeAreaTop, stageHeight: realStageHeight, containerHeight: proxy.size.height
+            )
             // `nil` on a regular iPhone, and on an open Duo too narrow
             // for one: every call below falls back to the pre-Duo
             // overlay, unchanged. Non-`nil` on the closed Duo (the
@@ -2004,10 +2020,10 @@ private struct FeedPageContent: View {
                         // stage, so the caption only needs to stay
                         // clear of that column, not of a rail that is
                         // no longer on the video.
-                        captionZone(trailingClearance: railColumnRect.width + 16, hidden: false)
+                        captionZone(trailingClearance: railColumnRect.width + 16, hidden: false, bandHeight: realBottomBand)
                     } else {
                         HStack(alignment: .bottom, spacing: 0) {
-                            captionZone(trailingClearance: 16, hidden: false)
+                            captionZone(trailingClearance: 16, hidden: false, bandHeight: realBottomBand)
                             VStack(alignment: .trailing, spacing: 0) {
                                 if isActive, let calloutMessage = shareCoordinator.calloutMessage {
                                     railCallout(calloutMessage)
@@ -2154,13 +2170,40 @@ private struct FeedPageContent: View {
     /// its own accessibility bits below, independent of the outer
     /// `hideForFullscreen` path — is a real, reusable shape a later
     /// pose could still need.
-    private func captionZone(trailingClearance: CGFloat, hidden: Bool) -> some View {
-        captionTexts
+    ///
+    /// `bandHeight` is build 5's own addition: the REAL band below
+    /// the stage (`FeedPageContent.body`'s own `realBottomBand`),
+    /// compared against `ScrubberView.minimumSeamBand` the same way
+    /// that view compares it, to decide the bottom padding. Below 50,
+    /// `ScrubberView` itself falls back from the seam to the on-video
+    /// placement — the hairline sits inside its own 28pt track box,
+    /// drawn over the video's own bottom pixels rather than below
+    /// them. The plain 20pt padding below is exactly what
+    /// `StageGeometry.captionCenterFromBottom`'s own header comment
+    /// derives from, with no such line to clear; once that line is on
+    /// the video instead, this adds the track box's own height (28)
+    /// on top of it — 48pt total — so the caption lifts clear of it.
+    /// Pose 1V (closed) and pose 5 (open-tall) are the two poses
+    /// where the real band can fall under 50 today — the build-list's
+    /// own check for this step, "Duo 1V + 5: no scrubber line crosses
+    /// the text."
+    ///
+    /// Build 5 is explicitly "(Duo only)": `duoLayout.pose !=
+    /// .regularPhone` gates the whole lift, the hard rule every new
+    /// Duo branch follows. Without this gate, a regular iPhone whose
+    /// OWN band happens to fall under 50 (an iPhone SE, close to
+    /// 16:9) would also start reading 48pt here instead of its
+    /// today's flat 20pt — a real behaviour change on a device this
+    /// branch must leave untouched.
+    private func captionZone(trailingClearance: CGFloat, hidden: Bool, bandHeight: CGFloat) -> some View {
+        let liftsForScrubber = duoLayout.pose != .regularPhone && bandHeight < 50
+        let bottomPadding: CGFloat = liftsForScrubber ? 20 + 28 : 20
+        return captionTexts
             .feedShadow()
             .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.leading, 16)
-        .padding(.bottom, 20)
-        .padding(.trailing, trailingClearance)
+            .padding(.leading, 16)
+            .padding(.bottom, bottomPadding)
+            .padding(.trailing, trailingClearance)
         // Keeps this block clear of the display's own rounded bottom
         // corner — reported on the open-wide (landscape, bar-on) pose,
         // where this caption sits flush at the window's leading edge
