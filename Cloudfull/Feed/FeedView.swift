@@ -1849,7 +1849,7 @@ private struct FeedPageContent: View {
             }
             .frame(width: proxy.size.width, height: proxy.size.height)
             if let railColumnRect {
-                actionRailColumn(rect: railColumnRect)
+                actionRailColumn(rect: railColumnRect, containerSize: proxy.size)
             }
             #if DEBUG
             pageFactsProbe
@@ -2053,30 +2053,34 @@ private struct FeedPageContent: View {
     /// buttons, the same `Rail.spacing`, placed inside the rail
     /// column instead of over the stage.
     ///
-    /// X-centred on the column — the same centre line the system's
-    /// own time + connectivity ring uses when the column is the
-    /// closed bar — and anchored from the BOTTOM, at
-    /// `DuoLayout.railColumnBottomPadding` above the column's own
-    /// bottom edge, rather than stacked down from the top.
+    /// X-centred on the column — on the closed bar, the same centre
+    /// line the system's own time + connectivity ring uses; on the
+    /// open-tall column, `DuoLayout.openColumnWidth`'s own fixed width
+    /// puts that centre at a known, fixed distance from the trailing
+    /// edge (`DuoLayout.ringInset`) instead, measured from a
+    /// screenshot rather than read from an API, since none exists.
     ///
-    /// An earlier version anchored from the top, just below whatever
-    /// `.occlusion`/`safeAreaTop` reported for the system's own
-    /// furniture. On a real closed Duo screen that undershot the time
-    /// + connectivity ring's actual height — there is no SDK API for
-    /// that cluster's own extent — so the rail's first button (Keep)
-    /// rendered partly under the ring. `railColumnBottomPadding`
-    /// anchors from the chin's own position instead, which is exactly
-    /// known (unlike the ring), with comfortably more room between
-    /// the ring and the chin than the rail's own height needs. One
-    /// number for the closed bar column and the open, computed one.
+    /// Anchored top or bottom per `DuoLayout.railVerticalExtent`, not
+    /// decided here: bar ON anchors from the bottom (the ring sits
+    /// above the rail there, with no SDK API to say by how much, but
+    /// the chin's own position below is exactly known); bar OFF
+    /// (open-tall) anchors from the top, flush with the stage's own
+    /// top edge, since in THAT pose the ring sits above the whole
+    /// stage rather than above the rail specifically — an earlier
+    /// version bottom-anchored this pose too and left a dead gap above
+    /// the rail, which was the owner's own report.
     ///
     /// `rect` is in `FeedPageContent.body`'s own `GeometryReader`
     /// coordinate space — the same space `captionZone` and
     /// `pageFactsProbe` already render in — so `.position(x:y:)`
     /// below lands this exactly on `rect` without needing its own
-    /// `GeometryReader`.
-    private func actionRailColumn(rect: CGRect) -> some View {
-        VStack(spacing: Rail.spacing) {
+    /// `GeometryReader`. `containerSize` is that same reader's
+    /// `proxy.size`, needed separately because `railVerticalExtent`
+    /// measures from the page's own top and bottom, not from `rect`.
+    private func actionRailColumn(rect: CGRect, containerSize: CGSize) -> some View {
+        let extent = duoLayout.railVerticalExtent(containerSize: containerSize, safeAreaTop: safeAreaTop)
+        let top = extent?.top ?? 0
+        return VStack(spacing: Rail.spacing) {
             if isActive, let calloutMessage = shareCoordinator.calloutMessage {
                 railCallout(calloutMessage)
             }
@@ -2087,8 +2091,8 @@ private struct FeedPageContent: View {
             deleteButton(rail)
         }
         .animation(.easeInOut(duration: 0.2), value: shareCoordinator.calloutMessage)
-        .padding(.bottom, DuoLayout.railColumnBottomPadding)
-        .frame(width: rect.width, height: rect.height, alignment: .bottom)
+        .padding(.top, top)
+        .frame(width: rect.width, height: rect.height, alignment: .top)
         .position(x: rect.midX, y: rect.midY)
     }
 

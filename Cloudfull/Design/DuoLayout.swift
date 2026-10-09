@@ -90,9 +90,32 @@ struct DuoLayout {
 
     /// The rectangle, inside a container of `containerSize`, that
     /// excludes the rail column — see `railColumn(containerSize:safeAreaTop:)`
-    /// for what that is in each case. Anything that must stay clear of
-    /// it — the video stage, the top chrome — measures against this
-    /// instead of the full container.
+    /// for what that is in each case — and, when the column is the
+    /// OPEN kind (bar off), also excludes the top chrome's own band
+    /// from the top. Anything that must stay clear of either —
+    /// `stageRect` below, which is also where the top chrome itself
+    /// measures from — uses this instead of the full container.
+    ///
+    /// The open column used to reserve that top band as a side effect
+    /// of its own width: it was sized to exactly "whatever a 9:16
+    /// stage leaves over, after first reserving the top band from the
+    /// height it is fit against," so the leftover-sized column and
+    /// the height reservation were really the same number wearing two
+    /// hats. `openColumnWidth` is now a fixed width instead — see that
+    /// constant's own comment for why — which means nothing else
+    /// reserves the top band as a side effect any more, so this
+    /// function reserves it directly: `requiredTopBand`, insetting
+    /// both `y` and `height`. `PlayerPageView` reads this back through
+    /// `stageRect.minY`/`.maxY` for this one pose, instead of its own
+    /// `StageGeometry.downShift`/`bottomBand` — see that file's own
+    /// `hasOpenColumn` comment.
+    ///
+    /// The closed bar column, and an open landscape window's bar
+    /// column, are both untouched: `isClosedBar` is true for either,
+    /// and the system's own column already leaves `stageRect` a
+    /// natural vertical band (from its own aspect ratio) that
+    /// `StageGeometry.downShift` already uses correctly today —
+    /// reserving the band twice would double-shift the stage.
     ///
     /// Returns the full container unchanged when no column applies, so
     /// a regular iPhone's math is untouched.
@@ -100,15 +123,17 @@ struct DuoLayout {
         guard let column = railColumn(containerSize: containerSize, safeAreaTop: safeAreaTop) else {
             return CGRect(origin: .zero, size: containerSize)
         }
+        let topInset = isClosedBar ? 0 : Self.requiredTopBand(safeAreaTop: safeAreaTop)
+        let height = max(0, containerSize.height - topInset)
         switch column.edge {
         case .leading:
-            return CGRect(x: column.width, y: 0,
+            return CGRect(x: column.width, y: topInset,
                           width: max(0, containerSize.width - column.width),
-                          height: containerSize.height)
+                          height: height)
         case .trailing:
-            return CGRect(x: 0, y: 0,
+            return CGRect(x: 0, y: topInset,
                           width: max(0, containerSize.width - column.width),
-                          height: containerSize.height)
+                          height: height)
         }
     }
 
@@ -124,11 +149,11 @@ struct DuoLayout {
     /// stage. On the Duo's closed screen, once the bar column is
     /// excluded, height can become the binding side instead, which is
     /// what keeps the stage from overflowing the squat screen. On an
-    /// open Duo wide enough for a computed column (same function), the
-    /// box lands flush against that column with no pillarbox between
-    /// them — see `railColumn`'s own comment for why that falls out of
-    /// the same formula rather than needing a separate "flush left"
-    /// rule.
+    /// open Duo wide enough for a computed column (same function), this
+    /// same centring is what turns the leftover width, once
+    /// `openColumnWidth`'s fixed column is removed from it, into even
+    /// margins on both sides of the stage — see that constant's own
+    /// comment for why that is the goal, not a flush-left stage.
     ///
     /// The non-default `aspectRatio` is step 6's own addition: an open
     /// Duo turned sideways really rotates its window (see
@@ -150,7 +175,7 @@ struct DuoLayout {
         )
     }
 
-    // MARK: - Rail column (step 3; extended by steps 4 and 5)
+    // MARK: - Rail column (step 3; extended by steps 4, 5, and the pose fixes)
     //
     // The action rail (Keep, Share, Album, Shrink, Delete) moves off
     // the stage and into its own column whenever one exists. The
@@ -160,24 +185,80 @@ struct DuoLayout {
     // and the open, computed case (step 5) share this one definition
     // end to end (`availableRect`, the stage, the rail, the chin).
 
-    /// Minimum width a rail column must have to hold the action rail
-    /// comfortably: `Rail.hit` (40pt, each glyph's own hit box) plus
-    /// 12pt clear on either side. Below this, `railColumn` reports no
-    /// column, and every caller keeps the pre-Duo overlay layout.
+    /// `StageGeometry.chromeTop(safeAreaTop:) + chromeHeight + chromeToVideoGap`
+    /// — the same band `StageGeometry.downShift` reserves for a
+    /// regular iPhone's own top chrome. Named here because the open
+    /// (bar-off) column needs it twice, in exact agreement: once to
+    /// size itself (`fullHeightStageWidth` below), and again to
+    /// reserve the same band directly in `availableRect`, since the
+    /// open column no longer does that reservation as a side effect
+    /// of its own width the way an earlier version did — see
+    /// `openColumnWidth`'s own comment.
+    private static func requiredTopBand(safeAreaTop: CGFloat) -> CGFloat {
+        StageGeometry.chromeTop(safeAreaTop: safeAreaTop) + StageGeometry.chromeHeight + StageGeometry.chromeToVideoGap
+    }
+
+    /// The width a 9:16 stage would need to claim this container's
+    /// full height, after reserving `requiredTopBand` at the top. The
+    /// one formula `railColumn`'s own gate (below) is built on.
+    private static func fullHeightStageWidth(containerSize: CGSize, safeAreaTop: CGFloat) -> CGFloat {
+        let effectiveHeight = max(0, containerSize.height - requiredTopBand(safeAreaTop: safeAreaTop))
+        return effectiveHeight * 9 / 16
+    }
+
+    /// Measured, no API: half the open (bar-off) column's own width,
+    /// and the distance from the trailing edge to the system
+    /// connectivity ring's own x-centre on the inner display's
+    /// portrait pose ("open-tall"). `openColumnWidth` below is
+    /// `2 × ringInset`, which is what makes a column that wide,
+    /// centred on itself, land its own centre exactly `ringInset` from
+    /// the trailing edge — the ring's own centre, fixing the owner's
+    /// report that the rail sat "pushed in" from it.
     ///
-    /// A regular iPhone never clears this (see `railColumn`'s own
-    /// comment on the open case), so this threshold is never a
-    /// Duo-only special case written by hand — it is the one number
-    /// that keeps a phone on the overlay path by geometry alone.
-    static let minRailColumnWidth: CGFloat = 64
+    /// There is no SDK API for the ring's own position on this pose —
+    /// see `railVerticalExtent`'s own comment on the equivalent gap for
+    /// its height. This number came from a screenshot instead: on a
+    /// 2007px-wide (3×, 669pt) inner portrait frame, the ring's own
+    /// centre measured at ≈ 1857px, ≈ 619pt, ≈ 50pt from the trailing
+    /// edge.
+    static let ringInset: CGFloat = 50
+
+    /// The open (bar-off) column's own fixed width — `2 × ringInset` —
+    /// unlike the CLOSED bar column, which is whatever width the
+    /// system gives it.
+    ///
+    /// An earlier version sized this column to "whatever is left
+    /// over," the same width `fullHeightStageWidth` subtracts from the
+    /// container — correct by coincidence on a narrow leftover, wrong
+    /// on a wide one: the owner found the rail centred far from the
+    /// ring, with a large unused gap on the video's own leading edge,
+    /// because "the column's centre" and "the ring's own position"
+    /// have no reason to agree once the leftover is wide. A column
+    /// this width, always, keeps the rail's own centre at a fixed,
+    /// known distance from the trailing edge (`ringInset`) regardless
+    /// of how wide the window's own leftover is. `railColumn`'s own
+    /// gate below still only forms a column at all when that leftover
+    /// comfortably fits one — see its own comment — so `stageRect`'s
+    /// unchanged horizontal centring turns whatever leftover remains,
+    /// after this fixed column, into even margins on both sides of
+    /// the video instead of a flush-left stage. That symmetry, not a
+    /// new centring rule, is what fixes the owner's other report (the
+    /// video touching the leading edge).
+    static let openColumnWidth: CGFloat = ringInset * 2
+
+    /// Minimum leading margin `railColumn`'s open-branch gate
+    /// guarantees the stage, on each side, once `openColumnWidth` is
+    /// removed from the natural leftover. See that function's own
+    /// gate for the arithmetic.
+    static let minStageMargin: CGFloat = 16
 
     /// Minimum gap kept between the rail's own last button and the
-    /// chin's own top edge, when the rail sits in a column. Mirrors
-    /// `ChinNavigation`'s own `railGap` (the same gap, read from the
-    /// opposite side): both are 8pt, declared independently, since
-    /// `ChinNavigation` is a Feed-level view and this is a
-    /// Design-level type — neither should import the other just to
-    /// read one number.
+    /// chin's own top edge, when the rail is bottom-anchored in a
+    /// column. Mirrors `ChinNavigation`'s own `railGap` (the same gap,
+    /// read from the opposite side): both are 8pt, declared
+    /// independently, since `ChinNavigation` is a Feed-level view and
+    /// this is a Design-level type — neither should import the other
+    /// just to read one number.
     static let railBottomGap: CGFloat = 8
 
     /// The chin's own top edge, from the page's bottom, at the chin's
@@ -191,15 +272,15 @@ struct DuoLayout {
     /// its states.
     private static let chinTopFromPageBottom: CGFloat = StageGeometry.captionCenterFromBottom + 56 / 2
 
-    /// The rail's own bottom edge, from the page's bottom, when it
-    /// sits in a column: `railBottomGap` above the chin's own top
-    /// edge, at its tallest. One number for both the closed bar
-    /// column and an open, computed one.
+    /// The rail's own bottom edge, from the page's bottom, when it is
+    /// bottom-anchored in a column: `railBottomGap` above the chin's
+    /// own top edge, at its tallest.
     ///
-    /// This replaces an earlier top-anchored version (since removed)
-    /// that placed the rail's first button below whatever
-    /// `.occlusion`/`safeAreaTop` reported. On a real closed Duo
-    /// screen that undershot the system's own time + connectivity
+    /// This replaces an earlier top-anchored version (since removed,
+    /// then reintroduced in a different shape below — see
+    /// `railVerticalExtent`) that placed the rail's first button below
+    /// whatever `.occlusion`/`safeAreaTop` reported. On a real closed
+    /// Duo screen that undershot the system's own time + connectivity
     /// ring: there is no SDK API for that cluster's own extent —
     /// `UIViewReservedRegion`'s only kinds are `.occlusion` (the
     /// camera) and `.division` (the fold); see this type's own header
@@ -209,6 +290,13 @@ struct DuoLayout {
     /// the chin than the rail's own height needs, so anchoring from
     /// there instead is both correct and already the one number
     /// `ChinNavigation` itself reads back (as `railBottom`, below).
+    ///
+    /// Bottom-anchoring like this is right only when the ring sits
+    /// ABOVE the rail (the closed bar column, and an open landscape
+    /// window's bar column) — see `railVerticalExtent`'s own comment
+    /// for the open-tall pose, where the ring sits above the STAGE
+    /// instead, and bottom-anchoring the rail there left a dead gap
+    /// above it.
     static let railColumnBottomPadding: CGFloat = chinTopFromPageBottom + railBottomGap
 
     /// Where the rail column sits, and how wide it is, this frame — or
@@ -220,49 +308,34 @@ struct DuoLayout {
     /// carved out of the stage.
     ///
     /// Open (`barEdge == nil`): there is no system column to reuse, so
-    /// one is computed instead, on the trailing edge, sized to exactly
-    /// the width left over once a 9:16 stage claims the container's
-    /// full height, minus the band the top chrome already needs
-    /// (`StageGeometry.chromeTop` + `chromeHeight` + `chromeToVideoGap`
-    /// — the same quantity `StageGeometry.downShift` reserves for a
-    /// regular iPhone's own top band). That reservation is why this
-    /// function needs `safeAreaTop` at all: without it, a stage sized
-    /// to the container's bare full height would leave no natural band
-    /// left for `downShift` to claim, and the top chrome would sit on
-    /// the video instead of above it.
-    ///
-    /// The resulting width is also deliberately not "whatever is left
-    /// over," but exactly that one number: it is also the width that
-    /// would otherwise sit as dead pillarboxing on both sides of a
-    /// centred stage (see `availableRect`, which reads this function
-    /// rather than `barEdge`/`barWidth`). Carving it into a column
-    /// instead of splitting it as a pillarbox is what lands the stage
-    /// flush against the column with no gap between them — the same
-    /// relationship the closed case already has with its system bar,
-    /// from the one `availableRect`/`stageRect` formula both share.
-    ///
-    /// Below `minRailColumnWidth`, there is no column: `nil`. Every
-    /// regular iPhone always lands here — a phone screen is always
-    /// narrower than the width a 9:16 box needs to reach its own full
-    /// height, so the "leftover" below is always negative there,
-    /// decided by the screen's own proportions, never by a device
-    /// check.
+    /// one is computed instead: `openColumnWidth`, fixed, on the
+    /// trailing edge — see that constant's own comment for why fixed,
+    /// rather than "whatever is left over," is now the rule. The gate
+    /// below is still geometry-only, never a device check: it asks
+    /// whether the natural leftover — `fullHeightStageWidth`'s own
+    /// subtraction, the same test the earlier version used end to end
+    /// — is big enough to carve out `openColumnWidth` AND still leave
+    /// the stage `minStageMargin` on each side. Below that, there is
+    /// no column: `nil`, and every caller keeps the pre-Duo overlay
+    /// layout. A regular iPhone's own leftover here is always
+    /// negative — a phone screen is always narrower than the width a
+    /// 9:16 box needs to reach its own full height — so it never
+    /// clears this, decided purely by the screen's own proportions.
     func railColumn(containerSize: CGSize, safeAreaTop: CGFloat) -> (edge: HorizontalEdge, width: CGFloat)? {
         if let barEdge, barWidth > 0 {
             return (barEdge, barWidth)
         }
-        let requiredTopBand = StageGeometry.chromeTop(safeAreaTop: safeAreaTop)
-            + StageGeometry.chromeHeight + StageGeometry.chromeToVideoGap
-        let effectiveHeight = max(0, containerSize.height - requiredTopBand)
-        let fullHeightStageWidth = effectiveHeight * 9 / 16
-        let openWidth = containerSize.width - fullHeightStageWidth
-        guard openWidth >= Self.minRailColumnWidth else { return nil }
-        return (.trailing, openWidth)
+        let openWidth = containerSize.width - Self.fullHeightStageWidth(containerSize: containerSize, safeAreaTop: safeAreaTop)
+        guard openWidth >= Self.openColumnWidth + Self.minStageMargin * 2 else { return nil }
+        return (.trailing, Self.openColumnWidth)
     }
 
-    /// The rail column's own rectangle this frame — the complement of
-    /// `availableRect(containerSize:safeAreaTop:)` — or `nil` when
-    /// `railColumn(containerSize:safeAreaTop:)` found none.
+    /// The rail column's own rectangle this frame, full height — the
+    /// complement of `availableRect(containerSize:safeAreaTop:)`'s
+    /// WIDTH only, deliberately not its top-inset height too, since
+    /// this rectangle is the column's own hit area and background, not
+    /// the stage's — or `nil` when `railColumn(containerSize:safeAreaTop:)`
+    /// found none.
     ///
     /// `FeedPageContent.actionRailColumn` renders inside this instead
     /// of over the stage.
@@ -277,9 +350,40 @@ struct DuoLayout {
         }
     }
 
+    /// The rail's own top and bottom edge, in the page's own
+    /// coordinate space (0 at the top), for whichever anchor this
+    /// frame's column uses — or `nil` when no column applies.
+    ///
+    /// Bar ON (closed, or an open landscape window): anchored from the
+    /// BOTTOM — `railColumnBottomPadding` above the page's own bottom
+    /// edge — because the ring sits ABOVE the rail in that pose, with
+    /// no SDK API to say by how much, but the chin's own position
+    /// below is exactly known; see that constant's own comment.
+    ///
+    /// Bar OFF (the open-tall pose): anchored from the TOP instead,
+    /// flush with the stage's own top edge, `stageRect.minY` — now
+    /// correctly below the top chrome, since `availableRect` reserves
+    /// that band directly for this one case. Bottom-anchoring this
+    /// pose the way the bar-ON case is, as an earlier version did,
+    /// left a dead gap above the rail: in THIS pose the ring sits
+    /// ABOVE the whole stage, not above the rail specifically, so
+    /// hanging the rail from the stage's own top edge is what the
+    /// owner saw look right in an earlier build, and what "the ring
+    /// sits above the rail, not below it, here" actually means in
+    /// practice: follow the stage, not the chin.
+    func railVerticalExtent(containerSize: CGSize, safeAreaTop: CGFloat) -> (top: CGFloat, bottom: CGFloat)? {
+        guard railColumnRect(containerSize: containerSize, safeAreaTop: safeAreaTop) != nil else { return nil }
+        if isClosedBar {
+            let bottom = containerSize.height - Self.railColumnBottomPadding
+            return (bottom - Rail.columnHeight, bottom)
+        }
+        let top = stageRect(containerSize: containerSize, safeAreaTop: safeAreaTop).minY
+        return (top, top + Rail.columnHeight)
+    }
+
     /// The actual bottom edge of the rail's last button (Delete) this
     /// frame, in the page's own coordinate space (0 at the top) —
-    /// whichever layout the rail is using.
+    /// whichever anchor `railVerticalExtent` reports for this frame.
     ///
     /// No rail column (a regular iPhone, or an open Duo too narrow for
     /// one): the rail is the pre-Duo overlay, bottom-anchored against
@@ -287,20 +391,19 @@ struct DuoLayout {
     /// identical `bottomBand + Rail.seamClearance` padding, which this
     /// mirrors so the two can never disagree.
     ///
-    /// A rail column (closed bar, or open and wide enough): the rail
-    /// is anchored from the chin's own position instead — see
-    /// `railColumnBottomPadding`'s own comment for why — so its
-    /// bottom is simply `containerSize.height - railColumnBottomPadding`.
-    ///
     /// `ChinNavigation` reads this (as `railBottom`) to keep its own
     /// top edge below the rail's, with a minimum gap, instead of
     /// relying on a fixed offset that only happens to clear it on
-    /// whichever screen it was tuned against. In practice, since both
-    /// now derive from the same chin position, this is a no-op there:
-    /// the two can never disagree by more than rounding.
+    /// whichever screen it was tuned against. Bar ON, this is a no-op
+    /// in practice: both this and the chin's own fixed anchor derive
+    /// from the same chin position, so they can never disagree by more
+    /// than rounding. Bar OFF, the rail's bottom now sits well above
+    /// the chin (it hangs from the stage's own top, not the page's
+    /// own bottom), so the clamp stays a no-op there too — just no
+    /// longer for the same algebraic reason.
     func railBottom(safeAreaTop: CGFloat, containerSize: CGSize) -> CGFloat {
-        if railColumnRect(containerSize: containerSize, safeAreaTop: safeAreaTop) != nil {
-            return containerSize.height - Self.railColumnBottomPadding
+        if let extent = railVerticalExtent(containerSize: containerSize, safeAreaTop: safeAreaTop) {
+            return extent.bottom
         }
         let bottomBand = StageGeometry.bottomBand(safeAreaTop: safeAreaTop, containerSize: containerSize)
         return containerSize.height - (bottomBand + Rail.seamClearance)

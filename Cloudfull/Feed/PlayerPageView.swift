@@ -453,47 +453,51 @@ struct PlayerPageView: View {
             let horizontalLeadingSpace = isFullscreen ? 0 : stageRect.minX
             let horizontalTrailingSpace = isFullscreen ? 0 : max(0, proxy.size.width - stageRect.maxX)
             // Shifts the resting 9:16 stage down by the same amount
-            // `FeedView.topBandHeight` adds to its own top band. The
-            // video and the top chrome above it then never disagree about
-            // where that edge is. See `StageGeometry.downShift`'s own comment for
-            // the island-overlap problem this avoids. Zero in fullscreen: a
-            // rotated landscape video has no top chrome above it to make
-            // room for.
-            // `safeAreaTop` is the parameter passed down from `FeedView`,
-            // not `proxy.safeAreaInsets.top`, which reads 0 under the
-            // pager's `.ignoresSafeArea()`. See the parameter's own comment.
+            // `FeedView.topBandHeight` adds to its own top band, so the
+            // video and the top chrome above it never disagree about
+            // where that edge is. `safeAreaTop` is the parameter passed
+            // down from `FeedView`, not `proxy.safeAreaInsets.top`,
+            // which reads 0 under the pager's `.ignoresSafeArea()`. See
+            // `resolvedDownShift`'s own doc comment (below `body`) for
+            // the full reasoning across every case this now covers —
+            // pulled out of this `let`, which the Swift type checker
+            // could not resolve inline in reasonable time once it grew
+            // branches for `isLandscapeFit` and `hasOpenColumn` too.
             //
-            // Reads the real stage height here, not the container's own
-            // width-derived one: `StageGeometry.downShift(safeAreaTop:stageHeight:containerHeight:)`,
-            // not the `containerSize:` form `FeedView`'s chrome still
-            // uses. On a regular iPhone `stageHeight` already equals the
-            // width-derived number the container form computes
-            // internally, so the two agree exactly. On the Duo's closed
-            // screen, where `stageHeight` can be smaller than that
-            // derived number, only this form reports the real band —
-            // the fix for the ring sitting too low / offscreen.
-            //
-            // Also zero in `isLandscapeFit`: the top chrome this shift
-            // makes room for is itself hidden in that state (see
-            // `FeedView.hidesGlobalChrome`), so there is nothing to
-            // reserve the band for. The stage instead centres plainly in
-            // the available space, the same symmetric split
-            // `halfLeftover` already gives it — matching "FIT the whole
-            // video into the available area" rather than leaving it
-            // off-centre for an invisible chrome row.
-            let downShift = (isFullscreen || isLandscapeFit)
-                ? 0
-                : StageGeometry.downShift(safeAreaTop: safeAreaTop, stageHeight: stageHeight, containerHeight: proxy.size.height)
+            // `hasOpenColumn` (bar off — the open-tall pose): true
+            // exactly when `availableRect` (`DuoLayout.swift`) reserves
+            // the top chrome's own band directly rather than as a side
+            // effect of the column's own width, the way an earlier
+            // version did — see that function's own comment.
+            let hasOpenColumn = !duoLayout.isClosedBar
+                && duoLayout.railColumnRect(containerSize: proxy.size, safeAreaTop: safeAreaTop) != nil
+            let downShift = resolvedDownShift(
+                isFullscreen: isFullscreen,
+                isLandscapeFit: isLandscapeFit,
+                hasOpenColumn: hasOpenColumn,
+                stageMinY: stageRect.minY,
+                halfLeftover: halfLeftover,
+                stageHeight: stageHeight,
+                containerHeight: proxy.size.height
+            )
             let topSpace = halfLeftover + downShift
-            // The black band this page leaves below the stage, reflecting
-            // the down-shifted stage rather than a flat symmetric split.
+            // The black band this page leaves below the stage.
             // `ScrubberView`'s idle-state seam reads this value, so its
-            // line stays inside the real bottom band instead of drifting
-            // into the video. Also plain `halfLeftover` in `isLandscapeFit`,
-            // for the same reason `downShift` is zero there.
-            let bottomSpace = (isFullscreen || isLandscapeFit)
-                ? halfLeftover
-                : StageGeometry.bottomBand(safeAreaTop: safeAreaTop, stageHeight: stageHeight, containerHeight: proxy.size.height)
+            // line stays inside the real bottom band instead of
+            // drifting into the video.
+            //
+            // One formula for every case, including the three above
+            // this comment: the exact complement of `topSpace` within
+            // the page, given `canvasHeight`. This is algebraically
+            // identical to `StageGeometry.bottomBand`'s own result
+            // whenever `topSpace` came from `StageGeometry.downShift`
+            // (both reduce to `naturalBand - downShift`), so the
+            // regular-iPhone and closed-bar cases are unchanged; for
+            // `hasOpenColumn` it correctly comes out to 0 today — the
+            // scrubber-vs-caption gap (plan item 86's "seam band") is
+            // its own, separate, not-yet-landed fix, deliberately left
+            // untouched here.
+            let bottomSpace = max(0, proxy.size.height - topSpace - canvasHeight)
             ZStack {
                 Color.black
                     // The one place `windowIsLandscape` is written.
@@ -852,6 +856,47 @@ struct PlayerPageView: View {
                 onLandscapeFitChanged(false)
             }
         }
+    }
+
+    /// `body`'s own vertical shift for the stage — pulled out of
+    /// `body` as a plain function, not a local `let` with its own
+    /// `if`/`else` branches, because the Swift type checker could not
+    /// resolve `body`'s own `some View` expression in reasonable time
+    /// with that much branching arithmetic inlined directly in it.
+    ///
+    /// `isFullscreen || isLandscapeFit`: zero. The rotated fullscreen
+    /// canvas has no top chrome above it to make room for; the
+    /// landscape-fit stage's own top chrome is itself hidden (see
+    /// `FeedView.hidesGlobalChrome`), so there is nothing to reserve a
+    /// band for either — both centre plainly in the available space,
+    /// the same symmetric split `halfLeftover` already gives them.
+    ///
+    /// `hasOpenColumn` (bar off — the open-tall pose): `stageMinY`
+    /// already IS the correct shifted position — `availableRect`
+    /// (`DuoLayout.swift`) reserves the top chrome's band directly
+    /// now, rather than as a side effect of the column's own width —
+    /// so this returns the gap between that and no shift at all
+    /// (`halfLeftover`), landing `topSpace` back on `stageMinY`
+    /// exactly.
+    ///
+    /// Otherwise (a regular iPhone, or the closed bar column): the
+    /// existing `StageGeometry.downShift`, unchanged.
+    private func resolvedDownShift(
+        isFullscreen: Bool,
+        isLandscapeFit: Bool,
+        hasOpenColumn: Bool,
+        stageMinY: CGFloat,
+        halfLeftover: CGFloat,
+        stageHeight: CGFloat,
+        containerHeight: CGFloat
+    ) -> CGFloat {
+        if isFullscreen || isLandscapeFit {
+            return 0
+        }
+        if hasOpenColumn {
+            return stageMinY - halfLeftover
+        }
+        return StageGeometry.downShift(safeAreaTop: safeAreaTop, stageHeight: stageHeight, containerHeight: containerHeight)
     }
 
     /// How far the loading ring steps off dead centre in fullscreen, to
