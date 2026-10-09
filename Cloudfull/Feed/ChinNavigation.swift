@@ -239,9 +239,9 @@ struct ChinNavigation: View {
 
     /// Minimum gap kept between this control's own top edge and the
     /// rail's last button (`railBottom`), when one exists on this
-    /// screen. A visual gap, like `DuoLayout.railTopClearance` above
-    /// the rail itself — not a safety margin the rail's own geometry
-    /// does not already guarantee.
+    /// screen. A visual gap, like `DuoLayout.railBottomGap` — the
+    /// same 8pt, read from the rail's own side — not a safety margin
+    /// the rail's own geometry does not already guarantee.
     private static let railGap: CGFloat = 8
 
     /// This control's own bottom padding — the distance between its

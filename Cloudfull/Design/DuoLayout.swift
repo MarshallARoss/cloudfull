@@ -161,11 +161,45 @@ struct DuoLayout {
     /// that keeps a phone on the overlay path by geometry alone.
     static let minRailColumnWidth: CGFloat = 64
 
-    /// Gap kept below whatever the rail column's top already holds —
-    /// the system's own time/connectivity ring when closed, nothing
-    /// when open — before the rail's own first button. A visual gap,
-    /// not a safety margin that top already guarantees on its own.
-    static let railTopClearance: CGFloat = 12
+    /// Minimum gap kept between the rail's own last button and the
+    /// chin's own top edge, when the rail sits in a column. Mirrors
+    /// `ChinNavigation`'s own `railGap` (the same gap, read from the
+    /// opposite side): both are 8pt, declared independently, since
+    /// `ChinNavigation` is a Feed-level view and this is a
+    /// Design-level type — neither should import the other just to
+    /// read one number.
+    static let railBottomGap: CGFloat = 8
+
+    /// The chin's own top edge, from the page's bottom, at the chin's
+    /// tallest (expanded) state: `StageGeometry.captionCenterFromBottom`
+    /// plus half of `ChinNavigation`'s own expanded height. The `56`
+    /// here is hand-mirrored from `ChinNavigation.expandedHeight`, the
+    /// same way `captionCenterFromBottom` itself hand-mirrors
+    /// `captionZone`'s real layout elsewhere in this file, rather than
+    /// reading live state. Using the expanded height, not whichever
+    /// height the chin currently is, guarantees clearance in both of
+    /// its states.
+    private static let chinTopFromPageBottom: CGFloat = StageGeometry.captionCenterFromBottom + 56 / 2
+
+    /// The rail's own bottom edge, from the page's bottom, when it
+    /// sits in a column: `railBottomGap` above the chin's own top
+    /// edge, at its tallest. One number for both the closed bar
+    /// column and an open, computed one.
+    ///
+    /// This replaces an earlier top-anchored version (since removed)
+    /// that placed the rail's first button below whatever
+    /// `.occlusion`/`safeAreaTop` reported. On a real closed Duo
+    /// screen that undershot the system's own time + connectivity
+    /// ring: there is no SDK API for that cluster's own extent —
+    /// `UIViewReservedRegion`'s only kinds are `.occlusion` (the
+    /// camera) and `.division` (the fold); see this type's own header
+    /// comment — so the rail's first button (Keep) rendered partly
+    /// under the ring. The chin's own position, by contrast, is
+    /// exactly known, with comfortably more room between the ring and
+    /// the chin than the rail's own height needs, so anchoring from
+    /// there instead is both correct and already the one number
+    /// `ChinNavigation` itself reads back (as `railBottom`, below).
+    static let railColumnBottomPadding: CGFloat = chinTopFromPageBottom + railBottomGap
 
     /// Where the rail column sits, and how wide it is, this frame — or
     /// `nil` when no column applies.
@@ -233,33 +267,6 @@ struct DuoLayout {
         }
     }
 
-    /// The Y position, in this page's own coordinate space (0 at the
-    /// top), where the rail's first button starts inside its column.
-    ///
-    /// Closed (`isClosedBar`): the system draws its own time +
-    /// connectivity ring at the top of the bar column. There is no SDK
-    /// API that reports that cluster's own height (only its width, via
-    /// `barWidth`'s matching safe-area inset), so this reads the
-    /// frame's active `.occlusion` region instead, the inner camera
-    /// cutout the same column must also clear, and falls back to
-    /// `safeAreaTop` when no such region is active. Either number is a
-    /// lower bound on where the system's own furniture ends;
-    /// `railTopClearance` below it is the visual gap.
-    ///
-    /// Open, with a computed column: nothing system-drawn sits inside
-    /// it, and — unlike the stage — nothing we draw does either:
-    /// `FeedView.topChrome`'s own width is clamped to
-    /// `availableRect(containerSize:safeAreaTop:).width`, the same
-    /// stage-only width this column's existence is carved out of, so
-    /// the top chrome never reaches into this column in the first
-    /// place. Content here starts below the ordinary top safe-area
-    /// inset, the same edge every other top-aligned piece of this feed
-    /// already clears.
-    func railContentTop(safeAreaTop: CGFloat) -> CGFloat {
-        let systemBottom = isClosedBar ? max(occlusion?.maxY ?? 0, safeAreaTop) : safeAreaTop
-        return systemBottom + Self.railTopClearance
-    }
-
     /// The actual bottom edge of the rail's last button (Delete) this
     /// frame, in the page's own coordinate space (0 at the top) —
     /// whichever layout the rail is using.
@@ -271,17 +278,19 @@ struct DuoLayout {
     /// mirrors so the two can never disagree.
     ///
     /// A rail column (closed bar, or open and wide enough): the rail
-    /// is anchored from the column's own top instead — see
-    /// `railContentTop(safeAreaTop:)` — so its bottom is that anchor
-    /// plus the rail's own fixed height, `Rail.columnHeight`.
+    /// is anchored from the chin's own position instead — see
+    /// `railColumnBottomPadding`'s own comment for why — so its
+    /// bottom is simply `containerSize.height - railColumnBottomPadding`.
     ///
     /// `ChinNavigation` reads this (as `railBottom`) to keep its own
     /// top edge below the rail's, with a minimum gap, instead of
     /// relying on a fixed offset that only happens to clear it on
-    /// whichever screen it was tuned against.
+    /// whichever screen it was tuned against. In practice, since both
+    /// now derive from the same chin position, this is a no-op there:
+    /// the two can never disagree by more than rounding.
     func railBottom(safeAreaTop: CGFloat, containerSize: CGSize) -> CGFloat {
         if railColumnRect(containerSize: containerSize, safeAreaTop: safeAreaTop) != nil {
-            return railContentTop(safeAreaTop: safeAreaTop) + Rail.columnHeight
+            return containerSize.height - Self.railColumnBottomPadding
         }
         let bottomBand = StageGeometry.bottomBand(safeAreaTop: safeAreaTop, containerSize: containerSize)
         return containerSize.height - (bottomBand + Rail.seamClearance)

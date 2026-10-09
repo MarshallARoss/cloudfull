@@ -104,22 +104,6 @@ enum Rail {
     /// playhead seam. The rail sits on top of the video. See
     /// `FeedPageContent.actionRail`.
     static let seamClearance: CGFloat = 12
-
-    /// Height of one rail row: the 40×40 glyph hit box, the 3pt gap
-    /// `RailItem`'s own `VStack(spacing: 3)` leaves below it, and the
-    /// 10pt semibold label's own line height (about 13pt at the
-    /// system's default size). A hand-measured constant, the same way
-    /// `StageGeometry.captionCenterFromBottom` stands in for
-    /// `UIFont`'s own line metrics rather than reading them at
-    /// runtime.
-    static let itemHeight: CGFloat = hit + 3 + 13
-
-    /// Height of the whole five-button rail — Keep, Share, Album,
-    /// Shrink, Delete — each `itemHeight` tall, with `spacing` between
-    /// consecutive rows. `DuoLayout.railBottom` uses this to find the
-    /// rail's real bottom edge when it is in its own column (iPhone
-    /// Duo) instead of overlaid on the stage.
-    static let columnHeight: CGFloat = itemHeight * 5 + spacing * 4
 }
 
 // MARK: - Accent-filled buttons

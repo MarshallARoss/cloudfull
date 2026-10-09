@@ -893,9 +893,7 @@ struct FeedView: View {
         // instead of the full window. On a regular iPhone, or an open
         // Duo too narrow for a column, `availableRect` returns the
         // full window unchanged, so `binButton`'s trailing edge lands
-        // exactly where it always has. On the Duo, this is also what
-        // keeps the rail's own column clear of the chrome above it:
-        // see `DuoLayout.railContentTop`'s comment on the open case.
+        // exactly where it always has.
         .frame(width: duoLayout.availableRect(containerSize: containerSize, safeAreaTop: safeAreaTop).width,
                alignment: .leading)
         .padding(.top, topChromeTopPadding(safeAreaTop: safeAreaTop, containerSize: containerSize))
@@ -1993,14 +1991,20 @@ private struct FeedPageContent: View {
     ///
     /// X-centred on the column — the same centre line the system's
     /// own time + connectivity ring uses when the column is the
-    /// closed bar — and stacked downward from
-    /// `DuoLayout.railContentTop(safeAreaTop:)`, not bottom-anchored
-    /// against the video's seam the way `actionRail(bottomBand:)` is.
-    /// The column's natural top (below whatever already sits there)
-    /// is the one edge that means the same thing whether the column
-    /// is the closed bar or the open, computed one — see
-    /// `DuoLayout.railColumn(containerSize:safeAreaTop:)` — the bottom
-    /// is not, so this never anchors from it.
+    /// closed bar — and anchored from the BOTTOM, at
+    /// `DuoLayout.railColumnBottomPadding` above the column's own
+    /// bottom edge, rather than stacked down from the top.
+    ///
+    /// An earlier version anchored from the top, just below whatever
+    /// `.occlusion`/`safeAreaTop` reported for the system's own
+    /// furniture. On a real closed Duo screen that undershot the time
+    /// + connectivity ring's actual height — there is no SDK API for
+    /// that cluster's own extent — so the rail's first button (Keep)
+    /// rendered partly under the ring. `railColumnBottomPadding`
+    /// anchors from the chin's own position instead, which is exactly
+    /// known (unlike the ring), with comfortably more room between
+    /// the ring and the chin than the rail's own height needs. One
+    /// number for the closed bar column and the open, computed one.
     ///
     /// `rect` is in `FeedPageContent.body`'s own `GeometryReader`
     /// coordinate space — the same space `captionZone` and
@@ -2019,8 +2023,8 @@ private struct FeedPageContent: View {
             deleteButton(rail)
         }
         .animation(.easeInOut(duration: 0.2), value: shareCoordinator.calloutMessage)
-        .padding(.top, duoLayout.railContentTop(safeAreaTop: safeAreaTop))
-        .frame(width: rect.width, height: rect.height, alignment: .top)
+        .padding(.bottom, DuoLayout.railColumnBottomPadding)
+        .frame(width: rect.width, height: rect.height, alignment: .bottom)
         .position(x: rect.midX, y: rect.midY)
     }
 
