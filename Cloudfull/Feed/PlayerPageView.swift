@@ -178,6 +178,11 @@ struct PlayerPageView: View {
     /// have existed since iOS 8, so there is no `@available` gate to
     /// work around here.
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    /// `DuoLayout.classify`'s other size-class input (Decision B,
+    /// `design/duo/duo_audit_apple_checklist.md` §4) — read here only for
+    /// `logRotationPose`'s DEBUG probe, so a sim/device reading shows
+    /// both axes the classifier actually consults, not just one.
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
     /// Whether the fullscreen chrome (`FullscreenPlayerChrome`) is shown.
     /// Owned here, not in the chrome view. The tap gesture on the whole
     /// stage, which also drives tap-to-mute, can then toggle it. The
@@ -362,12 +367,17 @@ struct PlayerPageView: View {
 
     /// `-cloudfull-log-rotation`: one line per window-size, device-stance,
     /// pose, or hinge change, for example
-    /// "rotation_landscapeLeft_compact_466x678_pose-closed_div-none_occ-none_hinge-closed-0".
+    /// "rotation_landscapeLeft_hSC-compact_vSC-regular_466x678_pose-closed_div-none_occ-none_hinge-closed-0".
     /// This is how step 6's `horizontalSizeClass != .regular` term in
     /// `isFullscreen` was confirmed against the real sim, pose by pose,
     /// rather than assumed from the SDK headers alone — and, as of step 1,
     /// how `DuoLayout.classify`'s own pose and the fold-orientation
-    /// (`div-`) arithmetic are confirmed the same way. Read with
+    /// (`div-`) arithmetic are confirmed the same way. R1's own build
+    /// (Decision B) prints BOTH size classes, not one: `classify` now
+    /// requires `horizontalSizeClass` AND `verticalSizeClass` to read
+    /// `.regular` before calling a frame fully open (F2's own fix), so
+    /// confirming that rule against a real DeviceHub pose needs both
+    /// values visible in the same line. Read with
     /// `xcrun simctl spawn <UDID> log stream --predicate 'subsystem ==
     /// "com.cloudfull.app" and category == "Rotation"' --style compact`
     /// the same way `OrientationMonitor`'s own log is read. DEBUG-only
@@ -376,8 +386,9 @@ struct PlayerPageView: View {
     /// line.
     private func logRotationPose() {
         guard isActive, DiagnosticsGate.isOn("-cloudfull-log-rotation") else { return }
-        let sizeClass = horizontalSizeClass.map { "\($0)" } ?? "nil"
-        let message = "rotation_\(deviceStance.probeName)_\(sizeClass)_\(Int(windowSize.width))x\(Int(windowSize.height))"
+        let hSC = horizontalSizeClass.map { "\($0)" } ?? "nil"
+        let vSC = verticalSizeClass.map { "\($0)" } ?? "nil"
+        let message = "rotation_\(deviceStance.probeName)_hSC-\(hSC)_vSC-\(vSC)_\(Int(windowSize.width))x\(Int(windowSize.height))"
             + "_pose-\(duoLayout.pose.rawValue)_div-\(rectProbe(duoLayout.division))_occ-\(rectProbe(duoLayout.occlusion))_\(hingeProbe)"
         Self.rotationLog.notice("\(message, privacy: .public)")
         DiagnosticsLog.shared.log("Rotation", message)

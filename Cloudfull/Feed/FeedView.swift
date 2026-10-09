@@ -99,19 +99,16 @@ struct FeedView: View {
     /// `DeviceHinge.angle.degrees` alongside `hingeStatus`, read by
     /// `logRotationPose`'s DEBUG probe only.
     @State private var hingeDegrees: Double?
-    /// The last `DuoPose` this view actually published into a
-    /// `DuoLayout` handed to a child — see `settledDuoLayout`'s own
-    /// comment. `nil` only until the first settle completes, right
-    /// after this view mounts.
-    @State private var settledDuoPose: DuoPose?
-    /// `.regular` only on the Duo's inner display — the same size-class
-    /// read `PlayerPageView.isFullscreen`/`useVideoAspect` already lean
-    /// on, needed here too: `DuoLayout.classify` cannot tell the inner
-    /// display's fully-open poses (`.openWide`/`.openTall`) or its
-    /// partially-open ones (`.book`/`.laptop`) from the outer display's
-    /// compact-width poses without it. A plain `@Environment` read, no
-    /// `#available` gate — size classes predate iOS 27.1.
+    /// Both read by `DuoLayout.classify` (Decision B,
+    /// `design/duo/duo_audit_apple_checklist.md` §4): neither axis alone
+    /// identifies a display — a 17 Pro resized large enough in iPhone
+    /// Mirroring also reads `.regular` width, which is exactly the audit's
+    /// F2 finding — so the classifier requires BOTH `horizontalSizeClass`
+    /// and `verticalSizeClass` to read `.regular` before calling a frame
+    /// fully open. Plain `@Environment` reads, no `#available` gate — size
+    /// classes predate iOS 27.1.
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
     /// The signal from whichever page's `PlayerPageView` currently reports
     /// `isFullscreen == true`, through `onFullscreenChanged`. This mirrors
     /// `isScrubbing`. Only the centered page can ever be fullscreen, so at
@@ -253,9 +250,9 @@ struct FeedView: View {
                 proxy: rootProxy,
                 toolbarVerticalEdge: toolbarVerticalEdge,
                 horizontalSizeClass: horizontalSizeClass,
+                verticalSizeClass: verticalSizeClass,
                 hinge: hingeStatus,
-                hingeDegrees: hingeDegrees,
-                stanceIsLandscape: orientation.stance.isLandscape
+                hingeDegrees: hingeDegrees
             )
         }
         return .none
@@ -271,17 +268,19 @@ struct FeedView: View {
         // safe area inside it, so both draw over the same rectangle.
         GeometryReader { rootProxy in
             let safeAreaTop = rootProxy.safeAreaInsets.top
-            let rawDuoLayout = resolvedDuoLayout(rootProxy: rootProxy)
-            // Build 1 fix: `pose` alone, debounced — see `settledDuoPose`'s
-            // own comment and the `.task(id:)` below, mirroring
-            // `FullscreenPlayerChrome`'s own cancel-and-restart auto-hide
-            // task. Before the first settle completes (`nil`), this falls
-            // back to the raw value outright: there is no previous
-            // published pose to protect against a transient flip away
-            // from, and withholding a Duo's very first classified pose
-            // for 250 ms after a cold launch would show the wrong layout
-            // instead of none at all.
-            let duoLayout = rawDuoLayout.withPose(settledDuoPose ?? rawDuoLayout.pose)
+            // Classified synchronously from this same proxy, every pass —
+            // no debounce. Audit finding F3's own fix
+            // (`design/duo/duo_audit_apple_checklist.md`): an earlier
+            // version withheld a changed `pose` for 250 ms to hide a
+            // transient misclassification from a stale cross-display
+            // `.division` frame — a frame `DuoLayout.current`'s own
+            // `windowBounds.contains(frame)` containment filter (see that
+            // function's own comment) already removes at the source, so
+            // the debounce delayed every REAL transition (a fold, an
+            // unfold, a Mirroring resize) for no remaining benefit.
+            // `.animation(.default, value: duoLayout.pose)` below, not a
+            // debounce, is what smooths a real transition's layout jump.
+            let duoLayout = resolvedDuoLayout(rootProxy: rootProxy)
             ZStack {
             // Zero-size; only ever updates `toolbarVerticalEdge` above.
             // See that property's own comment for why the read is
@@ -372,24 +371,12 @@ struct FeedView: View {
             #endif
             }
             .frame(width: rootProxy.size.width, height: rootProxy.size.height)
-            // Build 1 fix: the owner's own sim readings showed `pose`
-            // flipping to a transiently wrong label for a few frames
-            // mid-fold — two independent `GeometryReader`s (this view's
-            // own `rootProxy` and each page's own, inside
-            // `PlayerPageView`) can disagree for a frame while the
-            // window is still resizing, and a stale cross-display
-            // division frame could reach `classify` before this file's
-            // own containment filter (`DuoLayout.current`) existed.
-            // Rather than chase every such transient at its source, this
-            // publishes a new pose only once the classifier has agreed
-            // on it for a full 250 ms: `.task(id:)` cancels and restarts
-            // on every change of `rawDuoLayout.pose`, so a flip that
-            // reverts before the sleep elapses never commits at all.
-            .task(id: rawDuoLayout.pose) {
-                try? await Task.sleep(nanoseconds: 250_000_000)
-                guard !Task.isCancelled else { return }
-                settledDuoPose = rawDuoLayout.pose
-            }
+            // Smooths a real pose transition (a fold, an unfold, a
+            // Mirroring resize) instead of the removed 250 ms debounce —
+            // see `duoLayout`'s own comment above. A regular iPhone's
+            // `pose` never changes (always `.regularPhone`), so this is a
+            // no-op there: zero risk to the "byte-for-byte" promise.
+            .animation(.default, value: duoLayout.pose)
         }
         // Hides the status bar and home indicator while `hidesGlobalChrome`
         // (`isFullscreen`) is on, the same chrome-hide condition

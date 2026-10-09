@@ -92,29 +92,10 @@ struct DuoLayout {
     /// they need is the yes/no, not which edge.
     var isClosedBar: Bool { barEdge != nil }
 
-    /// A copy of this value with only `pose` replaced — every other
-    /// field (`barEdge`, `occlusion`, `division`, `hinge`, …) stays
-    /// this frame's own live reading.
-    ///
-    /// Step 1's own measured fix: `FeedView`/`PhotoFeedView` debounce
-    /// `pose` before threading a `DuoLayout` further down (see
-    /// `FeedView.settledDuoLayout`'s own comment for why), but every
-    /// OTHER field keeps updating live, every frame — the owner's sim
-    /// readings showed the raw geometry itself (window size, the
-    /// division frame, the hinge) settling quickly; it was only the
-    /// discrete, named `pose` that visibly flickered between two
-    /// labels for a few frames mid-fold. This is the one place that
-    /// substitutes a debounced pose into an otherwise-live reading,
-    /// so no caller needs its own copy of this struct's field list.
-    func withPose(_ pose: DuoPose) -> DuoLayout {
-        DuoLayout(barEdge: barEdge, barWidth: barWidth, occlusion: occlusion, division: division,
-                  pose: pose, hinge: hinge, hingeDegrees: hingeDegrees)
-    }
-
     /// The "no Duo furniture" value: every field at its plain default.
     /// A regular iPhone's `FeedView`/`PhotoFeedView` can hand this
     /// straight to a child that expects a `DuoLayout` without ever
-    /// calling `current(proxy:toolbarVerticalEdge:horizontalSizeClass:hinge:hingeDegrees:stanceIsLandscape:)`.
+    /// calling `current(proxy:toolbarVerticalEdge:horizontalSizeClass:verticalSizeClass:hinge:hingeDegrees:)`.
     /// `pose` is `.regularPhone` here — the hard rule every new branch
     /// gates on.
     static let none = DuoLayout(barEdge: nil, barWidth: 0, occlusion: nil, division: nil,
@@ -131,21 +112,27 @@ struct DuoLayout {
     /// `EnvironmentValues` extension cannot be read from inside a
     /// plain, unavailable-gated function — only from a View's own
     /// environment-reading context.
-    /// `horizontalSizeClass`, `hinge`, and `stanceIsLandscape` are the
+    /// `horizontalSizeClass`, `verticalSizeClass`, and `hinge` are the
     /// classifier's three extra inputs — see `classify(...)` below for
     /// what each decides. The caller reads all three itself
-    /// (`@Environment(\.horizontalSizeClass)`, `HingeReader`'s stored
-    /// state, and `OrientationMonitor`'s `Stance.isLandscape`) for the
-    /// same reason it already reads `toolbarVerticalEdge` itself: only a
-    /// View's own environment/state context can read them.
+    /// (`@Environment(\.horizontalSizeClass)`, `@Environment(\.verticalSizeClass)`,
+    /// and `HingeReader`'s stored state) for the same reason it already
+    /// reads `toolbarVerticalEdge` itself: only a View's own
+    /// environment/state context can read them.
+    ///
+    /// There is no `stanceIsLandscape`/device-orientation input here —
+    /// the owner's Apple-checklist audit (`design/duo/duo_audit_apple_checklist.md`,
+    /// Decision B) replaced it with the window's own shape
+    /// (`proxy.size`), which `classify(...)` already has from
+    /// `containerSize`. No layout in this app reads device orientation.
     @available(iOS 27.1, *)
     static func current(
         proxy: GeometryProxy,
         toolbarVerticalEdge: HorizontalEdge?,
         horizontalSizeClass: UserInterfaceSizeClass?,
+        verticalSizeClass: UserInterfaceSizeClass?,
         hinge: DuoHingeStatus?,
-        hingeDegrees: Double?,
-        stanceIsLandscape: Bool
+        hingeDegrees: Double?
     ) -> DuoLayout {
         let insets = proxy.safeAreaInsets
         let width: CGFloat
@@ -181,12 +168,12 @@ struct DuoLayout {
             windowBounds.contains(frame) ? frame : nil
         }
         let pose = classify(
-            sizeClass: horizontalSizeClass,
+            horizontalSizeClass: horizontalSizeClass,
+            verticalSizeClass: verticalSizeClass,
             containerSize: proxy.size,
             division: divisionFrame,
             barEdge: toolbarVerticalEdge,
-            hinge: hinge,
-            stanceIsLandscape: stanceIsLandscape
+            hinge: hinge
         )
         return DuoLayout(
             barEdge: toolbarVerticalEdge,
@@ -199,49 +186,70 @@ struct DuoLayout {
         )
     }
 
-    /// The pose classifier. Pure geometry/trait math, no device check —
-    /// see this file's header comment on why that is what keeps a
-    /// regular iPhone's result (`.regularPhone`) decided purely by its
-    /// own proportions and traits, never by a name.
+    /// The pose classifier — "classify from the space we have" (Decision
+    /// B, `design/duo/duo_audit_apple_checklist.md` §4), replacing an
+    /// earlier version that read `horizontalSizeClass == .regular` alone
+    /// as "this is the Duo's inner display." The owner's Apple-checklist
+    /// audit flagged that as its own rule violation (F2: "size class does
+    /// not identify the device") — a 17 Pro resized large enough in
+    /// iPhone Mirroring also reads `.regular` width, so a single-axis
+    /// test alone can misclassify a resizable window as an open Duo. This
+    /// function reads geometry and traits only, never a device name or
+    /// which physical display is active, in a fixed order where each
+    /// rule decides only what the signal in front of it can actually
+    /// prove:
     ///
-    /// `sizeClass == .regular` only on the Duo's INNER display (the
-    /// same fact `PlayerPageView.isFullscreen` already leans on — see
-    /// that property's own comment). There, an active `division` means
-    /// the device is partially open: a division taller than it is wide
-    /// is the fold read top-to-bottom (a book spine down the middle),
-    /// a division wider than tall is the fold read left-to-right (a
-    /// laptop hinge along the bottom) — see this file's "Fold-orientation
-    /// check" in the build spec for the 951×669 / 669×951 arithmetic
-    /// this falls out of. No division at all means fully open: the
-    /// window's own shape (landscape or portrait) is `.openWide` or
-    /// `.openTall`.
-    ///
-    /// `sizeClass != .regular` is every compact-width case: a regular
-    /// iPhone in any orientation, or the Duo's OUTER display. A
-    /// `.partial` hinge together with a landscape device stance is the
-    /// tent (pose 2) — the hinge alone cannot tell tent from laptop
-    /// (both report `.partiallyOpen`; see `isFullscreen`'s own comment
-    /// on why `horizontalSizeClass` is what actually separates them),
-    /// but the OUTER display never goes `.regular`, so reaching this
-    /// branch at all already rules laptop out. Otherwise, any sign of
-    /// Duo furniture at all (`barEdge` or a non-nil `hinge`) is the
-    /// closed pose; with neither, this is a plain regular iPhone.
+    /// 1. An active `division` means the device is partially open —
+    ///    checked ahead of any size-class test, since the division
+    ///    reserved region only ever appears there, on either display, at
+    ///    any size class. A division taller than it is wide is the fold
+    ///    read top-to-bottom (a book spine down the middle): `.book`. A
+    ///    division wider than tall is the fold read left-to-right (a
+    ///    laptop hinge along the bottom): `.laptop`. See this file's
+    ///    "Fold-orientation check" in the build spec for the 951×669 /
+    ///    669×951 arithmetic this falls out of.
+    /// 2. No division, a `.partial` hinge, and a window wider than it is
+    ///    tall is the tent (pose 2) — a nightstand candidate; until the
+    ///    nightstand actually engages, it still lays out like rule 4
+    ///    below. The window's own shape (`containerSize`) is what
+    ///    decides this, not a device stance: Apple's own rule (F1, this
+    ///    file's header comment) is no layout from device orientation,
+    ///    and real interface rotation (the audit's Decision A) already
+    ///    makes `containerSize.width > containerSize.height` the
+    ///    correct, geometry-only reading of "this window is sideways" —
+    ///    nothing here reads `UIDevice.current.orientation` or a
+    ///    `Stance`.
+    /// 3. No division, no tent: BOTH size classes regular at once is the
+    ///    fully-open case — `.openWide` if the window is wider than
+    ///    tall, else `.openTall`. Both axes together, not
+    ///    `horizontalSizeClass` alone (F2's own fix): a landscape window
+    ///    that is wide but not also tall enough to read `.regular` in
+    ///    height (a short Mirroring window, or the Duo's own OUTER
+    ///    display, which never goes `.regular` in either axis) falls
+    ///    through to rule 4 instead, same as a regular iPhone would.
+    /// 4. Anything else — any compact axis, on either size class — is
+    ///    the phone family: `.closed` when there is Duo furniture to say
+    ///    so (`barEdge` or a non-nil `hinge`), else a plain
+    ///    `.regularPhone`. A regular iPhone's own window reads compact
+    ///    in at least one axis in every orientation, so it can never
+    ///    reach rules 1–3 at all — decided purely by its own proportions
+    ///    and traits, never by a name.
     private static func classify(
-        sizeClass: UserInterfaceSizeClass?,
+        horizontalSizeClass: UserInterfaceSizeClass?,
+        verticalSizeClass: UserInterfaceSizeClass?,
         containerSize: CGSize,
         division: CGRect?,
         barEdge: HorizontalEdge?,
-        hinge: DuoHingeStatus?,
-        stanceIsLandscape: Bool
+        hinge: DuoHingeStatus?
     ) -> DuoPose {
-        if sizeClass == .regular {
-            if let division {
-                return division.height > division.width ? .book : .laptop
-            }
-            return containerSize.width > containerSize.height ? .openWide : .openTall
+        if let division {
+            return division.height > division.width ? .book : .laptop
         }
-        if hinge == .partial, stanceIsLandscape {
+        if hinge == .partial, containerSize.width > containerSize.height {
             return .tent
+        }
+        if horizontalSizeClass == .regular, verticalSizeClass == .regular {
+            return containerSize.width > containerSize.height ? .openWide : .openTall
         }
         if barEdge != nil || hinge != nil {
             return .closed

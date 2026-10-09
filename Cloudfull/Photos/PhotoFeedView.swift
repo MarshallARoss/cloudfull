@@ -167,13 +167,15 @@ struct PhotoFeedView: View {
     /// must stop clear of the bar's own time/connectivity ring.
     @State private var toolbarVerticalEdge: HorizontalEdge?
     /// Fed to `DuoLayout.current` below, the same as
-    /// `FeedView.horizontalSizeClass`. Nothing in this view reads
-    /// `duoLayout.pose` itself today — Photos has no nightstand, and
-    /// `PhotoTopBar`'s own placement only ever needed `barEdge`/
-    /// `barWidth` — but the classifier needs this input to tell the
-    /// Duo's inner-display poses apart regardless, and a plain
-    /// `@Environment` read costs nothing.
+    /// `FeedView.horizontalSizeClass`/`verticalSizeClass`. Nothing in
+    /// this view reads `duoLayout.pose` itself today — Photos has no
+    /// nightstand, and `PhotoTopBar`'s own placement only ever needed
+    /// `barEdge`/`barWidth` — but the classifier (Decision B,
+    /// `design/duo/duo_audit_apple_checklist.md` §4) needs BOTH size
+    /// classes regardless, and a plain `@Environment` read costs
+    /// nothing.
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
 
     #if DEBUG
     /// Mirrors whichever post last reported itself both current and
@@ -216,9 +218,9 @@ struct PhotoFeedView: View {
                 proxy: rootProxy,
                 toolbarVerticalEdge: toolbarVerticalEdge,
                 horizontalSizeClass: horizontalSizeClass,
+                verticalSizeClass: verticalSizeClass,
                 hinge: nil,
-                hingeDegrees: nil,
-                stanceIsLandscape: false
+                hingeDegrees: nil
             )
         }
         return .none
