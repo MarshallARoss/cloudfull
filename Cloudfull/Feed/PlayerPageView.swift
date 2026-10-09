@@ -32,8 +32,15 @@ struct PlayerPageView: View {
     let onScrubbingChanged: (Bool) -> Void
     /// The device's raw physical stance, fed from `OrientationMonitor`
     /// through `FeedView`. This value is not gated by any other condition.
-    /// `isFullscreen` below applies `fullscreenAllowed` and the other rules,
-    /// so the DEBUG probe can always report the stance the app actually saw.
+    ///
+    /// R4: no longer a layout input — `isFullscreen` and
+    /// `allowsLandscapeCandidate` below read the window's own real shape
+    /// and traits, never a device orientation. Kept only for
+    /// `fullscreenStateIdentifier`'s DEBUG probe, so the probe can still
+    /// report the stance the app actually saw, and for `logRotationPose`.
+    /// `OrientationMonitor` itself is still wired in `FeedView`; removing
+    /// it and moving the UI tests that drive it onto
+    /// `XCUIDevice.shared.orientation` is R5's own step.
     let deviceStance: Stance
     /// False while a sheet is up (trash, share, album picker, shrink
     /// confirm). Passed as its own parameter, separate from `deviceStance`,
@@ -43,6 +50,12 @@ struct PlayerPageView: View {
     /// `.scrollDisabled(isScrubbing || isFullscreen)` and hides the global
     /// chrome. Its shape matches `onScrubbingChanged`.
     let onFullscreenChanged: (Bool) -> Void
+    /// Reports `allowsLandscapeCandidate` to `FeedView`, which ORs it
+    /// with the hinge term and writes the result into
+    /// `RotationPolicy.shared` — the one switch the scene delegate reads
+    /// to decide whether the window may rotate at all. Its shape matches
+    /// `onFullscreenChanged`; see that property's own comment.
+    let onAllowsLandscapeChanged: (Bool) -> Void
     /// The device's real top safe-area inset, measured by `FeedView` above
     /// the pager's `.ignoresSafeArea()`.
     /// This page's own `GeometryReader` sits under that modifier, so it
@@ -144,25 +157,29 @@ struct PlayerPageView: View {
     /// itself defaults to, so a stale ratio can never outlive its item
     /// either.
     @State private var videoAspectRatio: CGFloat = 9.0 / 16.0
-    /// True when the WINDOW itself — not the device — is landscape. Set
-    /// from `proxy.size` in `body`, the one place this page can measure
-    /// its own real window shape; see that `onChange` for why a stored
-    /// property is needed at all when `body` already has `proxy.size`
-    /// directly: `isFullscreen` below is a plain computed property,
-    /// read from `.onChange` modifiers chained outside the
-    /// `GeometryReader`, where no `proxy` is in scope. `useVideoAspect`
-    /// (build 1 fix, step 2 — this file's own pose-gated replacement
-    /// for the old round's window-rotation-gated `isLandscapeFit`)
-    /// does not read this property at all; see its own comment.
+    /// True when the WINDOW itself is landscape. Set from `proxy.size`
+    /// in `body`, the one place this page can measure its own real
+    /// window shape; see that `onChange` for why a stored property is
+    /// needed at all when `body` already has `proxy.size` directly:
+    /// `isFullscreen` below is a plain computed property, read from
+    /// `.onChange` modifiers chained outside the `GeometryReader`, where
+    /// no `proxy` is in scope. `useVideoAspect` does not read this
+    /// property at all; see its own comment.
     ///
-    /// Only an open Duo held in a landscape-window pose ("partially
-    /// folded," Apple's book-like hold) can make this true: a regular
-    /// iPhone's window stays portrait under the lock in every physical
-    /// orientation (`project.pbxproj`'s `UISupportedInterfaceOrientations`),
-    /// and so does a CLOSED Duo's, and so does an open Duo folded like a
-    /// laptop (inner display, window still portrait even though the
-    /// device itself reports sideways — see `horizontalSizeClass`'s own
-    /// comment for that pose, which this value alone cannot catch).
+    /// R4 (`design/duo/duo_audit_apple_checklist.md` Decision A, real
+    /// interface rotation): this is now a POSITIVE term in `isFullscreen`
+    /// below, not a negative one guarding a fake-rotation hack. A
+    /// regular iPhone or a closed Duo turned sideways really rotates its
+    /// window now (Info.plist lists all three orientations;
+    /// `CloudfullSceneDelegate.supportedInterfaceOrientations(for:)`
+    /// grants landscape through `RotationPolicy` exactly when
+    /// `FeedView.allowsLandscape` says so), so this reads `true` at
+    /// precisely the moment `isFullscreen` should engage, instead of
+    /// needing to stay portrait for a `.rotationEffect` trick to work.
+    /// An open Duo folded like a laptop (inner display) still reads
+    /// `false` here — its window stays portrait even though the device
+    /// itself is sideways — which is exactly why `isFullscreen` also
+    /// needs `verticalSizeClass`, below.
     @State private var windowIsLandscape = false
     /// The exact size behind `windowIsLandscape`, kept only so
     /// `logRotationPose` can report real numbers — nothing in the
@@ -201,8 +218,18 @@ struct PlayerPageView: View {
     /// during the current landscape period.
     /// Without it, every engagement condition would hold again on the next
     /// evaluation and fullscreen would re-engage immediately.
-    /// Resets to `false` only when `deviceStance` returns to portrait (the
-    /// period ends) or `assetID` changes (a new video is a new decision).
+    ///
+    /// R4: resets to `false` when `assetID` changes (a new video is a new
+    /// decision) or when this page leaves the active slot (`isActive`
+    /// goes `false` — "reset it on page change," `design/duo/duo_audit_apple_checklist.md`
+    /// Decision A's own costs list). It no longer resets on "the device
+    /// returns to portrait": there is no device-orientation read left in
+    /// this file to notice that, since `allowsLandscapeCandidate` below
+    /// feeds `FeedView`'s own rotation mask instead of a device stance.
+    /// A real, owner-flagged behavior change: dismissing fullscreen on a
+    /// page now holds it dismissed — the window will not offer landscape
+    /// for that page again — until the user swipes away and back, even
+    /// if the phone keeps turning.
     @State private var dismissedThisSpell = false
 
     /// Computed, not stored, so there is no state machine that can fall out
@@ -214,58 +241,55 @@ struct PlayerPageView: View {
     /// space, is correct. A finger on the screen means the user is not
     /// rotating the phone.
     ///
-    /// `!windowIsLandscape` (step 6): this is the fake-rotation hack —
-    /// `.rotationEffect(deviceStance.contentRotation)` on an unrotated
-    /// canvas — and it must only fire while the WINDOW itself is still
-    /// portrait. `deviceStance` reports the DEVICE's physical rotation
-    /// (from `UIDeviceOrientation`), which keeps arriving even when a
-    /// portrait lock holds the window still — exactly what makes this
-    /// hack possible on a regular iPhone and a CLOSED Duo, both locked
-    /// portrait. An OPEN Duo turned sideways is not locked: Apple's own
-    /// inner display really rotates the window to landscape, measured
-    /// directly (see `windowIsLandscape`). Without this term, a real
-    /// device would report `deviceStance.isLandscape == true` from the
-    /// SAME physical rotation that already turned the window, and this
-    /// hack would layer a second, unwanted rotation on top of one the
-    /// system already did. `useVideoAspect` below is the window-rotated
-    /// case's own path instead — decided from `duoLayout.pose`, never
-    /// from `deviceStance` or a device check.
+    /// R4 (`design/duo/duo_audit_apple_checklist.md` Decision A point 4,
+    /// real interface rotation): `windowIsLandscape` is now a POSITIVE
+    /// term — the window really has rotated, which only happens once
+    /// `FeedView.allowsLandscape` (fed by `allowsLandscapeCandidate`
+    /// below) has already told `RotationPolicy`/the scene delegate this
+    /// page permits it. There is no `.rotationEffect` canvas trick left
+    /// to guard, and no device-orientation read anywhere in this
+    /// condition — `deviceStance` does not appear here at all.
     ///
-    /// `horizontalSizeClass != .regular` (step 6, addition): a SECOND
-    /// window-shape pose exists where `windowIsLandscape` alone is not
-    /// enough — the open Duo folded like a laptop (bottom half flat,
-    /// top half up). There, the INNER display is in use, but its window
-    /// is still PORTRAIT (measured 2007×2853 px), while the device
-    /// itself still reports sideways from the same physical fold. Every
-    /// term above this one would read exactly as it does on a regular
-    /// iPhone or a closed Duo, and the hack would fire — confirmed on
-    /// the sim, and confirmed wrong: the owner saw the video read
-    /// sideways. `horizontalSizeClass` is what actually separates this
-    /// pose from the other two portrait-window cases this hack must
-    /// still serve: Apple gives the Duo's bigger INNER display `.regular`
-    /// — the same way an iPad's own window always reads `.regular` —
-    /// while a regular iPhone and the Duo's phone-sized OUTER display
-    /// both read `.compact`, in every orientation, because neither
-    /// window is ever wide enough to need the distinction iPad apps
-    /// already make with it. That is also why this reads
-    /// `horizontalSizeClass`, a plain `@Environment` value with no
-    /// `#available` gate, rather than a hinge status: the hinge alone
-    /// does not say WHICH display is active during `.partiallyOpen` —
-    /// both this laptop pose and the "folded like a tent" pose (outer
-    /// display, kept — see `windowIsLandscape`'s own comment) report
-    /// the same hinge status; the window's own traits already encode
-    /// which display is actually on screen, with no need to ask the
-    /// hinge at all. Confirmed by reading `UITraitCollection`/
-    /// `UIUserInterfaceSizeClass` in the 27.1 SDK headers and by the
-    /// `-cloudfull-log-rotation` readings below — not by guessing.
-    /// `!= .regular`, not `== .compact`: a `nil` reading (a preview, or
-    /// a transient moment before the environment resolves) keeps
-    /// today's behaviour on a regular iPhone rather than silently
-    /// disabling it.
+    /// `verticalSizeClass == .compact` replaces the old
+    /// `horizontalSizeClass != .regular` term (F2's own fix,
+    /// `design/duo/duo_audit_apple_checklist.md` §1): Apple's own
+    /// guidance is to pick FIT vs FILL by size class, and vertical is
+    /// the axis that actually separates "a real phone-shaped landscape
+    /// window" (compact height — a regular iPhone, or the Duo's OUTER
+    /// display turned sideways) from "the Duo's INNER display, open and
+    /// wide" (regular height — pose 3/`.openWide`, same as an iPad's
+    /// window). The inner display's own landscape video gets pose 3's
+    /// FIT treatment instead (`useVideoAspect`, decided from
+    /// `duoLayout.pose`, never from this property) — it is `.regular`
+    /// height, so it never reaches here. A `nil` reading (a preview, or
+    /// a transient moment before the environment resolves) reads
+    /// `!= .compact`, which keeps fullscreen off rather than guessing.
     private var isFullscreen: Bool {
-        isActive && videoIsLandscape && deviceStance.isLandscape && !windowIsLandscape
-            && horizontalSizeClass != .regular
+        isActive && videoIsLandscape && windowIsLandscape && verticalSizeClass == .compact
             && fullscreenAllowed && !dismissedThisSpell && !isScrubbing
+    }
+
+    /// Whether THIS page would permit the window to rotate into
+    /// landscape right now — term 3 of Decision A's `allowsLandscape`
+    /// rule (`design/duo/duo_audit_apple_checklist.md` §3): "(active
+    /// page is a wide video && fullscreenAllowed && !dismissed)".
+    /// Reported up to `FeedView` (`onAllowsLandscapeChanged`), which ORs
+    /// it with the hinge term and writes the result into
+    /// `RotationPolicy.shared` — see that type's own comment for why
+    /// the write happens there and not here.
+    ///
+    /// Deliberately excludes `windowIsLandscape` and `verticalSizeClass`:
+    /// this is the GATE that permits the window to rotate in the first
+    /// place, so it cannot wait for the rotation it is deciding whether
+    /// to allow. `isFullscreen` above is the narrower, already-rotated
+    /// condition that actually engages the FILL chrome once this gate
+    /// let the system rotate.
+    ///
+    /// Only the centered page can ever report `true` here, the same
+    /// guarantee `isFullscreen`'s own callback (`onFullscreenChanged`)
+    /// already relies on — `isActive` is the first term.
+    private var allowsLandscapeCandidate: Bool {
+        isActive && videoIsLandscape && fullscreenAllowed && !dismissedThisSpell
     }
 
     /// True when the loaded video is landscape and this frame's pose is
@@ -493,17 +517,16 @@ struct PlayerPageView: View {
             )
             let stageWidth = stageRect.width
             let stageHeight = stageRect.height
-            // In fullscreen the canvas is the screen's own dimensions with
-            // width and height swapped: a landscape-shaped box sized
-            // `screenHeight × screenWidth`. It lays out un-rotated at that
-            // size, then rotates ±90° below.
-            // The rendered, post-rotation bounding box works out to exactly
-            // `screenWidth × screenHeight`, the pager cell this page
-            // already fills. Nothing overflows the `ScrollView`'s clip, and
-            // no second presentation layer is needed. Outside fullscreen
-            // this matches the 9:16 stage exactly.
-            let canvasWidth = isFullscreen ? proxy.size.height : stageWidth
-            let canvasHeight = isFullscreen ? proxy.size.width : stageHeight
+            // R4: in fullscreen the canvas is simply the window's own real
+            // size — no swap, no un-rotated pre-image. `windowIsLandscape`
+            // (a term of `isFullscreen`) is only ever true once the
+            // system has actually rotated this window, so `proxy.size`
+            // here is already the landscape shape the screen shows; a
+            // full-bleed canvas at that exact size is the pager cell this
+            // page already fills. Outside fullscreen this matches the
+            // 9:16 stage exactly, same as before.
+            let canvasWidth = isFullscreen ? proxy.size.width : stageWidth
+            let canvasHeight = isFullscreen ? proxy.size.height : stageHeight
             // A symmetric split of the space left over around
             // `canvasHeight`. This uses the same formula as
             // `FeedView.stageBandHeight`, computed locally here because
@@ -716,14 +739,18 @@ struct PlayerPageView: View {
                                 )
                             }
                         }
-                        // One transition, in both directions, on the stage
-                        // frame and the rotation angle.
-                        // No Reduce Motion branch: the rotation shows the
-                        // state change, so it runs even with Reduce Motion
-                        // on, like pager paging.
-                        .rotationEffect(isFullscreen ? deviceStance.contentRotation : .zero)
+                        // R4: no `.rotationEffect` — the window itself
+                        // really rotates now (`windowIsLandscape`'s own
+                        // comment), so there is no canvas angle left for
+                        // this file to animate. The system's own rotation
+                        // transition (~0.3 s) handles the turn; this
+                        // `.animation` only smooths the discrete jump
+                        // between the 9:16 stage frame and the full-bleed
+                        // canvas (`canvasWidth`/`canvasHeight`'s own
+                        // ternary) the instant `isFullscreen` itself flips,
+                        // which can land a frame or two before or after
+                        // the window's own size finishes settling.
                         .animation(.easeInOut(duration: 0.25), value: isFullscreen)
-                        .animation(.easeInOut(duration: 0.25), value: deviceStance.contentRotation)
                     Color.clear.frame(height: bottomSpace)
                 }
                 // Insets the whole stage column off whichever edge the
@@ -770,6 +797,16 @@ struct PlayerPageView: View {
         // The holder's stored intent, never a value captured by an async
         // task, decides whether playback starts.
         .onChange(of: isActive, initial: true) { _, newValue in
+            if !newValue {
+                // R4: "reset it on page change" — the dismiss latch's
+                // other reset trigger, now that there is no device
+                // orientation left to notice "the landscape period has
+                // ended" (see `dismissedThisSpell`'s own comment). This
+                // page leaving the active slot is the new reset point,
+                // regardless of why (a swipe, a prune, a library change).
+                dismissedThisSpell = false
+                chromeRevealed = false
+            }
             // A page handoff that lands while the pager is still moving
             // waits for idle. Play and pause are engine calls; see
             // `ScrollPhaseGate`.
@@ -799,6 +836,12 @@ struct PlayerPageView: View {
         .onChange(of: isFullscreen) { _, newValue in
             onFullscreenChanged(newValue)
         }
+        // R4: the gate half of the rotation story — see
+        // `allowsLandscapeCandidate`'s own comment. Shape matches the
+        // `isFullscreen` pair just above.
+        .onChange(of: allowsLandscapeCandidate) { _, newValue in
+            onAllowsLandscapeChanged(newValue)
+        }
         // A new asset resets the dismiss latch, the chrome-reveal state,
         // `videoIsLandscape`, and `videoAspectRatio`, so it does not
         // inherit state from the previous video.
@@ -808,22 +851,17 @@ struct PlayerPageView: View {
             videoIsLandscape = false
             videoAspectRatio = 9.0 / 16.0
         }
-        // The other of the latch's two reset triggers: the landscape
-        // period has ended.
-        // Read here, not only through `isFullscreen` going false, because
-        // the dismiss-button path must leave the latch holding even while
-        // the device is still landscape.
-        .onChange(of: deviceStance) { _, newStance in
-            if !newStance.isLandscape {
-                dismissedThisSpell = false
-                chromeRevealed = false
-            }
-            // A pose can change `deviceStance` with no change to
-            // `proxy.size` at all — rotating a closed Duo, or a regular
-            // iPhone, sideways while the window itself stays whatever
-            // size it already was. The `onChange(of: proxy.size)` log
-            // call above would miss exactly that moment, so this is a
-            // second, independent call site for the same diagnostic.
+        // `deviceStance` no longer drives any latch reset — see
+        // `dismissedThisSpell`'s own comment on why ("reset it on page
+        // change" replaces it). This call site stays only for the
+        // diagnostic: a pose can change `deviceStance` with no change to
+        // `proxy.size` at all — rotating a closed Duo, or a regular
+        // iPhone, sideways while the window itself stays whatever size
+        // it already was (the mask may not grant landscape for this
+        // page at all). The `onChange(of: proxy.size)` log call above
+        // would miss exactly that moment, so this is a second,
+        // independent call site for the same diagnostic.
+        .onChange(of: deviceStance) { _, _ in
             logRotationPose()
         }
         // Step 1: two more independent call sites for the same
@@ -892,8 +930,10 @@ struct PlayerPageView: View {
                 // `wasFullscreen` must reflect this page's state at the
                 // moment the page loses its preload window. It must not
                 // reflect the state after the resets below force
-                // `isFullscreen` to read `false`.
+                // `isFullscreen` to read `false`. `wasAllowsLandscape`
+                // is the same capture for `allowsLandscapeCandidate`.
                 let wasFullscreen = isFullscreen
+                let wasAllowsLandscape = allowsLandscapeCandidate
                 endScrub()
                 holder.release()
                 isLoading = true
@@ -924,6 +964,14 @@ struct PlayerPageView: View {
                 if wasFullscreen {
                     onFullscreenChanged(false)
                 }
+                // Same reasoning as `wasFullscreen` just above, for
+                // `allowsLandscapeCandidate`'s own callback: a page torn
+                // down outside the preload window while it was still
+                // granting landscape must not leave `FeedView`'s own
+                // `pageAllowsLandscape` stuck `true` forever.
+                if wasAllowsLandscape {
+                    onAllowsLandscapeChanged(false)
+                }
             }
         }
         .onChange(of: scenePhase) { _, newPhase in
@@ -944,10 +992,14 @@ struct PlayerPageView: View {
             // either: nothing below this line should change what gets
             // reported.
             let wasFullscreen = isFullscreen
+            let wasAllowsLandscape = allowsLandscapeCandidate
             endScrub()
             holder.release()
             if wasFullscreen {
                 onFullscreenChanged(false)
+            }
+            if wasAllowsLandscape {
+                onAllowsLandscapeChanged(false)
             }
         }
     }
@@ -958,15 +1010,17 @@ struct PlayerPageView: View {
     /// `body`'s own `some View` expression in reasonable time with
     /// that much branching arithmetic inlined directly in it.
     ///
-    /// `isFullscreen || useVideoAspect`: zero. The rotated fullscreen
-    /// canvas has no top chrome above it to make room for. The
+    /// `isFullscreen || useVideoAspect`: zero. The full-bleed fullscreen
+    /// canvas (R4: the window itself is really landscape now, no
+    /// rotated un-rotated-canvas trick left — see `canvasWidth`'s own
+    /// comment) has no top chrome above it to make room for. The
     /// `useVideoAspect` stage (pose 3/4's wide video) has no reserved
     /// band to clear either — build 1 fix, step 2 un-hid this pose's
     /// chrome, but `DuoLayout.availableRect`'s own "overlay, never
     /// carve out height" rule already covers it the same way it
     /// already does the bar column and the open-tall column: the
     /// chrome draws ON the video's own top edge, full height, rather
-    /// than pushing it down — both this case and the rotated canvas
+    /// than pushing it down — both this case and the full-bleed canvas
     /// centre plainly in the available space, the same symmetric split
     /// `halfLeftover` already gives them.
     ///
@@ -1142,13 +1196,17 @@ struct PlayerPageView: View {
                 // the chrome. So this pairing of fullscreen, still
                 // buffering, and a user tap is not rare.
                 //
-                // The offset shifts the ring down in the stage's own
-                // space. Because the stage rotates ±90° in fullscreen,
-                // this reads on screen as a small step to one side of
-                // centre, mirrored between the two stances. The mirror is
-                // fine here. The ring stays beside the middle of the
-                // screen in both stances, rather than jumping from one
-                // screen corner to the opposite one.
+                // R4: the offset now reads on screen exactly as written —
+                // a plain downward shift from dead centre, clearing the
+                // mute badge's 34pt radius with room to spare. Before
+                // real rotation, this same offset was applied in the
+                // UN-rotated canvas's own local space, which a
+                // `.rotationEffect` then turned into a sideways step on
+                // screen (see this file's own git history); with no
+                // rotation left to apply, that indirection is gone.
+                // Flagged for the owner's own fullscreen feel-check: a
+                // horizontal offset might sit better in a short landscape
+                // window than a vertical one now that it reads literally.
                 .offset(y: isFullscreen ? Self.fullscreenLoaderDrop : 0)
                 .allowsHitTesting(false)
                 .accessibilityLabel("Loading video")
@@ -1191,15 +1249,15 @@ struct PlayerPageView: View {
                 // inside `FeedView.bottomScrim`. The ring's own dark disc
                 // keeps it visible there.
                 //
-                // Centred in fullscreen, and it has to be. `stageContent`
-                // lays out un-rotated, then turns +90° or -90° through
-                // `.rotationEffect(deviceStance.contentRotation)` in
-                // `body`. In landscape, a corner of this un-rotated layout
-                // is not a corner of the screen. It maps to the top-left
-                // in one stance and the bottom-right in the other. A
-                // loader that jumps to the opposite screen corner when the
-                // phone turns the other way would be a visible bug. Centre
-                // is the same place in every stance.
+                // Centred in fullscreen, and it has to be. R4: the window
+                // itself is really landscape now (no more un-rotated
+                // layout turned ±90° through a `.rotationEffect` — see
+                // `canvasWidth`'s own comment), so this corner is already
+                // a real screen corner either way the phone is held. A
+                // loader anchored to a corner would still jump between
+                // `.landscapeLeft` and `.landscapeRight` (the content
+                // itself never rotates to compensate any more); centre is
+                // the one point that reads the same in both.
                 // A ternary on the alignment value, never an if/else
                 // around the view. The modifier chain keeps one identity.
                 // This is the rule the identity comment on `stageContent`
@@ -1286,8 +1344,10 @@ struct PlayerPageView: View {
             // same style used for the rail.
 
             // Inside the same ZStack as the video, so it sits inside the
-            // rotated canvas that `body` rotates as one unit. The chrome
-            // rotates with the video and reads upright in the user's hand.
+            // same full-bleed canvas (R4: the window itself is really
+            // landscape now — see `canvasWidth`'s own comment — so the
+            // chrome needs no rotation of its own to read upright; it
+            // just lays out directly in the real landscape space).
             // Mounted only for the duration of the landscape period,
             // matching `ScrubberView`'s own conditional mounting.
             if isFullscreen {
@@ -1364,10 +1424,10 @@ struct PlayerPageView: View {
     /// position and throttles the seek to one per 1/30 s.
     private func handleScrubChanged(fraction: Double) {
         // `StageLongPressScrubGesture` is permanently attached, including
-        // while `isFullscreen`. A long press on the rotated stage must
-        // not start a scrub. There is no scrubbing in fullscreen, and the
-        // rotated stage's x position is not the coordinate space
-        // `stageWidth` assumes.
+        // while `isFullscreen`. A long press on the fullscreen canvas
+        // must not start a scrub. There is no scrubbing in fullscreen,
+        // and the canvas's own full-bleed width (`canvasWidth`'s own
+        // comment) is not the coordinate space `stageWidth` assumes.
         // Guarding here, rather than detaching the recognizer, keeps
         // `StageLongPressScrubGesture` itself unedited.
         guard !isFullscreen else { return }
@@ -1420,8 +1480,9 @@ struct PlayerPageView: View {
     /// where the finger is. Every later tick of the same hold sticks with
     /// that choice.
     /// In fullscreen the whole stage is a fast-forward zone. There is no
-    /// scrubbing there at all. The rotated stage's local x is not the
-    /// axis `fastForwardEdgeFraction` is measured on.
+    /// scrubbing there at all. The full-bleed canvas's local x is not the
+    /// axis `fastForwardEdgeFraction` is measured on (same mismatch as
+    /// `handleScrubChanged`'s own comment).
     private func handleStageHold(fraction: Double) {
         if isScrubbing {
             handleScrubChanged(fraction: fraction)

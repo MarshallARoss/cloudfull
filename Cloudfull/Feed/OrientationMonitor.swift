@@ -186,12 +186,16 @@ final class OrientationMonitor: ObservableObject {
     // `xcrun simctl spawn booted notifyutil -p <name>`. This needs no
     // Info.plist change and no app-side URL scheme.
     //
-    // This proves that every system downstream of `stance` runs through
-    // the identical code path a real rotation would drive. That includes
-    // `isFullscreen`, the rotated canvas, `FullscreenPlayerChrome`, the
-    // hidden global chrome, disabled paging, and the dismiss latch. It
-    // does not prove that a real physical rotation reaches this app on
-    // this runtime.
+    // R4 (`design/duo/duo_audit_apple_checklist.md` Decision A): `stance`
+    // is no longer a layout input anywhere in `PlayerPageView` —
+    // `isFullscreen` and the dismiss latch now read the window's own
+    // real shape and traits instead, not a device orientation (Apple's
+    // own rule, this file's header comment). This hook, and `stance`
+    // itself, now back only the DEBUG `fullscreen_state_` probe's
+    // `<stance>` field (`PlayerPageView.fullscreenStateIdentifier`).
+    // Removing this hook and `OrientationMonitor` outright, and moving
+    // the UI tests that drive it onto real rotation via
+    // `XCUIDevice.shared.orientation`, is R5's own step.
     #if DEBUG
     private static let debugForcePortraitName = "com.cloudfull.app.debug.orientationStance.portrait"
     private static let debugForceLandscapeLeftName = "com.cloudfull.app.debug.orientationStance.landscapeLeft"

@@ -114,6 +114,11 @@ struct FeedView: View {
     /// `isScrubbing`. Only the centered page can ever be fullscreen, so at
     /// most one page's callback ever reports `true`.
     @State private var isFullscreen = false
+    /// The signal from whichever page's `PlayerPageView` currently reports
+    /// `allowsLandscapeCandidate == true`, through `onAllowsLandscapeChanged`
+    /// — the page half of `allowsLandscape` below. Same shape as
+    /// `isFullscreen`; only the centered page can ever report `true`.
+    @State private var pageAllowsLandscape = false
 
     /// Owns the share flow end to end: the Wi-Fi guard, resolving a
     /// shareable file, presenting the system share sheet, and the album
@@ -200,8 +205,8 @@ struct FeedView: View {
             && shareCoordinator.probeState == .idle
     }
 
-    /// True while the rotation hack's fullscreen mode (a regular iPhone
-    /// or a closed Duo turned sideways) hides the GLOBAL chrome — the
+    /// True while fullscreen mode (a regular iPhone or a closed Duo
+    /// really rotated into landscape, R4) hides the GLOBAL chrome — the
     /// top mute/filter/bin row (`overlayControls`) and the chin
     /// (`ChinNavigation`).
     ///
@@ -215,6 +220,26 @@ struct FeedView: View {
     /// the stage/aspect-ratio math alone, with no chrome-hiding role of
     /// its own left to inherit.
     private var hidesGlobalChrome: Bool { isFullscreen }
+
+    /// Decision A's own `allowsLandscape` rule
+    /// (`design/duo/duo_audit_apple_checklist.md` §3, R4): "(active page
+    /// is a wide video && fullscreenAllowed && !dismissed) || hinge ==
+    /// .partiallyOpen". `pageAllowsLandscape` is the first clause,
+    /// reported up by whichever page is centered (`PlayerPageView
+    /// .allowsLandscapeCandidate`, through `onAllowsLandscapeChanged`).
+    /// The hinge clause is independent of any page's own content — a
+    /// partially-open hinge permits the OUTER display to rotate into the
+    /// tent (pose 2) even while a portrait video sits on screen, which
+    /// is what lets the 1H → 2 flow (closed, sideways → tent) begin
+    /// without first dismissing or changing videos.
+    ///
+    /// The one write site is the `.onChange(of: allowsLandscape, initial:
+    /// true)` in `body`, which hands this value to `RotationPolicy
+    /// .shared` — the single switch `CloudfullSceneDelegate
+    /// .supportedInterfaceOrientations(for:)` actually reads.
+    private var allowsLandscape: Bool {
+        pageAllowsLandscape || hingeStatus == .partial
+    }
 
     /// Pose 5's own chin position: beside the rail's own last item in
     /// the open-tall column (bar off), `Rail.spacing` below it — the
@@ -386,6 +411,20 @@ struct FeedView: View {
         // input to the stage math — does not move when the inset does.
         .statusBarHidden(hidesGlobalChrome)
         .persistentSystemOverlays(hidesGlobalChrome ? .hidden : .automatic)
+        // R4: the one write site for `RotationPolicy.shared` — see
+        // `allowsLandscape`'s own comment. `initial: true` syncs the
+        // scene's mask the moment this view first appears, not only on
+        // the next change; a same-value write is already a no-op inside
+        // `RotationPolicy` itself. `RotationPolicy` needs no `#available`
+        // gate of its own — every API it calls (`UIWindowScene`,
+        // `setNeedsUpdateOfSupportedInterfaceOrientations`) predates this
+        // app's iOS 26.0 deployment target; only the SCENE DELEGATE
+        // method that reads `allowsLandscape` back out
+        // (`supportedInterfaceOrientations(for:)`) is iOS 27-gated, by
+        // the OS itself simply never calling it on an older one.
+        .onChange(of: allowsLandscape, initial: true) { _, newValue in
+            RotationPolicy.shared.update(allowsLandscape: newValue)
+        }
         .task {
             viewModel.start()
             trashService.start()
@@ -590,6 +629,7 @@ struct FeedView: View {
                             deviceStance: orientation.stance,
                             fullscreenAllowed: fullscreenAllowed,
                             onFullscreenChanged: { isFullscreen = $0 },
+                            onAllowsLandscapeChanged: { pageAllowsLandscape = $0 },
                             safeAreaTop: safeAreaTop,
                             duoLayout: duoLayout,
                             onDoubleTap: { doubleTapKeepNonces[entry.id, default: 0] += 1 },
@@ -701,7 +741,18 @@ struct FeedView: View {
             // to the user. See `dismissCalloutForScroll`.
             if newPhase != .idle { shareCoordinator.dismissCalloutForScroll() }
         }
-        .scrollPosition(id: $currentPageID)
+        // R4: `anchor: .top` (`design/duo/duo_audit_apple_checklist.md`
+        // §3's own risk note — "the pager must keep its page through the
+        // size change"). Each page fills the viewport exactly
+        // (`.containerRelativeFrame([.horizontal, .vertical])`), so
+        // pinning the current page's own top-leading edge to the
+        // viewport's own top-leading edge is what keeps it the page on
+        // screen, not some fraction of it, through the window's own
+        // resize during a real rotation — the same anchor the
+        // `reanchorNonce`/`advanceNonce` paths below already pass to
+        // `scrollProxy.scrollTo`, so every programmatic and
+        // gesture-driven re-anchor in this pager now agrees.
+        .scrollPosition(id: $currentPageID, anchor: .top)
         // No scroll indicator on a full-bleed, one-video-per-screen pager.
         // A scrollbar looks like a defect on this kind of vertical video
         // feed, not like a navigation aid.
