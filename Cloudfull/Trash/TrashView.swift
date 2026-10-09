@@ -622,6 +622,7 @@ private struct TrashPreviewView: View {
     let assetKey: String
     @ObservedObject var trashService: TrashService
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.displayScale) private var displayScale
 
     private let library = PhotoLibraryService.shared
     @State private var player = AVPlayer()
@@ -631,6 +632,13 @@ private struct TrashPreviewView: View {
     /// Holds the loaded image for a photo entry, since a photo has no
     /// player item.
     @State private var photo: UIImage?
+    /// The preview container's own measured size, from `.onGeometryChange`
+    /// on the `ZStack` below — never `UIScreen.main`. `.presentationDetents
+    /// ([.large])` sizes this sheet to (approximately) the full screen on
+    /// every display this runs on, Duo's inner and outer displays
+    /// included, so this is the view-based equivalent of "the screen size"
+    /// the old code reached for `UIScreen.main` to get.
+    @State private var previewSize: CGSize = .zero
 
     private var isPhoto: Bool {
         trashService.entries.first { $0.assetKey == assetKey }?.mediaKind == TrashMediaKind.photo.rawValue
@@ -661,6 +669,12 @@ private struct TrashPreviewView: View {
                 } else {
                     TrashPreviewPlayerView(player: player)
                 }
+            }
+            // Measures this container instead of reading `UIScreen.main`,
+            // which is deprecated and, on a multi-display device, is not
+            // even necessarily the display this sheet is presented on.
+            .onGeometryChange(for: CGSize.self) { $0.size } action: { _, newSize in
+                previewSize = newSize
             }
             .navigationTitle("Preview")
             .navigationBarTitleDisplayMode(.inline)
@@ -714,10 +728,14 @@ private struct TrashPreviewView: View {
         .presentationDragIndicator(.visible)
         .task {
             if isPhoto {
-                // Loads the photo at screen size with aspect fit. It uses
+                // Loads the photo at the preview container's own size
+                // with aspect fit, never a guessed screen size. It uses
                 // the same fetch as the bin thumbnails. The service does
-                // the fetch off the main thread.
-                let side = UIScreen.main.bounds.height * UIScreen.main.scale
+                // the fetch off the main thread. `max(width, height)`
+                // covers either orientation with one request, matching
+                // `UIScreen.main.bounds.height`'s old intent of "the
+                // long edge" without assuming which edge that is.
+                let side = max(previewSize.width, previewSize.height) * displayScale
                 guard let image = await library.thumbnail(for: assetKey, side: side, contentMode: .aspectFit) else {
                     loadFailed = true
                     return

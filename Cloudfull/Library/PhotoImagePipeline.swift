@@ -116,11 +116,16 @@ final class PhotoImagePipeline {
     /// cancel its request first.
     nonisolated(unsafe) private static let liveRequests = PhotoImageRequestRegistry()
 
-    /// The feed's post width, in pixels. Starts at a default value, so a
-    /// `setWindow` call before the first layout pass still caches a
-    /// usable size. `configure(widthPoints:scale:)` replaces it after
-    /// first layout.
-    private var widthPixels: CGFloat = 402 * 3
+    /// The feed's post width, in pixels. Starts at `0`, meaning
+    /// "unmeasured" — never a guessed device width. `UIScreen.main` is
+    /// deprecated, and a guess baked in here would also be wrong on
+    /// Duo's inner display, in a Mirroring window, or at a larger Dynamic
+    /// Type size. `configure(widthPoints:scale:)` replaces this with a
+    /// real value, read from the feed's own root geometry, on first
+    /// layout and again on every later change. `setWindow` reads
+    /// `targetSize` as its own "has `configure` run yet" check: see that
+    /// method's guard.
+    private var widthPixels: CGFloat = 0
 
     private init() {
         // A prepared 1206 × 1608 image is about 7.8 MB. The 72 MB byte
@@ -136,10 +141,20 @@ final class PhotoImagePipeline {
 
     // MARK: - Geometry
 
-    /// Called from `PhotoFeedView`'s root `GeometryReader`. Does nothing
-    /// unless the width changed, from a rotation or the first real
-    /// layout replacing the default width. A width change drops the
-    /// cache, because every cached image was prepared for the old size.
+    /// Called from `PhotoFeedView`'s root geometry read — `widthPoints`
+    /// from an `.onGeometryChange(for: CGFloat.self) { $0.size.width }`
+    /// on the feed's own container, `scale` from
+    /// `@Environment(\.displayScale)` — never from `UIScreen.main`. The
+    /// caller must call this again on every change to either input, not
+    /// only once at first layout: a fold, a Mirroring resize, or a
+    /// display-scale change (an external display, or the inner/outer
+    /// swap on Duo) all need the cache re-measured the same way a
+    /// rotation already does below.
+    ///
+    /// Does nothing unless the width changed, from a rotation, a fold, or
+    /// the first real layout replacing the unmeasured `0` default. A
+    /// width change drops the cache, because every cached image was
+    /// prepared for the old size.
     func configure(widthPoints: CGFloat, scale: CGFloat) {
         guard widthPoints > 0, scale > 0 else { return }
         let pixels = (widthPoints * scale).rounded()
@@ -154,6 +169,17 @@ final class PhotoImagePipeline {
 
     /// The one box every request and every caching call uses. See this
     /// type's doc comment for why the size is shared and not per asset.
+    ///
+    /// Before the first `configure(widthPoints:scale:)` call,
+    /// `widthPixels` is `0` and this is `CGSize.zero`. `setWindow` guards
+    /// against starting any caching at that size — see its own comment.
+    /// The one caller that cannot simply wait, the per-post full-size
+    /// request in `events(for:)`, has no such guard: a request fired in
+    /// the instant before the feed's first layout pass completes would
+    /// read this zero size. In practice `configure` lands well before any
+    /// post's own request, the same ordering `PhotoPostView`'s geometry
+    /// reads already rely on, so this is not expected to happen; `events
+    /// (for:)`'s existing `.failed` path is the fallback if it ever does.
     var targetSize: CGSize {
         CGSize(width: widthPixels, height: widthPixels * 2)
     }
@@ -224,6 +250,14 @@ final class PhotoImagePipeline {
         // a late prefetch trigger could restart the downloads
         // `suspend()` just stopped.
         guard !isSuspended else { return }
+        // No prefetch until `configure(widthPoints:scale:)` has measured
+        // a real width. Caching at the unmeasured `0` default would be
+        // wasted PhotoKit work, thrown away the moment the real size
+        // lands anyway — `configure` clears `cachedIDs` and the cache on
+        // every change. `lastWindowIDs` above is still recorded, so the
+        // next call this triggers, moments later as the feed's own
+        // layout settles, starts this same window at the right size.
+        guard widthPixels > 0 else { return }
         let wanted = Set(assetIDs)
         let toStart = wanted.subtracting(cachedIDs)
         let toStop = cachedIDs.subtracting(wanted)
