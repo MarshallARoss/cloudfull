@@ -230,6 +230,37 @@ enum FetchCounters {
         photoKitLock.lock(); photoKit += n; photoKitLock.unlock()
     }
 }
+/// Counts actual PhotoKit `requestPlayerItem` calls, per page rather than
+/// per asset: a repeated asset dealt to two pages must count against each
+/// page on its own, since each gets its own request. Keyed by
+/// `DeckEntry.id`, not by asset id.
+///
+/// `DeckViewModel.playerItem(for:pageID:onProgress:)` calls `bump(_:)`
+/// right before it falls through to a fresh PhotoKit fetch. A hit in
+/// `PlayerItemCache` — a warm item already resolved, or one still
+/// resolving that this call only joins — never bumps it, because no new
+/// request went out.
+///
+/// `M12Tests`' `itemreq_` probe reads this to measure how many real
+/// network requests a swipe back, or a swipe away mid-load and back,
+/// actually costs.
+enum ItemRequestCounters {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var counts: [String: Int] = [:]
+
+    static func bump(_ pageID: String) {
+        lock.lock()
+        counts[pageID, default: 0] += 1
+        lock.unlock()
+    }
+
+    static func count(for pageID: String) -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return counts[pageID] ?? 0
+    }
+}
+
 /// Counts the work the deck's persistence helpers do, so "a tap writes
 /// O(1), independent of library size" is a fact a test can check.
 ///

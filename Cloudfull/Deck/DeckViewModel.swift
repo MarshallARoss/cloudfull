@@ -802,13 +802,18 @@ final class DeckViewModel: ObservableObject {
         }
     }
 
-    func playerItem(for assetID: String, onProgress: (@Sendable (Double) -> Void)? = nil) async -> AVPlayerItem? {
+    func playerItem(for assetID: String, pageID: String, onProgress: (@Sendable (Double) -> Void)? = nil) async -> AVPlayerItem? {
         // A warm slot may already hold this asset's resolved item, or
         // still be resolving it. Either way, this is the only consumer,
         // so joining is correct: a second request would download the
         // item twice. `take` removes what it returns, so one resolved
         // item can never reach two players.
         if let warmed = await PlayerItemCache.shared.take(assetID) { return warmed }
+        #if DEBUG
+        // Only the real fallback below counts as a request. A join
+        // above costs nothing new, so it must not bump this.
+        ItemRequestCounters.bump(pageID)
+        #endif
         return await library.playerItem(for: assetID, onProgress: onProgress)
     }
 
@@ -932,6 +937,17 @@ final class DeckViewModel: ObservableObject {
                 }
             }
             index -= 1
+        }
+
+        // Every other site that edits `deck` refreshes the window right
+        // after (`:374, 503, 586, 622, 665, 770, 1121, 1285` as of this
+        // writing). Without this, a like on a video that repeats at +1
+        // leaves `preloadableSlots` naming the slot this call just
+        // removed, and misses the slot that slides into +1's place —
+        // that neighbour never starts loading until the user actually
+        // swipes to it.
+        if !slots.isEmpty {
+            refreshPreloadableSlots()
         }
 
         // Sorted mode still removes the id from the live deck above, but

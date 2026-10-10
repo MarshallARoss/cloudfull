@@ -892,6 +892,17 @@ struct PlayerPageView: View {
             Color.clear
                 .frame(width: 1, height: 1)
                 .accessibilityIdentifier(isActive ? loadSequenceIdentifier : "")
+
+            // `itemreq_<pageID>_<n>`, present unconditionally on the
+            // centred page. `n` is `ItemRequestCounters`' running count of
+            // real PhotoKit fetches this page id has triggered so far
+            // this launch — a cache hit does not move it. `M12Tests`
+            // swipes forward then back, and swipes away mid-load then
+            // back, and reads this to measure whether either one issues
+            // a second request for a page it already asked for once.
+            Color.clear
+                .frame(width: 1, height: 1)
+                .accessibilityIdentifier(isActive ? itemRequestIdentifier : "")
             #endif
         }
     }
@@ -906,6 +917,12 @@ struct PlayerPageView: View {
     private var loadSequenceIdentifier: String {
         "load_seq_\(pageID)_\(loadSeq.offset(loadSeq.posterAt))_\(loadSeq.offset(loadSeq.spinnerAt))"
             + "_\(loadSeq.offset(loadSeq.firstFrameAt))_\(loadSeq.offset(loadSeq.spinnerGoneAt))"
+    }
+    #endif
+
+    #if DEBUG
+    private var itemRequestIdentifier: String {
+        "itemreq_\(pageID)_\(ItemRequestCounters.count(for: pageID))"
     }
     #endif
 
@@ -1056,7 +1073,7 @@ struct PlayerPageView: View {
         // PhotoKit delivers progress on an arbitrary thread. Hop to main,
         // and ignore anything that arrives for a page that has moved on.
         let progressKey = taskKey
-        guard let item = await viewModel.playerItem(for: assetID, onProgress: { fraction in
+        guard let item = await viewModel.playerItem(for: assetID, pageID: pageID, onProgress: { fraction in
             Task { @MainActor in
                 guard self.taskKey == progressKey else { return }
                 self.downloadFraction = fraction
