@@ -255,7 +255,19 @@ struct FeedView: View {
     /// "[the chin] should at least be bigger and align with the other
     /// rail items" — same x-centre as the rail, below its last item,
     /// with the rail's own spacing.
-    private func railAlignedChinCenter(duoLayout: DuoLayout, safeAreaTop: CGFloat, containerSize: CGSize) -> CGPoint? {
+    ///
+    /// Build 8b: pose 6 (laptop) reuses this same `ChinNavigation
+    /// .railAlignedCenter` mechanism for its own collapsed chin, at
+    /// `DuoLayout.laptopRailRow`'s own `chinCenter` — "chin collapsed
+    /// centre (600, v 236) via `railAlignedCenter`" (`design/duo/duo_build_spec.md`
+    /// §2.6). The mechanism itself ("position the collapsed switcher at
+    /// a point, else the ordinary bottom-trailing anchor") is already
+    /// pose-agnostic; only the point differs, so this branches first
+    /// rather than growing a second parameter on `ChinNavigation`.
+    private func railAlignedChinCenter(duoLayout: DuoLayout, safeAreaTop: CGFloat, safeAreaBottom: CGFloat, containerSize: CGSize) -> CGPoint? {
+        if duoLayout.pose == .laptop {
+            return duoLayout.laptopRailRow(containerSize: containerSize, safeAreaBottom: safeAreaBottom)?.chinCenter
+        }
         guard !duoLayout.isClosedBar,
               let columnRect = duoLayout.railColumnRect(containerSize: containerSize, safeAreaTop: safeAreaTop),
               let extent = duoLayout.railVerticalExtent(containerSize: containerSize, safeAreaTop: safeAreaTop)
@@ -378,7 +390,7 @@ struct FeedView: View {
             ChinNavigation(bottomBand: StageGeometry.bottomBand(safeAreaTop: safeAreaTop,
                                                                containerSize: rootProxy.size),
                            railBottom: duoLayout.railBottom(safeAreaTop: safeAreaTop, containerSize: rootProxy.size),
-                           railAlignedCenter: railAlignedChinCenter(duoLayout: duoLayout, safeAreaTop: safeAreaTop, containerSize: rootProxy.size),
+                           railAlignedCenter: railAlignedChinCenter(duoLayout: duoLayout, safeAreaTop: safeAreaTop, safeAreaBottom: fullscreenSafeArea.bottom, containerSize: rootProxy.size),
                            columnTabsTop: chinColumnTabs?.top,
                            columnX: chinColumnTabs?.x)
                 .opacity(hidesGlobalChrome ? 0 : 1)
@@ -723,6 +735,7 @@ struct FeedView: View {
                             onAdvanceRequested: { advanceToNextPage(from: entry) },
                             onOpenBinRequested: { Usage.shared.binOpened(); showTrash = true },
                             safeAreaTop: safeAreaTop,
+                            safeAreaBottom: fullscreenSafeArea.bottom,
                             duoLayout: duoLayout,
                             keepRequestNonce: doubleTapKeepNonces[entry.id] ?? 0
                         )
@@ -1046,6 +1059,7 @@ struct FeedView: View {
         // as size plus insets.
         GeometryReader { proxy in
             let realTopInset = proxy.safeAreaInsets.top
+            let realBottomInset = proxy.safeAreaInsets.bottom
             let fullWindow = CGSize(
                 width: proxy.size.width + proxy.safeAreaInsets.leading + proxy.safeAreaInsets.trailing,
                 height: proxy.size.height + proxy.safeAreaInsets.top + proxy.safeAreaInsets.bottom
@@ -1061,6 +1075,13 @@ struct FeedView: View {
             // controls into one row, y-centred on `DuoLayout
             // .statusBlock` — see `pose5TopRow`'s own comment.
             let usesPose5TopRow = duoLayout.pose == .openTall
+            // Build 8b: pose 6 (laptop) mounts its own shared bottom
+            // deck here — the Mute/Filter/Bin zigzag row and
+            // Previous/Next are the two pieces of §2.6 genuinely
+            // global to the screen, not to any one page; see
+            // `laptopDeckControls`'s own comment and this group's
+            // header comment in `DuoLayout`.
+            let usesLaptopDeck = duoLayout.pose == .laptop
             ZStack(alignment: .top) {
                 VStack(spacing: 0) {
                     topChrome(duoLayout: duoLayout, safeAreaTop: realTopInset, containerSize: fullWindow)
@@ -1083,6 +1104,9 @@ struct FeedView: View {
                 }
                 if usesPose5TopRow {
                     pose5TopRow(duoLayout: duoLayout, safeAreaTop: realTopInset, containerSize: fullWindow)
+                }
+                if usesLaptopDeck {
+                    laptopDeckControls(duoLayout: duoLayout, safeAreaBottom: realBottomInset, containerSize: fullWindow)
                 }
             }
             // The stack starts at the safe-area top, since this reader is
@@ -1113,7 +1137,13 @@ struct FeedView: View {
     /// pose-5 row also shows; flagged for the owner's own look at the
     /// sim.
     private func topChrome(duoLayout: DuoLayout, safeAreaTop: CGFloat, containerSize: CGSize) -> some View {
-        let suppressDefaultRow = duoLayout.pose == .openWide || duoLayout.pose == .book || duoLayout.pose == .openTall
+        // Build 8b: pose 6 (laptop) adds to this suppression too. Mute,
+        // Filter, and Bin move into the bottom deck's own zigzag row
+        // (`laptopDeckControls`); nothing interactive belongs above the
+        // fold — the build-list's own check for this step, "Duo 6:
+        // nothing interactive above the fold."
+        let suppressDefaultRow = duoLayout.pose == .openWide || duoLayout.pose == .book
+            || duoLayout.pose == .openTall || duoLayout.pose == .laptop
         // Four independent glass pills. Do not wrap these in a
         // `GlassEffectContainer`. XCUITest then resolves the far-right
         // `bin_open` button's frame relative to the container. Its
@@ -1243,6 +1273,92 @@ struct FeedView: View {
         }
         .frame(width: width, height: 40, alignment: .center)
         .position(x: leading + width / 2, y: statusBlock.midY)
+    }
+
+    // MARK: - Laptop deck globals (build 8b)
+
+    /// Pose 6's (laptop) own two screen-global pieces of the shared
+    /// bottom deck — `design/duo/duo_build_spec.md` §2.6: the Mute/
+    /// Filter/Bin zigzag row, and Previous/Next. Mounted here, not in
+    /// `FeedPageContent`, for the same reason `chromeColumn`/
+    /// `pose5TopRow` already are: these describe the SCREEN, not the
+    /// current page — a shrink's progress capsule, mute state, and
+    /// paging the feed are all facts this view already owns, and
+    /// hoisting them is the one deliberate exception the audit's own
+    /// Decision/§2 calls for in the laptop pose (every other pose's
+    /// rail/caption/scrubber stays per-page). The rail row and the
+    /// caption, which DO describe the current item, stay in
+    /// `FeedPageContent`/`PlayerPageView` instead — see
+    /// `FeedPageContent.laptopHorizontalRail`/`duoLaptopCaption`.
+    private func laptopDeckControls(duoLayout: DuoLayout, safeAreaBottom: CGFloat, containerSize: CGSize) -> some View {
+        Group {
+            if let zigzag = duoLayout.laptopZigzagRow(containerSize: containerSize, safeAreaBottom: safeAreaBottom) {
+                muteButton
+                    .position(zigzag.mute)
+                FilterMenuView(store: optionsStore, hidesChrome: hidesGlobalChrome)
+                    .position(zigzag.filter)
+                binButton
+                    .position(zigzag.bin)
+                // `binButton`'s own inline badge already rides inside
+                // its capsule (same as every call site of this button);
+                // this repeats the count at the wireframe's own "counter
+                // leading at 452" position, the same doubled-but-
+                // deliberate pattern `chromeColumn`'s identical comment
+                // already documents for the vertical zigzag column.
+                if let binBadgeText {
+                    Text(binBadgeText)
+                        .font(.system(size: 11, weight: .medium))
+                        .monospacedDigit()
+                        .foregroundStyle(.white)
+                        .feedShadow()
+                        .lineLimit(1)
+                        .fixedSize()
+                        .frame(width: 60, alignment: .leading)
+                        .position(x: zigzag.counterLeadingX + 30, y: zigzag.bin.y)
+                }
+            }
+            if let pager = duoLayout.laptopPagerCenters(containerSize: containerSize, safeAreaBottom: safeAreaBottom) {
+                let scale = containerSize.width / 669.0
+                laptopPagerButton(title: "← Previous", identifier: "duo_prev",
+                                   center: pager.previous, scale: scale,
+                                   isEnabled: laptopPagerIndex.map { $0 > 0 } ?? false,
+                                   action: { laptopGoToPreviousPage() })
+                laptopPagerButton(title: "Next →", identifier: "duo_next",
+                                   center: pager.next, scale: scale,
+                                   isEnabled: laptopPagerIndex.map { $0 + 1 < viewModel.deck.count } ?? false,
+                                   action: { laptopGoToNextPage() })
+            }
+        }
+    }
+
+    /// One pill of the Previous/Next pair — 200×60 at the wireframe's
+    /// own scale, disabled and dimmed at either end of the deck.
+    private func laptopPagerButton(title: String, identifier: String, center: CGPoint, scale: CGFloat, isEnabled: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 200 * scale, height: 60 * scale)
+                .feedGlassButton(in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .disabled(!isEnabled)
+        .opacity(isEnabled ? 1 : 0.4)
+        .position(center)
+        .accessibilityIdentifier(identifier)
+        .accessibilityLabel(title == "← Previous" ? "Previous video" : "Next video")
+        .accessibilityHint("Pose 6's own paging control — plays the \(title == "← Previous" ? "previous" : "next") video without touching the upright half")
+    }
+
+    /// The deck's own index into `viewModel.deck` — `currentPageID`'s
+    /// own live lookup, the same one `advanceToNextPage(from:)` already
+    /// performs from an `entry`, just entered from the pager's own
+    /// cursor instead of a tapped page. `nil` only when the pager has
+    /// no current page at all (an empty deck, already excluded upstream
+    /// by `content(safeAreaTop:fullscreenSafeArea:duoLayout:)`).
+    private var laptopPagerIndex: Int? {
+        guard let currentPageID else { return nil }
+        return viewModel.deck.firstIndex(where: { $0.id == currentPageID })
     }
 
     /// Height of the empty band the fixed 9:16 stage leaves above and below
@@ -1626,6 +1742,37 @@ struct FeedView: View {
         advanceNonce += 1
     }
 
+    /// §3d's own mirror of `advanceToNextPage(from:)`: `index − 1`, the
+    /// same `advanceNonce` path, disabled at index 0 (the pager button
+    /// itself checks that through `laptopPagerIndex`, this is just the
+    /// action). Pose 6's own Previous pill is the one caller.
+    private func retreatToPreviousPage(from entry: DeckEntry) {
+        guard let index = viewModel.deck.firstIndex(where: { $0.id == entry.id }) else { return }
+        let previousIndex = index - 1
+        guard viewModel.deck.indices.contains(previousIndex) else { return }
+        let previousID = viewModel.deck[previousIndex].id
+        isAdvancing = true
+        advanceTargetID = previousID
+        advanceNonce += 1
+    }
+
+    /// Pose 6's Previous/Next pills act on the centred page
+    /// (`currentPageID`), not a tapped-from page — there is no
+    /// per-page `entry` in scope at the pill's own call site, unlike
+    /// `advanceToNextPage(from:)`'s other caller (`FeedPageContent
+    /// .onAdvanceRequested`, the exhausted card). These two small
+    /// wrappers resolve that entry once and hand it to the shared
+    /// action, so `laptopDeckControls` stays a plain view builder.
+    private func laptopGoToNextPage() {
+        guard let currentPageID, let entry = viewModel.deck.first(where: { $0.id == currentPageID }) else { return }
+        advanceToNextPage(from: entry)
+    }
+
+    private func laptopGoToPreviousPage() {
+        guard let currentPageID, let entry = viewModel.deck.first(where: { $0.id == currentPageID }) else { return }
+        retreatToPreviousPage(from: entry)
+    }
+
     /// Shows pending bytes, as `"<About >X pending"`. The `"About "`
     /// prefix appears when `hasEstimatedSizes` is true.
     private var pendingSpaceText: String {
@@ -1942,6 +2089,13 @@ private struct FeedPageContent: View {
     /// `StageGeometry.bottomBand` put the rail's bottom edge exactly
     /// where `PlayerPageView` puts the video's bottom edge.
     let safeAreaTop: CGFloat
+    /// The real bottom safe-area inset, threaded the same way
+    /// `safeAreaTop` is — build 8b's own addition, read only by
+    /// `duoLaptopCaption`/`laptopHorizontalRail` through
+    /// `DuoLayout.laptopBottomRect`/`laptopRailRow`. `0` on every
+    /// regular-iPhone or non-laptop call site; those functions never
+    /// read it there.
+    let safeAreaBottom: CGFloat
     /// This frame's iPhone Duo geometry, threaded the same way
     /// `safeAreaTop` is — see `PlayerPageView.duoLayout`'s identical
     /// comment. `DuoLayout.none` on a regular iPhone, which keeps
@@ -2158,7 +2312,11 @@ private struct FeedPageContent: View {
             // see `DUO_POSES.md`), so without this guard the `if let
             // railColumnRect` branch below would ALSO render a second,
             // flow-positioned caption for them.
-            let usesDuoCaption = duoLayout.pose == .openWide || duoLayout.pose == .book
+            //
+            // Build 8b: pose 6 (laptop) joins the same guard —
+            // `duoLaptopCaption`'s own fixed point below the fold,
+            // never this VStack's flow layout either.
+            let usesDuoCaption = duoLayout.pose == .openWide || duoLayout.pose == .book || duoLayout.pose == .laptop
             VStack(spacing: 0) {
                 Spacer(minLength: 0)
                 // `exhaustedCard` sits directly above the caption and
@@ -2191,13 +2349,22 @@ private struct FeedPageContent: View {
                 }
             }
             .frame(width: proxy.size.width, height: proxy.size.height)
-            if let railColumnRect {
+            // Build 8b: pose 6 never uses the vertical rail column —
+            // `laptopHorizontalRail` below draws its own five buttons
+            // in a row instead, so this must not also render
+            // `actionRailColumn` even on a wide enough laptop window
+            // where `railColumn`'s own generic (bar/occlusion-based)
+            // gate happens to pass.
+            if let railColumnRect, duoLayout.pose != .laptop {
                 actionRailColumn(rect: railColumnRect, containerSize: proxy.size)
             }
             if duoLayout.pose == .openWide {
                 duoOpenWideCaption(containerSize: proxy.size, safeAreaTop: safeAreaTop)
             } else if duoLayout.pose == .book {
                 duoBookCaption(containerSize: proxy.size, safeAreaTop: safeAreaTop)
+            } else if duoLayout.pose == .laptop {
+                duoLaptopCaption(containerSize: proxy.size, safeAreaBottom: safeAreaBottom)
+                laptopHorizontalRail(containerSize: proxy.size, safeAreaBottom: safeAreaBottom)
             }
             #if DEBUG
             pageFactsProbe
@@ -2469,6 +2636,64 @@ private struct FeedPageContent: View {
                 .accessibilityLabel(meta.placeText.map { "\($0). " + meta.voiceOverLabel } ?? meta.voiceOverLabel)
                 .frame(width: rect.width, height: rect.height, alignment: .bottomLeading)
                 .position(x: rect.midX, y: rect.midY)
+        }
+    }
+
+    // MARK: - Pose 6 (laptop) caption + rail (build 8b)
+
+    /// Pose 6's own caption, in the shared bottom deck: "v 60, leading
+    /// 24" (`design/duo/duo_build_spec.md` §2.6) — the same
+    /// `.bottomLeading`-positioned-rect technique `duoOpenWideCaption`/
+    /// `duoBookCaption` already use, so the text's own natural height
+    /// never has to be hand-measured. Renders nothing when
+    /// `DuoLayout.laptopBottomRect` is `nil` (no active division this
+    /// frame).
+    @ViewBuilder
+    private func duoLaptopCaption(containerSize: CGSize, safeAreaBottom: CGFloat) -> some View {
+        if let bottom = duoLayout.laptopBottomRect(containerSize: containerSize, safeAreaBottom: safeAreaBottom) {
+            let leading: CGFloat = 24
+            let width = max(0, containerSize.width - leading - 16)
+            let rect = CGRect(x: leading, y: 0, width: width, height: bottom.minY + 60)
+            captionTexts
+                .feedShadow()
+                .frame(width: rect.width, alignment: .leading)
+                .opacity(isScrubbing ? 0 : 1)
+                .animation(.easeOut(duration: 0.15), value: isScrubbing)
+                .allowsHitTesting(false)
+                .accessibilityElement(children: .combine)
+                .accessibilityHidden(hideForFullscreen)
+                .accessibilityIdentifier(isActive && !hideForFullscreen ? "feed_caption" : "")
+                .accessibilityLabel(meta.placeText.map { "\($0). " + meta.voiceOverLabel } ?? meta.voiceOverLabel)
+                .frame(width: rect.width, height: rect.height, alignment: .bottomLeading)
+                .position(x: rect.midX, y: rect.midY)
+        }
+    }
+
+    /// Pose 6's own horizontal action rail (§2.6, "v 236"): the same
+    /// five buttons `actionRail`/`actionRailColumn` draw everywhere
+    /// else, this time at `DuoLayout.laptopRailRow`'s own row of
+    /// points — per-page, like every other pose's rail, since it
+    /// describes the current item, not the screen (see
+    /// `FeedView.laptopDeckControls`'s own comment on which pieces of
+    /// §2.6 are global instead). The vertical hairline at `hairlineX`
+    /// is this row's own divider, spanning the full bottom deck —
+    /// "vertical hairline at x 535."
+    @ViewBuilder
+    private func laptopHorizontalRail(containerSize: CGSize, safeAreaBottom: CGFloat) -> some View {
+        if let bottom = duoLayout.laptopBottomRect(containerSize: containerSize, safeAreaBottom: safeAreaBottom),
+           let row = duoLayout.laptopRailRow(containerSize: containerSize, safeAreaBottom: safeAreaBottom),
+           row.centers.count == 5 {
+            Rectangle()
+                .fill(Color.white.opacity(0.2))
+                .frame(width: 1, height: bottom.height)
+                .position(x: row.hairlineX, y: bottom.midY)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+            likeButton(rail).position(row.centers[0])
+            shareButton.position(row.centers[1])
+            albumButton.position(row.centers[2])
+            shrinkButton(rail).position(row.centers[3])
+            deleteButton(rail).position(row.centers[4])
         }
     }
 

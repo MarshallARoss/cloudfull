@@ -605,7 +605,16 @@ struct PlayerPageView: View {
                 stageHeight: stageHeight,
                 containerHeight: proxy.size.height
             )
-            let topSpace = halfLeftover + downShift
+            // Build 8b: pose 6's own `stageRect` already places the box
+            // at the fold's own top clearance (`safeAreaTop + 10`), not
+            // centred in the window's own leftover height the way
+            // `halfLeftover` assumes — there is plenty of room BELOW
+            // the stage here (the fold, then the whole bottom deck), so
+            // a symmetric split would float the video too low. Reading
+            // `stageRect.minY` directly, the same way
+            // `horizontalLeadingSpace` already reads `stageRect.minX`
+            // below, keeps the stage pinned to the fold instead.
+            let topSpace = (duoLayout.pose == .laptop && !isFullscreen) ? stageRect.minY : halfLeftover + downShift
             // The black band this page leaves below the stage.
             // `ScrubberView`'s idle-state seam reads this value, so its
             // line stays inside the real bottom band instead of
@@ -740,8 +749,17 @@ struct PlayerPageView: View {
                         // its x-to-fraction math. Only the `ScrubberView`
                         // child is conditional here, never `stageContent`
                         // itself.
+                        //
+                        // Build 8b: pose 6 (laptop) also skips this
+                        // instance. Its own scrubber lives in the shared
+                        // bottom deck below the fold instead — a second,
+                        // independently positioned `ScrubberView` mounted
+                        // at `body`'s own outer level (`laptopScrubber`
+                        // below), the same precedent
+                        // `usesFixedRingPoint`'s ring already set for a
+                        // control that must sit off the stage.
                         .overlay(alignment: .bottom) {
-                            if !isFullscreen {
+                            if !isFullscreen && duoLayout.pose != .laptop {
                                 ScrubberView(
                                     progress: holder.progress,
                                     isScrubbing: isScrubbing,
@@ -808,6 +826,32 @@ struct PlayerPageView: View {
                         .allowsHitTesting(false)
                         .accessibilityHidden(true)
                         .position(fixedPoint)
+                }
+                // Build 8b: pose 6's own scrubber, in the shared bottom
+                // deck below the fold — "rendered by P in its outer
+                // ZStack (P owns `holder.progress`)," §2.6's own words.
+                // `bandHeight: 0`, same reasoning as pose 3/4/4W's
+                // identical literal above: this instance never sits on
+                // the video's own bottom edge, so `ScrubberView
+                // .seamOffset` must always read "below the minimum
+                // seam band" and draw its line at the strip's own
+                // position rather than shifted for a video seam that
+                // is not there.
+                if duoLayout.pose == .laptop,
+                   let scrubberRect = duoLayout.laptopScrubberRect(containerSize: proxy.size, safeAreaBottom: fullscreenSafeArea.bottom) {
+                    ScrubberView(
+                        progress: holder.progress,
+                        isScrubbing: isScrubbing,
+                        scrubFraction: scrubFraction,
+                        durationSeconds: holder.duration,
+                        bandHeight: 0,
+                        isActive: isActive,
+                        reduceMotion: reduceMotion,
+                        onStripDrag: handleScrubChanged,
+                        onStripEnded: endScrub
+                    )
+                    .frame(width: scrubberRect.width, height: scrubberRect.height)
+                    .position(x: scrubberRect.midX, y: scrubberRect.midY)
                 }
             }
             .frame(width: proxy.size.width, height: proxy.size.height)

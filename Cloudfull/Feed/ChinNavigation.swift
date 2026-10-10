@@ -70,13 +70,17 @@ struct ChinNavigation: View {
     /// `collapsedHeight` becomes `Rail.hit` instead of the plain
     /// default, to match a rail button's own size.
     ///
-    /// `nil` everywhere but `FeedView`'s open-tall rail column (the
-    /// bar-off pose): the owner's own review there — "the buttons are
-    /// too high," and separately, "[the chin] should at least be
-    /// bigger and align with the other rail items" — asked for this
-    /// control to sit beside the rail's own last item, the same size
-    /// as a rail button, rather than at the fixed bottom-trailing spot
-    /// every other host still uses unconditionally.
+    /// `nil` everywhere but two `FeedView` poses: the open-tall rail
+    /// column (bar off) — the owner's own review there, "the buttons
+    /// are too high," and separately, "[the chin] should at least be
+    /// bigger and align with the other rail items" — and, since build
+    /// 8b, the laptop pose's own horizontal rail row (§2.6, "chin
+    /// collapsed centre (600, v 236)"). Both ask for this control to
+    /// sit beside the rail's own last item, the same size as a rail
+    /// button, rather than at the fixed bottom-trailing spot every
+    /// other host still uses unconditionally; see
+    /// `FeedView.railAlignedChinCenter` for which point each pose
+    /// supplies.
     ///
     /// Read only while collapsed (see `body`): an EXPANDED capsule
     /// centred this close to the trailing edge would grow mostly
