@@ -492,15 +492,6 @@ struct DuoLayout {
     // and the open, computed case (step 5) share this one definition
     // end to end (`availableRect`, the stage, the rail, the chin).
 
-    /// The width a 9:16 stage would need to claim this container's
-    /// bare full height — no top-chrome reservation; see
-    /// `availableRect`'s own comment on why the open column does not
-    /// carve one out. The one formula `railColumn`'s own gate (below)
-    /// is built on.
-    private static func fullHeightStageWidth(containerSize: CGSize) -> CGFloat {
-        containerSize.height * 9 / 16
-    }
-
     /// Re-adapted (`design/duo/duo_audit_apple_checklist.md` §5/F6):
     /// replaces the old `ringInset`/`openColumnWidth` pair — a fixed
     /// 50pt/100pt read off one Duo-sim screenshot, which drifts off the
@@ -514,10 +505,9 @@ struct DuoLayout {
     /// constant, not a device size) plus this margin when there is
     /// none to read.
     ///
-    /// Also the minimum leading margin `railColumn`'s open-branch gate
-    /// guarantees the stage, on each side, once the computed column is
-    /// removed from the natural leftover. See that function's own gate
-    /// for the arithmetic.
+    /// Also the fallback column width `railColumn`'s open branch uses
+    /// when there is no `.occlusion` to read — `Rail.hit` plus this
+    /// margin on each side.
     static let minStageMargin: CGFloat = 16
 
     /// Pose 1V's own status-cluster lower bound — owner ask: "can the
@@ -562,51 +552,58 @@ struct DuoLayout {
     /// Closed (`isClosedBar`): the column IS the system vertical bar —
     /// same edge, same width as `barEdge`/`barWidth`. The rail moves
     /// into furniture the system already reserved; nothing new is
-    /// carved out of the stage.
+    /// carved out of the stage. Unconditional: there is no gate here,
+    /// because the bar is real system furniture, already there.
     ///
-    /// Open (`barEdge == nil`): there is no system column to reuse, so
-    /// one is computed instead, on the trailing edge, sized so its own
-    /// CENTRE lands on the active `.occlusion` region's own `midX` when
-    /// one is on the trailing half (F6: "the safe-area inset already
-    /// read in `DuoLayout.current`" for the bar case; the occlusion's
-    /// own real position for the open case) — never a fixed,
-    /// screenshot-measured width. With no occlusion to read, the
-    /// column falls back to `Rail.hit + minStageMargin × 2`, a size
-    /// built from the rail button's own design constant, not a device
-    /// number. The gate below is still geometry-only, never a device
-    /// check: it asks whether the natural leftover —
-    /// `fullHeightStageWidth`'s own subtraction, the same test the
-    /// earlier version used end to end — is big enough to carve out
-    /// the computed column AND still leave the stage `minStageMargin`
-    /// on each side. Below that, there is no column: `nil`, and every
-    /// caller keeps the pre-Duo overlay layout. A regular iPhone's own
-    /// leftover here is always negative — a phone screen is always
-    /// narrower than the width a 9:16 box needs to reach its own full
-    /// height — so it never clears this, decided purely by the
-    /// screen's own proportions.
+    /// Open, pose 5 (`openTall`, the only bar-off pose with a rail —
+    /// `.laptop` and `.tent` return `nil` here; see each pose's own
+    /// panel/view): there is no system column to reuse, so one is
+    /// computed instead, on the trailing edge, sized so its own CENTRE
+    /// lands on the active `.occlusion` region's own `midX` (F6: "the
+    /// safe-area inset already read in `DuoLayout.current`" for the
+    /// bar case; the occlusion's own real position for the open case)
+    /// — never a fixed, screenshot-measured width. With no occlusion
+    /// to read, the column falls back to `Rail.hit + minStageMargin ×
+    /// 2`, a size built from the rail button's own design constant,
+    /// not a device number.
     ///
-    /// `safeAreaTop` is unused in this branch — `fullHeightStageWidth`
-    /// no longer reserves a top-chrome band (see `availableRect`'s own
-    /// comment on why) — and kept only so this function's own
-    /// signature still matches every sibling in this file that does
-    /// still need it.
+    /// Re-adapted again (owner review, pose 5: "rail sits too low,"
+    /// tabs and chrome missing or overlapping): an earlier version of
+    /// this branch gated the computed column on a margin check — "is
+    /// the natural leftover big enough to carve out the column AND
+    /// still leave the stage `minStageMargin` on each side" — before
+    /// returning it. At pose 5's own measured window (669×951) and
+    /// `.occlusion` (134×82 at the trailing edge, `DUO_POSES.md`'s own
+    /// numbers), that leftover is 134.0625pt and the computed column
+    /// is 134pt: there is no slack left over for a 32pt margin on top
+    /// of it, so the gate always failed — silently falling the rail
+    /// back to the pre-Duo bottom-trailing overlay (the "too low" the
+    /// owner saw) and leaving `chromeColumnRect`/`zigzagCenters` (both
+    /// built from this same column) empty too. The approved wireframe
+    /// (`DUO_POSES.md`'s own pose-5 row: "Column x = ring x") already
+    /// settles that a column belongs here; the margin gate was testing
+    /// for a problem pose 5's own real proportions do not have — the
+    /// window is always tall enough that `stageRect`'s FIT box is
+    /// height-bound regardless of this column, so removing the column
+    /// never actually reduces the stage's own margins below their
+    /// natural (already ample) amount. This branch now trusts the
+    /// occlusion signal the same unconditional way the closed branch
+    /// above trusts the bar — "reuse that path" rather than adding a
+    /// parallel gate pose 5 is the only one of the two bar-off cases
+    /// that even reaches.
     func railColumn(containerSize: CGSize, safeAreaTop: CGFloat) -> (edge: HorizontalEdge, width: CGFloat)? {
         if let barEdge, barWidth > 0 {
             return (barEdge, barWidth)
         }
-        let openWidth = containerSize.width - Self.fullHeightStageWidth(containerSize: containerSize)
-        let computedWidth: CGFloat
+        guard pose == .openTall else { return nil }
         if let occlusion, occlusion.minX > containerSize.width / 2 {
             // A column centred on `occlusion.midX`, so its own centre
             // lands exactly on the ring's real position regardless of
             // how wide the window is — the same goal `openColumnWidth`
             // used to reach with a fixed, sim-measured number.
-            computedWidth = max(Rail.hit, (containerSize.width - occlusion.midX) * 2)
-        } else {
-            computedWidth = Rail.hit + Self.minStageMargin * 2
+            return (.trailing, max(Rail.hit, (containerSize.width - occlusion.midX) * 2))
         }
-        guard openWidth >= computedWidth + Self.minStageMargin * 2 else { return nil }
-        return (.trailing, computedWidth)
+        return (.trailing, Rail.hit + Self.minStageMargin * 2)
     }
 
     /// The rail column's own rectangle this frame, full height — the
