@@ -437,24 +437,64 @@ final class PhotoLibraryService: NSObject, ObservableObject {
     /// second budget, not two stacked budgets.
     private static let photoKitContinuationTimeout: UInt64 = 20_000_000_000
 
-    private nonisolated func withPhotoKitTimeout<T>(_ operation: @escaping () async -> T?) async -> T? {
-        await Self.withPhotoKitTimeout(operation)
+    private nonisolated func withPhotoKitTimeout<T>(_ operation: @escaping () async -> T?, didTimeOut: TimeoutFlag? = nil) async -> T? {
+        await Self.withPhotoKitTimeout(operation, didTimeOut: didTimeOut)
     }
 
     /// The same bound, reachable from the `nonisolated static` album
     /// primitives below. Without this bound, one hung `performChanges`
     /// call blocks every later Keep and Unkeep for the session, because
     /// they all queue behind it.
-    nonisolated static func withPhotoKitTimeout<T>(_ operation: @escaping () async -> T?) async -> T? {
-        await withTaskGroup(of: T?.self) { group in
-            group.addTask { await operation() }
-            group.addTask {
-                try? await Task.sleep(nanoseconds: Self.photoKitContinuationTimeout)
-                return nil
+    ///
+    /// A `withTaskGroup` of an operation child and a timer child forces
+    /// this function to wait for BOTH children before it can return,
+    /// even after `cancelAll()`: structured concurrency awaits every
+    /// child task on the way out of the group, and `cancelAll()` only
+    /// asks a child to cooperate — it does not make it finish. If the
+    /// operation's own completion handler never runs after a cancel —
+    /// unverified for `requestPlayerItem` — the whole call hangs
+    /// forever instead of timing out. A single continuation has no such
+    /// wait: whichever of three things happens first — the operation
+    /// finishing, the timer firing, or this call's own caller being
+    /// cancelled — resumes it, through `PhotoKitTimeoutBox`, and the
+    /// loser of that race is cancelled directly rather than awaited.
+    /// `didTimeOut`, if given, is marked the instant the timer fires —
+    /// only `playerItem(for:)` passes one in, since it is the one
+    /// caller that treats a timeout differently from a hard failure
+    /// (a `nil` result either way, from every other caller's point of
+    /// view).
+    nonisolated static func withPhotoKitTimeout<T>(_ operation: @escaping () async -> T?, didTimeOut: TimeoutFlag? = nil) async -> T? {
+        let box = PhotoKitTimeoutBox<T>()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<T?, Never>) in
+                // Stored first, before either task exists, so a result
+                // or a cancel that arrives the instant a task starts
+                // always finds a continuation to resume.
+                box.store(continuation: continuation)
+                let operationTask = Task<Void, Never> {
+                    let result = await operation()
+                    box.resume(with: result)
+                }
+                let timerTask = Task<Void, Never> {
+                    try? await Task.sleep(nanoseconds: Self.photoKitContinuationTimeout)
+                    guard !Task.isCancelled else { return }
+                    didTimeOut?.markTimedOut()
+                    // The timeout cancels the operation directly: this
+                    // is what reaches `requestPlayerItem`'s own
+                    // `withTaskCancellationHandler` and actually stops
+                    // the PhotoKit request, rather than leaving it to
+                    // keep running unobserved.
+                    operationTask.cancel()
+                    box.resume(with: nil)
+                }
+                box.store(operationTask: operationTask, timerTask: timerTask)
             }
-            let first = await group.next() ?? nil
-            group.cancelAll() // This cancels the PhotoKit request through its own cancellation handler.
-            return first
+        } onCancel: {
+            // The caller went away. Cancel both tasks — reaching
+            // `requestPlayerItem`'s own cancellation handler the same
+            // way the timeout does — and resume at once rather than
+            // waiting for either one to notice on its own.
+            box.cancel()
         }
     }
 
@@ -463,12 +503,18 @@ final class PhotoLibraryService: NSObject, ObservableObject {
     /// gone, PhotoKit cannot produce a player item, or the request does
     /// not finish within `withPhotoKitTimeout`'s bound.
     ///
+    /// `didTimeOut`, if given, is marked when the `nil` came from the
+    /// bound rather than from PhotoKit itself. `PlayerPageView.load()`
+    /// passes one in: a timeout is not sticky and retries once on the
+    /// page's next activation, while a hard failure shows the retry
+    /// card. Every other caller leaves it `nil` and sees no change.
+    ///
     /// The underlying PhotoKit request is cancellable. If the calling
     /// task is cancelled, the request is cancelled too. This can happen
     /// because the page scrolled away before this method returned. The
     /// request does not continue to download in the background for a
     /// page nobody is watching.
-    nonisolated func playerItem(for id: String, onProgress: (@Sendable (Double) -> Void)? = nil) async -> AVPlayerItem? {
+    nonisolated func playerItem(for id: String, onProgress: (@Sendable (Double) -> Void)? = nil, didTimeOut: TimeoutFlag? = nil) async -> AVPlayerItem? {
         #if DEBUG
         // This delay runs outside `withPhotoKitTimeout`, so the real
         // request keeps its full 20 second budget instead of spending
@@ -481,7 +527,7 @@ final class PhotoLibraryService: NSObject, ObservableObject {
             guard !Task.isCancelled else { return nil }
         }
         #endif
-        return await withPhotoKitTimeout { [weak self] in
+        return await withPhotoKitTimeout(didTimeOut: didTimeOut) { [weak self] in
             await self?.requestPlayerItem(for: id, onProgress: onProgress)
         }
     }
@@ -1075,8 +1121,11 @@ final class PhotoLibraryService: NSObject, ObservableObject {
             let newest = assets.firstObject
             let newestDate: Date? = {
                 guard let newest else { return nil }
-                let added = newest.addedDate
+                // `addedDate` is optional from the iOS 27.1 SDK on; the
+                // explicit `Date?` keeps this compiling on both SDKs.
+                let added: Date? = newest.addedDate
                 guard let created = newest.creationDate else { return added }
+                guard let added else { return created }
                 return max(created, added)
             }()
             summaries.append(AlbumSummary(
@@ -1393,6 +1442,105 @@ private final class ResumeGuard: @unchecked Sendable {
         if didResume { return false }
         didResume = true
         return true
+    }
+}
+
+/// Reports whether `withPhotoKitTimeout`'s own timer fired before the
+/// wrapped operation did. Not `private`: `PlayerPageView` constructs
+/// one and reads it after `DeckViewModel.playerItem(for:pageID:)`
+/// returns, several files away from where it is marked. See
+/// `playerItem(for:onProgress:didTimeOut:)`.
+final class TimeoutFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var timedOut = false
+
+    func markTimedOut() {
+        lock.lock()
+        timedOut = true
+        lock.unlock()
+    }
+
+    var didTimeOut: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return timedOut
+    }
+}
+
+/// Bridges `PhotoLibraryService.withPhotoKitTimeout`'s `onCancel`
+/// closure — which runs with no access to the continuation or the two
+/// tasks created inside `withCheckedContinuation`'s closure — back to
+/// all three. Holds them behind a lock, since `cancel()` can arrive
+/// before `store(continuation:)` or `store(operationTask:timerTask:)`
+/// does; each store replays the outcome the other side already
+/// recorded, in whichever order they actually land.
+private final class PhotoKitTimeoutBox<T>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<T?, Never>?
+    private var operationTask: Task<Void, Never>?
+    private var timerTask: Task<Void, Never>?
+    private var didCancel = false
+    private let resumeGuard = ResumeGuard()
+
+    /// Called first, synchronously, from inside `withCheckedContinuation`'s
+    /// closure, before either task exists. If `cancel()` already ran —
+    /// it can, if the caller was already cancelled going in — this
+    /// resumes immediately instead of waiting for a task that is never
+    /// created.
+    func store(continuation: CheckedContinuation<T?, Never>) {
+        lock.lock()
+        self.continuation = continuation
+        let cancelNow = didCancel
+        lock.unlock()
+        if cancelNow { resume(with: nil) }
+    }
+
+    /// Called right after both tasks are created, from the same
+    /// closure as `store(continuation:)`. If `cancel()` already ran,
+    /// the continuation was already resumed from there — these two
+    /// freshly created tasks are cancelled directly instead, so the
+    /// PhotoKit request they would have started never gets one.
+    func store(operationTask: Task<Void, Never>, timerTask: Task<Void, Never>) {
+        lock.lock()
+        let cancelNow = didCancel
+        if cancelNow {
+            lock.unlock()
+            operationTask.cancel()
+            timerTask.cancel()
+            return
+        }
+        self.operationTask = operationTask
+        self.timerTask = timerTask
+        lock.unlock()
+    }
+
+    /// The operation finished, or the timer fired. `resumeGuard` is what
+    /// decides which of the three callers — this one, or `cancel()` —
+    /// actually wins; a loser whose continuation is not stored yet is
+    /// replayed by `store(continuation:)` once it is.
+    func resume(with value: T?) {
+        lock.lock()
+        let continuation = self.continuation
+        self.continuation = nil
+        lock.unlock()
+        guard let continuation, resumeGuard.markResumed() else { return }
+        continuation.resume(returning: value)
+    }
+
+    /// `withPhotoKitTimeout`'s own caller was cancelled. Cancels both
+    /// tasks now, or the moment `store(operationTask:timerTask:)` hands
+    /// them over if that has not happened yet, and resumes with `nil`
+    /// at once rather than waiting for either task to notice on its
+    /// own.
+    func cancel() {
+        lock.lock()
+        didCancel = true
+        let opTask = operationTask
+        let timeTask = timerTask
+        lock.unlock()
+        opTask?.cancel()
+        timeTask?.cancel()
+        resume(with: nil)
     }
 }
 
