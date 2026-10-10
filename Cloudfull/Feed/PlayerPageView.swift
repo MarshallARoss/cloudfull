@@ -94,6 +94,13 @@ struct PlayerPageView: View {
     @State private var loadSeq = LoadSequence()
     @State private var loadFailed = false
     @State private var retryToken = UUID()
+    /// A load timed out rather than hard-failing. No retry card shows
+    /// for this: the next time this page becomes active, `.onChange(of:
+    /// isActive)` bumps `retryToken` once on its own, so a transient
+    /// stall self-heals instead of asking for a tap. Cleared on success,
+    /// on a fresh asset, and on leaving the preload window, so a reused
+    /// slot never inherits a retry meant for a different video.
+    @State private var timedOutPendingRetry = false
     @AppStorage("feed.isMuted") private var isMuted: Bool = false
     @State private var showMuteBadge = false
     @Environment(\.scenePhase) private var scenePhase
@@ -420,6 +427,18 @@ struct PlayerPageView: View {
             } else {
                 applyActive(newValue)
             }
+        }
+        // A timeout's one free retry, spent the moment this page is
+        // actually looked at. Separate from the `applyActive` handler
+        // above: that one is gated behind the scroll-idle wait, but a
+        // stale timeout should not wait for idle to clear before the
+        // retry token even changes — `.task(id: taskKey)` only needs
+        // the token bumped, not the engine work the other handler
+        // defers.
+        .onChange(of: isActive) { _, newValue in
+            guard newValue, timedOutPendingRetry else { return }
+            timedOutPendingRetry = false
+            retryToken = UUID()
         }
         .onChange(of: scrollGate.isScrolling) { _, scrolling in
             if !scrolling { syncPlayerLayerMount() }
