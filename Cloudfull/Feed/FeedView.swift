@@ -439,10 +439,7 @@ struct FeedView: View {
                     rect: rightPageRect,
                     viewModel: viewModel,
                     trashService: trashService,
-                    shrinkService: shrinkService,
-                    onPlay: playNextFromRightPage,
-                    onRequestShrink: requestShrink,
-                    onDelete: handleRightPageDelete
+                    onPlay: playNextFromRightPage
                 )
                 // Round 2: `rightPageRect` is now in TRUE window space
                 // (`windowSize`, above). Without `.ignoresSafeArea()`
@@ -1858,28 +1855,6 @@ struct FeedView: View {
         advanceNonce += 1
     }
 
-    /// The Biggest list's own mirror of `FeedPageContent
-    /// .handleTrashTap` — same guards (never a liked or mid-shrink
-    /// video), same `TrashService` queue/restore toggle, same usage
-    /// events — minus that function's own `onAdvanceRequested()`: this
-    /// asset is never the page the pager is centred on, so swiping the
-    /// feed forward on a right-page delete would move the user away
-    /// from the video they are actually watching, not toward it.
-    private func handleRightPageDelete(_ asset: DuoContextQueries.BiggestAsset) {
-        let assetID = asset.id
-        guard !viewModel.isLiked(assetID), !shrinkService.isJobbed(assetID) else { return }
-        if trashService.isQueued(assetID) {
-            if trashService.restore(assetID: assetID) { Usage.shared.unqueuedInFeed(mode: .videos) }
-            return
-        }
-        guard trashService.queue(assetID: assetID) else { return }
-        Usage.shared.action(.delete, source: .rail, mode: .videos)
-        Usage.shared.deleted(mode: .videos, width: asset.pixelWidth, height: asset.pixelHeight,
-                              durationMs: Int(asset.duration * 1000))
-        DailyReminder.shared.noteFirstDelete()
-        Haptics.tap()
-    }
-
     /// Shows pending bytes, as `"<About >X pending"`. The `"About "`
     /// prefix appears when `hasEstimatedSizes` is true.
     private var pendingSpaceText: String {
@@ -2222,6 +2197,12 @@ private struct FeedPageContent: View {
     /// `@State rail` react to a like, unlike, queue, restore, empty, or
     /// resolution event that happened on a different page.
     @ObservedObject private var resolver = AssetKeyResolver.shared
+
+    /// Owner re-adapt (pose pass): `duoBookCaption`'s own anchor —
+    /// `DuoRightPage`'s own live grid-bottom publisher. See
+    /// `DuoRightPageMetrics`'s own comment for why a per-page view
+    /// needs this rather than a direct binding.
+    @ObservedObject private var duoRightPageMetrics = DuoRightPageMetrics.shared
 
     /// Bumped only when this page's own like turns on. Drives this page's
     /// heart `.symbolEffect(.bounce)`. Local to the page rather than
@@ -2718,19 +2699,30 @@ private struct FeedPageContent: View {
     }
 
     /// Pose 4/4W's own caption: the right page, "leading
-    /// `rightPage.minX + 20`, bottom 30" (`DUO_POSES.md`). Renders
-    /// nothing when `DuoLayout.rightPage` itself is `nil` (no active
-    /// division this frame). No `maxWidth` clamp in the per-pose
-    /// table here: the right page's own trailing edge (the rail/bar
-    /// or chrome column beyond it) already bounds the available
-    /// width the same way `captionZone`'s `trailingClearance` bounds
-    /// every other pose's caption, so `rightPage.maxX` is the clamp.
+    /// `rightPage.minX + 20`" (`DUO_POSES.md`). Renders nothing when
+    /// `DuoLayout.rightPage` itself is `nil` (no active division this
+    /// frame). No `maxWidth` clamp in the per-pose table here: the
+    /// right page's own trailing edge (the rail/bar or chrome column
+    /// beyond it) already bounds the available width the same way
+    /// `captionZone`'s `trailingClearance` bounds every other pose's
+    /// caption, so `rightPage.maxX` is the clamp.
+    ///
+    /// Owner re-adapt (pose pass): was bottom-anchored at the screen's
+    /// own bottom edge ("bottom 30"); the wireframe puts it directly
+    /// UNDER the grid instead, a small gap below the last tile row.
+    /// `duoRightPageMetrics.gridBottomY` is that live edge, published
+    /// by the one globally-mounted `DuoRightPage` — see
+    /// `DuoRightPageMetrics`'s own comment. Falls back to the old
+    /// screen-bottom anchor when nothing has published yet (first
+    /// frame, or the grid came back empty).
     @ViewBuilder
     private func duoBookCaption(containerSize: CGSize, safeAreaTop: CGFloat) -> some View {
         if let rightPage = duoLayout.rightPage(containerSize: containerSize, safeAreaTop: safeAreaTop) {
             let leading = rightPage.minX + 20
             let width = max(0, rightPage.maxX - leading)
-            let rect = CGRect(x: leading, y: 0, width: width, height: max(0, containerSize.height - 30))
+            let captionHeight: CGFloat = 40
+            let top = duoRightPageMetrics.gridBottomY.map { $0 + 16 } ?? max(0, containerSize.height - 30 - captionHeight)
+            let rect = CGRect(x: leading, y: top, width: width, height: captionHeight)
             captionTexts
                 .feedShadow()
                 .frame(width: rect.width, alignment: .leading)
@@ -2741,7 +2733,7 @@ private struct FeedPageContent: View {
                 .accessibilityHidden(hideForFullscreen)
                 .accessibilityIdentifier(isActive && !hideForFullscreen ? "feed_caption" : "")
                 .accessibilityLabel(meta.placeText.map { "\($0). " + meta.voiceOverLabel } ?? meta.voiceOverLabel)
-                .frame(width: rect.width, height: rect.height, alignment: .bottomLeading)
+                .frame(width: rect.width, height: rect.height, alignment: .topLeading)
                 .position(x: rect.midX, y: rect.midY)
         }
     }
