@@ -396,6 +396,31 @@ struct FeedView: View {
                 .opacity(hidesGlobalChrome ? 0 : 1)
                 .allowsHitTesting(!hidesGlobalChrome)
                 .accessibilityHidden(hidesGlobalChrome)
+            // Step 12: the book pose's (4/4W) right page — mounted once
+            // here, never inside `FeedPageContent`, for the same reason
+            // `ChinNavigation` is — see `DuoRightPage`'s own header
+            // comment. `currentAssetID` comes from the pager's own
+            // cursor (`currentPageID`), not `viewModel.currentIndex`:
+            // the two can disagree for a frame during a prune/reanchor,
+            // and `currentPageID` is what the pager itself is actually
+            // centred on right now.
+            if duoLayout.pose == .book,
+               let rightPageRect = duoLayout.rightPage(containerSize: rootProxy.size, safeAreaTop: safeAreaTop),
+               let currentAssetID = currentPageID.flatMap({ id in viewModel.deck.first(where: { $0.id == id })?.assetID }) {
+                DuoRightPage(
+                    currentAssetID: currentAssetID,
+                    rect: rightPageRect,
+                    viewModel: viewModel,
+                    trashService: trashService,
+                    shrinkService: shrinkService,
+                    onPlay: playNextFromRightPage,
+                    onRequestShrink: requestShrink,
+                    onDelete: handleRightPageDelete
+                )
+                .opacity(hidesGlobalChrome ? 0 : 1)
+                .allowsHitTesting(!hidesGlobalChrome)
+                .accessibilityHidden(hidesGlobalChrome)
+            }
             if viewModel.isApplyingOptions {
                 // A visible loading state while a filter or sort change
                 // re-deals the feed. Blocks taps under it. The pill
@@ -728,10 +753,7 @@ struct FeedView: View {
                             trashService: trashService,
                             shrinkService: shrinkService,
                             shareCoordinator: shareCoordinator,
-                            onRequestShrink: { assetID in
-                                Usage.shared.shrinkSheetOpened()
-                                shrinkTarget = ShrinkTarget(id: assetID)
-                            },
+                            onRequestShrink: requestShrink,
                             onAdvanceRequested: { advanceToNextPage(from: entry) },
                             onOpenBinRequested: { Usage.shared.binOpened(); showTrash = true },
                             safeAreaTop: safeAreaTop,
@@ -1771,6 +1793,55 @@ struct FeedView: View {
     private func laptopGoToPreviousPage() {
         guard let currentPageID, let entry = viewModel.deck.first(where: { $0.id == currentPageID }) else { return }
         retreatToPreviousPage(from: entry)
+    }
+
+    // MARK: - Step 12: DuoRightPage actions
+
+    /// `FeedPageContent`'s own inline `onRequestShrink` closure,
+    /// pulled out so `DuoRightPage`'s Shrink button reaches the exact
+    /// same sheet through the exact same path — "the same paths the
+    /// rail's shrinkButton … use" (`design/duo/duo_build_spec.md`
+    /// §3b).
+    private func requestShrink(assetID: String) {
+        Usage.shared.shrinkSheetOpened()
+        shrinkTarget = ShrinkTarget(id: assetID)
+    }
+
+    /// Plays `assetID` next on the left page — §3b: "`DeckViewModel
+    /// .insertNext` … F then runs the existing `advanceTargetID`/
+    /// `advanceNonce` scroll," the same path a trash tap's own advance
+    /// and the laptop pose's Next pill already use.
+    /// `insertNext` itself already no-ops (returns the current page's
+    /// own id, unchanged) for the current video or a stale/queued tile,
+    /// so this needs no guard of its own before scrolling.
+    private func playNextFromRightPage(assetID: String) {
+        let targetID = viewModel.insertNext(assetID: assetID)
+        guard !targetID.isEmpty else { return }
+        isAdvancing = true
+        advanceTargetID = targetID
+        advanceNonce += 1
+    }
+
+    /// The Biggest list's own mirror of `FeedPageContent
+    /// .handleTrashTap` — same guards (never a liked or mid-shrink
+    /// video), same `TrashService` queue/restore toggle, same usage
+    /// events — minus that function's own `onAdvanceRequested()`: this
+    /// asset is never the page the pager is centred on, so swiping the
+    /// feed forward on a right-page delete would move the user away
+    /// from the video they are actually watching, not toward it.
+    private func handleRightPageDelete(_ asset: DuoContextQueries.BiggestAsset) {
+        let assetID = asset.id
+        guard !viewModel.isLiked(assetID), !shrinkService.isJobbed(assetID) else { return }
+        if trashService.isQueued(assetID) {
+            if trashService.restore(assetID: assetID) { Usage.shared.unqueuedInFeed(mode: .videos) }
+            return
+        }
+        guard trashService.queue(assetID: assetID) else { return }
+        Usage.shared.action(.delete, source: .rail, mode: .videos)
+        Usage.shared.deleted(mode: .videos, width: asset.pixelWidth, height: asset.pixelHeight,
+                              durationMs: Int(asset.duration * 1000))
+        DailyReminder.shared.noteFirstDelete()
+        Haptics.tap()
     }
 
     /// Shows pending bytes, as `"<About >X pending"`. The `"About "`
