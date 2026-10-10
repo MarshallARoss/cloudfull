@@ -10,6 +10,21 @@ import SwiftUI
 import AVFoundation
 import Combine
 import UIKit
+#if DEBUG
+import os
+#endif
+
+#if DEBUG
+/// E0 (plan.md "Experiments"): logs a mounted page's own
+/// appear/disappear/release/load-start lifecycle, so a device or
+/// simulator run can answer "was this row actually unmounted and
+/// remounted on a swipe back, or did it stay alive the whole time?"
+/// without guessing from request counts alone. Read with
+/// `log show --predicate 'subsystem == "com.cloudfull.app" && category
+/// == "E0Lifecycle"'` (simulator) or the equivalent device pull.
+/// Temporary: remove once the plan's lifecycle question is settled.
+private let e0LifecycleLog = Logger(subsystem: "com.cloudfull.app", category: "E0Lifecycle")
+#endif
 
 /// One full-screen page in the video feed.
 /// It loads its own `AVPlayerItem`, plays the clip while active, and loops
@@ -409,6 +424,15 @@ struct PlayerPageView: View {
         .task(id: taskKey) {
             await load()
         }
+        #if DEBUG
+        // E0 lifecycle probe: see the file-level comment on
+        // `e0LifecycleLog`. `holder.debugTag` is set here too, since
+        // `PlayerHolder` otherwise has no notion of which page owns it.
+        .onAppear {
+            holder.debugTag = pageID
+            e0LifecycleLog.log("E0 onAppear page=\(pageID, privacy: .public) isPreloadable=\(isPreloadable) isActive=\(isActive)")
+        }
+        #endif
         // Split out of `load()`, so a Retry tap or a stale `isLoading` can
         // never discard or re-fetch a poster that is already correct.
         .task(id: posterKey) {
@@ -467,6 +491,7 @@ struct PlayerPageView: View {
             dismissedThisSpell = false
             chromeRevealed = false
             videoIsLandscape = false
+            timedOutPendingRetry = false
         }
         // The other of the latch's two reset triggers: the landscape
         // period has ended.
@@ -538,6 +563,10 @@ struct PlayerPageView: View {
                 holder.release()
                 isLoading = true
                 loadFailed = false
+                // A slot leaving the window and later getting dealt a
+                // different video must not inherit a retry meant for
+                // the one that just left.
+                timedOutPendingRetry = false
                 // A page losing its player also releases its poster.
                 // The next `load()`, if this slot is reused, fetches a
                 // fresh one. A stale image must never sit over a released
@@ -573,6 +602,11 @@ struct PlayerPageView: View {
             }
         }
         .onDisappear {
+            #if DEBUG
+            // E0 lifecycle probe: see the file-level comment on
+            // `e0LifecycleLog`.
+            e0LifecycleLog.log("E0 onDisappear page=\(pageID, privacy: .public) isPreloadable=\(isPreloadable) isActive=\(isActive)")
+            #endif
             // The same `wasFullscreen` guard as the `isPreloadable` branch
             // above, for the same reason. This callback is shared across
             // every mounted page. An ordinary page's disappearance must
@@ -1071,9 +1105,18 @@ struct PlayerPageView: View {
 
     private func load() async {
         wdMark("load")
+        #if DEBUG
+        // E0 lifecycle probe: see the file-level comment on
+        // `e0LifecycleLog`. Logged before the guard below, so a task
+        // that starts and immediately no-ops still shows up.
+        e0LifecycleLog.log("E0 load start page=\(pageID, privacy: .public) isPreloadable=\(isPreloadable) isActive=\(isActive)")
+        #endif
         guard isPreloadable else { return }
         isLoading = true
         loadFailed = false
+        // A fresh attempt is about to decide its own outcome; any
+        // pending retry from a previous one no longer applies.
+        timedOutPendingRetry = false
         // Reset at the top of every load, so a stale reading can never
         // outlive its item.
         videoIsLandscape = false
@@ -1092,15 +1135,30 @@ struct PlayerPageView: View {
         // PhotoKit delivers progress on an arbitrary thread. Hop to main,
         // and ignore anything that arrives for a page that has moved on.
         let progressKey = taskKey
+        let timeoutFlag = TimeoutFlag()
         guard let item = await viewModel.playerItem(for: assetID, pageID: pageID, onProgress: { fraction in
             Task { @MainActor in
                 guard self.taskKey == progressKey else { return }
                 self.downloadFraction = fraction
             }
-        }) else {
+        }, didTimeOut: timeoutFlag) else {
             if !Task.isCancelled {
                 isLoading = false
-                loadFailed = true; Usage.shared.videoLoadFailed()
+                if timeoutFlag.didTimeOut {
+                    // Not sticky: no retry card for a mere timeout.
+                    // `.onChange(of: isActive)` spends this page's one
+                    // free retry the next time it is actually looked
+                    // at, rather than asking for a tap over a transient
+                    // stall.
+                    timedOutPendingRetry = true
+                } else {
+                    loadFailed = true
+                    // Only while this page is the one on screen: a
+                    // neighbour failing in the background, before the
+                    // user ever reaches it, is not a video they were
+                    // served.
+                    if isActive { Usage.shared.videoLoadFailed() }
+                }
             }
             return
         }
@@ -1381,6 +1439,13 @@ private struct StageLongPressScrubGesture: UIGestureRecognizerRepresentable {
 @MainActor
 private final class PlayerHolder: ObservableObject {
     let player = AVPlayer()
+
+    #if DEBUG
+    /// Set by `PlayerPageView.onAppear`, purely for the E0 lifecycle
+    /// probe's log lines (see `e0LifecycleLog`). `PlayerHolder` itself
+    /// has no notion of which page owns it.
+    var debugTag: String?
+    #endif
 
     private var endObserver: NSObjectProtocol?
     private var interruptionObserver: NSObjectProtocol?
@@ -1940,6 +2005,11 @@ private final class PlayerHolder: ObservableObject {
     /// limited concurrent hardware video decode pipelines.
     func release() {
         wdMark("release")
+        #if DEBUG
+        // E0 lifecycle probe: see the file-level comment on
+        // `e0LifecycleLog` in `PlayerPageView.swift`.
+        e0LifecycleLog.log("E0 holder.release tag=\(debugTag ?? "?", privacy: .public)")
+        #endif
         endNeighbourPreroll()      // The item is about to go away.
         let loggedItem = attachedItem   // Read below, after the detach.
         // This observation belongs to this item. Leaving it live would
