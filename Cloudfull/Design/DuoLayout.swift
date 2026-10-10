@@ -504,52 +504,41 @@ struct DuoLayout {
     /// for the arithmetic.
     static let minStageMargin: CGFloat = 16
 
-    /// Minimum gap kept between the rail's own last button and the
-    /// chin's own top edge, when the rail is bottom-anchored in a
-    /// column. Mirrors `ChinNavigation`'s own `railGap` (the same gap,
-    /// read from the opposite side): both are 8pt, declared
-    /// independently, since `ChinNavigation` is a Feed-level view and
-    /// this is a Design-level type — neither should import the other
-    /// just to read one number.
-    static let railBottomGap: CGFloat = 8
-
-    /// The chin's own top edge, from the page's bottom, at the chin's
-    /// tallest (expanded) state: `StageGeometry.captionCenterFromBottom`
-    /// plus half of `ChinNavigation`'s own expanded height. The `56`
-    /// here is hand-mirrored from `ChinNavigation.expandedHeight`, the
-    /// same way `captionCenterFromBottom` itself hand-mirrors
-    /// `captionZone`'s real layout elsewhere in this file, rather than
-    /// reading live state. Using the expanded height, not whichever
-    /// height the chin currently is, guarantees clearance in both of
-    /// its states.
-    private static let chinTopFromPageBottom: CGFloat = StageGeometry.captionCenterFromBottom + 56 / 2
-
-    /// The rail's own bottom edge, from the page's bottom, when it is
-    /// bottom-anchored in a column: `railBottomGap` above the chin's
-    /// own top edge, at its tallest.
+    /// Pose 1V's own status-cluster lower bound — owner ask: "can the
+    /// rail be higher? Shift Delete through Keep up as a whole,"
+    /// answered by centring the rail in the column's own full height,
+    /// clamped so its own top edge never rises above this + 16pt (see
+    /// `railVerticalExtent`'s own `isClosedBar` branch).
     ///
-    /// This replaces an earlier top-anchored version (since removed,
-    /// then reintroduced in a different shape below — see
-    /// `railVerticalExtent`) that placed the rail's first button below
-    /// whatever `.occlusion`/`safeAreaTop` reported. On a real closed
-    /// Duo screen that undershot the system's own time + connectivity
-    /// ring: there is no SDK API for that cluster's own extent —
-    /// `UIViewReservedRegion`'s only kinds are `.occlusion` (the
-    /// camera) and `.division` (the fold); see this type's own header
-    /// comment — so the rail's first button (Keep) rendered partly
-    /// under the ring. The chin's own position, by contrast, is
-    /// exactly known, with comfortably more room between the ring and
-    /// the chin than the rail's own height needs, so anchoring from
-    /// there instead is both correct and already the one number
-    /// `ChinNavigation` itself reads back (as `railBottom`, below).
+    /// Reads the active `.occlusion` region directly when this frame
+    /// reports one, filtered to frames genuinely inside this window
+    /// (`windowBounds.contains`, the same cross-display staleness
+    /// guard `DuoLayout.current` already applies to `division` — only
+    /// one display is ever active in pose 1V, so no `minX`-based side
+    /// check like `statusBlock`'s own is needed here). Falls back to
+    /// `safeAreaTop` alone, no added constant, when there is none to
+    /// read: a documented, deliberately conservative choice — the one
+    /// real, API-reported value this frame has for "how much the
+    /// system reserves at this display's own top edge" — rather than
+    /// an invented pixel number.
     ///
-    /// Bottom-anchoring like this is right only when the ring sits
-    /// ABOVE the rail (the closed bar column, and an open landscape
-    /// window's bar column) — see `railVerticalExtent`'s own comment
-    /// for the open-tall pose, where the ring sits above the STAGE
-    /// instead, and bottom-anchoring the rail there left a dead gap
-    /// above it.
-    static let railColumnBottomPadding: CGFloat = chinTopFromPageBottom + railBottomGap
+    /// Unverified against real hardware: an EARLIER version of this
+    /// rail's own anchor (since replaced, then replaced again here)
+    /// was top-anchored from exactly this pair of signals
+    /// (`.occlusion`/`safeAreaTop`), and on a real closed Duo screen it
+    /// undershot the system's own time + connectivity ring — there is
+    /// no SDK API for that cluster's own extent — so the rail's first
+    /// button (Keep) rendered partly under it. This change carries the
+    /// same risk if the signal undershoots again; the owner's own ask
+    /// to confirm this via `-cloudfull-log-rotation`'s `occ-`/`hSC`/
+    /// `vSC` fields on a REAL closed Duo screen, not just the
+    /// simulator, is exactly the right check before trusting this.
+    private func closedStatusBottom(containerSize: CGSize, safeAreaTop: CGFloat) -> CGFloat {
+        guard let occlusion, CGRect(origin: .zero, size: containerSize).contains(occlusion) else {
+            return safeAreaTop
+        }
+        return occlusion.maxY
+    }
 
     /// Where the rail column sits, and how wide it is, this frame — or
     /// `nil` when no column applies.
@@ -628,30 +617,35 @@ struct DuoLayout {
     /// coordinate space (0 at the top), for whichever anchor this
     /// frame's column uses — or `nil` when no column applies.
     ///
-    /// Bar ON (closed, or an open landscape window): anchored from the
-    /// BOTTOM — `railColumnBottomPadding` above the page's own bottom
-    /// edge — because the ring sits ABOVE the rail in that pose, with
-    /// no SDK API to say by how much, but the chin's own position
-    /// below is exactly known; see that constant's own comment.
-    /// Unchanged from the owner's own review of this pose ("pose 1 ...
-    /// looks generally pretty good" — "leave pose 1's rail position as
-    /// it is").
-    ///
-    /// Bar OFF (the open-tall pose): centred in the column instead —
-    /// `(containerSize.height - Rail.columnHeight) / 2` — not anchored
-    /// to either edge. An earlier version anchored from the top, flush
-    /// with the stage's own top edge, which put it right under the
-    /// system's own time + connectivity ring; the owner's own review
-    /// called the result "too high," asking for the rail "centred
-    /// vertically and accessible if I'm holding with one hand
+    /// Both bar ON (closed, pose 1V/1H) and bar OFF (the open-tall
+    /// pose) now centre the rail in the column's own full height —
+    /// `(containerSize.height - Rail.columnHeight) / 2`. Bar OFF has
+    /// read this way since an earlier top-anchored version put the
+    /// rail right under the system's own time + connectivity ring; the
+    /// owner's own review called that "too high," asking for the rail
+    /// "centred vertically and accessible if I'm holding with one hand
     /// unfolded" instead.
+    ///
+    /// Bar ON picked up the same centring in a LATER review, replacing
+    /// a bottom-anchored version this file's own history shows was
+    /// itself a deliberate choice at the time ("leave pose 1's rail
+    /// position as it is") — the owner later asked to "shift Delete
+    /// through Keep up as a whole." Centring alone is not safe there,
+    /// though: the ring sits ABOVE the bar column in this pose, with no
+    /// SDK API for its own extent, so this clamps the centred top down
+    /// to `closedStatusBottom(containerSize:safeAreaTop:) + 16`pt
+    /// whenever straight centring would rise above it — seeing the
+    /// clamp bind at all, on a real closed Duo screen, is the one
+    /// thing to check (see that function's own comment on why this
+    /// specific signal undershot once before).
     func railVerticalExtent(containerSize: CGSize, safeAreaTop: CGFloat) -> (top: CGFloat, bottom: CGFloat)? {
         guard railColumnRect(containerSize: containerSize, safeAreaTop: safeAreaTop) != nil else { return nil }
-        if isClosedBar {
-            let bottom = containerSize.height - Self.railColumnBottomPadding
-            return (bottom - Rail.columnHeight, bottom)
+        let centeredTop = (containerSize.height - Rail.columnHeight) / 2
+        guard isClosedBar else {
+            return (centeredTop, centeredTop + Rail.columnHeight)
         }
-        let top = (containerSize.height - Rail.columnHeight) / 2
+        let minTop = closedStatusBottom(containerSize: containerSize, safeAreaTop: safeAreaTop) + 16
+        let top = max(minTop, centeredTop)
         return (top, top + Rail.columnHeight)
     }
 

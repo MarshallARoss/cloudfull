@@ -306,9 +306,11 @@ struct ChinNavigation: View {
 
     /// Minimum gap kept between this control's own top edge and the
     /// rail's last button (`railBottom`), when one exists on this
-    /// screen. A visual gap, like `DuoLayout.railBottomGap` — the
-    /// same 8pt, read from the rail's own side — not a safety margin
-    /// the rail's own geometry does not already guarantee.
+    /// screen. A visual gap, 8pt, declared independently of
+    /// `DuoLayout` — this is a Feed-level view and that is a
+    /// Design-level type, so neither should import the other just to
+    /// read one number — not a safety margin the rail's own geometry
+    /// does not already guarantee.
     private static let railGap: CGFloat = 8
 
     /// This control's own bottom padding — the distance between its

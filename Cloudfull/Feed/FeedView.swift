@@ -1269,14 +1269,34 @@ struct FeedView: View {
 
     /// Returns the fixed chrome top from
     /// `StageGeometry.chromeTop(safeAreaTop:)`, just under the Dynamic
-    /// Island.
+    /// Island — except when this frame has no top status bar to clear
+    /// at all. Owner ask (pose 1V): "can the archive, filter and
+    /// volume buttons go all the way to the top of the Duo screen?"
+    /// The closed Duo's own outer display has no Dynamic Island or
+    /// status bar of its own — its own status lives in the bar column
+    /// instead — so it reports a `safeAreaTop` far below a real status
+    /// bar's. Below `StageGeometry.chromeTop`'s own `safeAreaTop >= 44`
+    /// threshold (reused here, not reinvented, for "is there a real
+    /// one to clear"), this row sits flush at `0`:
+    /// `.containerCornerOffset(.top)`, already chained after this
+    /// padding at the call site, is the only clearance left —
+    /// "the corner clearance from `containerCornerOffset(.top)`," the
+    /// owner's own words. A regular iPhone's own `safeAreaTop` is
+    /// always well above 44, so it never takes this branch — decided
+    /// purely by the real inset this frame reports, never a device
+    /// check. Scoped to this one row, not `StageGeometry.chromeTop`
+    /// itself, which `downShift`/`PhotoTopBar` also read for the
+    /// stage's own positioning and Photos' own top bar — neither asked
+    /// for by the owner here, so neither changes.
     private func topChromeTopPadding(safeAreaTop: CGFloat, containerSize: CGSize) -> CGFloat {
-        // The chrome sits at one fixed spot, just under the island
-        // capsule. `StageGeometry.downShift` grows the band by exactly
-        // enough for the video to start `chromeToVideoGap` below it.
-        // Both numbers come from the same `StageGeometry` helpers, so
-        // the pills and the video can never disagree.
-        StageGeometry.chromeTop(safeAreaTop: safeAreaTop)
+        // Below the threshold: `StageGeometry.downShift` grows the top
+        // band by exactly enough for the video to start
+        // `chromeToVideoGap` below `StageGeometry.chromeTop`'s OWN
+        // reading, not this row's actual `0` — the two can disagree by
+        // design here, since the video's own downward shift still
+        // follows the shared, unmodified formula; only this specific
+        // row (Mute/Filter/Bin) moves to the true edge.
+        safeAreaTop >= 44 ? StageGeometry.chromeTop(safeAreaTop: safeAreaTop) : 0
     }
 
     private var muteButton: some View {
