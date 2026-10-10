@@ -436,12 +436,24 @@ struct PlayerPageView: View {
     /// and off by default, like every other `-cloudfull-log-` flag.
     /// Only `isActive` logs, so three mounted pages never triple every
     /// line.
+    ///
+    /// Round 2 (Opus diagnosis): adds `rawdiv-` (`duoLayout
+    /// .debugRawDivision`, the un-offset, `.includeInactive` reading —
+    /// see that field's own comment) and `insets-` (`top,leading,bottom,
+    /// trailing`, `duoLayout.debugSafeAreaInsets`) after `hingeProbe`.
+    /// `div-`/`occ-` already show the corrected, window-space,
+    /// active-only values; this pair shows what the SDK reported before
+    /// either correction, so a future containment-filter false negative
+    /// (the book-as-tent bug this round fixed) shows both readings side
+    /// by side instead of only the filtered one.
     private func logRotationPose() {
         guard isActive, DiagnosticsGate.isOn("-cloudfull-log-rotation") else { return }
         let hSC = horizontalSizeClass.map { "\($0)" } ?? "nil"
         let vSC = verticalSizeClass.map { "\($0)" } ?? "nil"
+        let insets = duoLayout.debugSafeAreaInsets
         let message = "rotation_\(windowOrientationProbeName)_hSC-\(hSC)_vSC-\(vSC)_\(Int(windowSize.width))x\(Int(windowSize.height))"
             + "_pose-\(duoLayout.pose.rawValue)_div-\(rectProbe(duoLayout.division))_occ-\(rectProbe(duoLayout.occlusion))_\(hingeProbe)"
+            + "_rawdiv-\(rectProbe(duoLayout.debugRawDivision))_insets-\(Int(insets.top)),\(Int(insets.leading)),\(Int(insets.bottom)),\(Int(insets.trailing))"
         Self.rotationLog.notice("\(message, privacy: .public)")
         DiagnosticsLog.shared.log("Rotation", message)
     }

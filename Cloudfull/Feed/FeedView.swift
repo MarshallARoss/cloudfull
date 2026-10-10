@@ -333,6 +333,33 @@ struct FeedView: View {
             // indicator's and the camera cutout's real clearance in
             // that orientation, not a device-specific guess.
             let fullscreenSafeArea = rootProxy.safeAreaInsets
+            // Round 2 (Opus diagnosis, owner-reported pose 5/6/book
+            // misreads): `rootProxy` does not ignore the safe area, so
+            // `rootProxy.size` is the SAFE-AREA CONTENT rect, not the
+            // window — the same "reconstruct the real window" step
+            // `overlayControls`'s own nested `GeometryReader` already
+            // takes for `fullWindow`. `DuoLayout.current` below now
+            // normalises `occlusion`/`division` into this same TRUE
+            // window space (see that function's own comment), so any
+            // caller that still hands it `rootProxy.size` instead of
+            // this reconstructed size is comparing window-space
+            // regions against a safe-area-shrunk box — the root cause
+            // behind the book pose misreading as a tent (the vertical
+            // division's own height exceeded a landscape window's
+            // shorter safe-area height) and pose 5's own top row/rail
+            // anchors landing off-screen. Every call below that reads
+            // `duoLayout`'s own `occlusion`/`division`-derived geometry
+            // must use `windowSize`, never `rootProxy.size` — except
+            // `ChinNavigation`'s own `railBottom:` argument, deliberately
+            // left reading `rootProxy.size` below: that one also feeds
+            // `StageGeometry.bottomBand`'s fallback path for every
+            // regular-iPhone chin position, and changing its own
+            // containerSize would move the chin on a regular iPhone,
+            // which must stay byte-for-byte.
+            let windowSize = CGSize(
+                width: rootProxy.size.width + fullscreenSafeArea.leading + fullscreenSafeArea.trailing,
+                height: rootProxy.size.height + fullscreenSafeArea.top + fullscreenSafeArea.bottom
+            )
             // Classified synchronously from this same proxy, every pass —
             // no debounce. Audit finding F3's own fix
             // (`design/duo/duo_audit_apple_checklist.md`): an earlier
@@ -349,7 +376,7 @@ struct FeedView: View {
             // Computed once here, not inline at the `ChinNavigation`
             // call site, so its two fields (`.top`/`.x`) do not each
             // force a second call to `columnTabsAnchor(duoLayout:safeAreaTop:containerSize:)`.
-            let chinColumnTabs = columnTabsAnchor(duoLayout: duoLayout, safeAreaTop: safeAreaTop, containerSize: rootProxy.size)
+            let chinColumnTabs = columnTabsAnchor(duoLayout: duoLayout, safeAreaTop: safeAreaTop, containerSize: windowSize)
             ZStack {
             // Zero-size; only ever updates `toolbarVerticalEdge` above.
             // See that property's own comment for why the read is
@@ -390,7 +417,7 @@ struct FeedView: View {
             ChinNavigation(bottomBand: StageGeometry.bottomBand(safeAreaTop: safeAreaTop,
                                                                containerSize: rootProxy.size),
                            railBottom: duoLayout.railBottom(safeAreaTop: safeAreaTop, containerSize: rootProxy.size),
-                           railAlignedCenter: railAlignedChinCenter(duoLayout: duoLayout, safeAreaTop: safeAreaTop, safeAreaBottom: fullscreenSafeArea.bottom, containerSize: rootProxy.size),
+                           railAlignedCenter: railAlignedChinCenter(duoLayout: duoLayout, safeAreaTop: safeAreaTop, safeAreaBottom: fullscreenSafeArea.bottom, containerSize: windowSize),
                            columnTabsTop: chinColumnTabs?.top,
                            columnX: chinColumnTabs?.x)
                 .opacity(hidesGlobalChrome ? 0 : 1)
@@ -405,7 +432,7 @@ struct FeedView: View {
             // and `currentPageID` is what the pager itself is actually
             // centred on right now.
             if duoLayout.pose == .book,
-               let rightPageRect = duoLayout.rightPage(containerSize: rootProxy.size, safeAreaTop: safeAreaTop),
+               let rightPageRect = duoLayout.rightPage(containerSize: windowSize, safeAreaTop: safeAreaTop),
                let currentAssetID = currentPageID.flatMap({ id in viewModel.deck.first(where: { $0.id == id })?.assetID }) {
                 DuoRightPage(
                     currentAssetID: currentAssetID,
@@ -417,6 +444,15 @@ struct FeedView: View {
                     onRequestShrink: requestShrink,
                     onDelete: handleRightPageDelete
                 )
+                // Round 2: `rightPageRect` is now in TRUE window space
+                // (`windowSize`, above). Without `.ignoresSafeArea()`
+                // here, this view's own `.position()` would still be
+                // read inside `rootProxy`'s own safe-area-shrunk local
+                // space — the same mismatch bug, just on this one
+                // mount — the same fix `ChinNavigation`'s own body
+                // already applies to itself, and the pager applies to
+                // the whole `ScrollView`.
+                .ignoresSafeArea()
                 .opacity(hidesGlobalChrome ? 0 : 1)
                 .allowsHitTesting(!hidesGlobalChrome)
                 .accessibilityHidden(hidesGlobalChrome)

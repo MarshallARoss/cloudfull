@@ -88,6 +88,22 @@ struct DuoLayout {
     /// reads this, only `hinge` itself.
     let hingeDegrees: Double?
 
+    /// Round 2 debug probe only (Opus diagnosis): the raw `.division`
+    /// reserved region this frame reports, queried with
+    /// `.includeInactive` and left in `proxy`'s OWN local coordinate
+    /// space — before the window-space offset `current(...)` applies
+    /// to `division` itself, and before that function's own
+    /// containment filter. `-cloudfull-log-rotation` prints this
+    /// alongside `division`/`safeAreaInsets` so a future containment-
+    /// filter false negative (like the book pose misreading as a tent,
+    /// R1's own bug) shows the raw SDK reading next to the filtered
+    /// one instead of only the filtered one. Nothing in `classify(...)`
+    /// reads this field; it exists for the log line alone.
+    let debugRawDivision: CGRect?
+    /// Round 2 debug probe only: this frame's own `safeAreaInsets`,
+    /// alongside `debugRawDivision` for the same log line.
+    let debugSafeAreaInsets: EdgeInsets
+
     /// `barEdge != nil`. The spelling most call sites reach for when all
     /// they need is the yes/no, not which edge.
     var isClosedBar: Bool { barEdge != nil }
@@ -99,7 +115,8 @@ struct DuoLayout {
     /// `pose` is `.regularPhone` here — the hard rule every new branch
     /// gates on.
     static let none = DuoLayout(barEdge: nil, barWidth: 0, occlusion: nil, division: nil,
-                                pose: .regularPhone, hinge: nil, hingeDegrees: nil)
+                                pose: .regularPhone, hinge: nil, hingeDegrees: nil,
+                                debugRawDivision: nil, debugSafeAreaInsets: EdgeInsets())
 
     /// Reads this frame's Duo geometry from `proxy` and the
     /// already-resolved `toolbarVerticalEdge` environment value.
@@ -141,20 +158,42 @@ struct DuoLayout {
         case .trailing: width = insets.trailing
         case nil: width = 0
         }
+        // Round 2 (Opus diagnosis): `reservedRegions` reports each
+        // frame relative to THIS view's own local origin — `proxy`'s
+        // own (0, 0), which sits `insets.top`/`insets.leading` below
+        // and right of the window's own true top-left, since `proxy`
+        // (`FeedView`'s root `GeometryReader`) does not ignore the
+        // safe area. A region physically at the window's own top edge
+        // (a camera cutout, say) therefore reports a NEGATIVE y here —
+        // confirmed on the sim, pose 5: `occ-535,-82,134,82`, exactly
+        // `insets.top` (82) short of the `0` its real position is.
+        // Every function elsewhere in this file, and every caller that
+        // feeds one a `containerSize`, assumes window-space frames —
+        // `chromeColumnRect`/`statusBlock`/`railColumn`'s own occlusion
+        // reads, `FeedView.overlayControls`'s own reconstructed
+        // `fullWindow`, this struct's own stored `occlusion`/`division`
+        // — so this is the one place that offset is corrected, once,
+        // before anything downstream ever sees these frames.
+        let windowSize = CGSize(width: proxy.size.width + insets.leading + insets.trailing,
+                                 height: proxy.size.height + insets.top + insets.bottom)
+        func toWindowSpace(_ frame: CGRect) -> CGRect {
+            frame.offsetBy(dx: insets.leading, dy: insets.top)
+        }
         // The default query (no `.includeInactive`) already reports only
         // active regions, but the explicit filter documents that intent
         // at the call site and costs nothing if the SDK's default ever
         // changes.
-        let occlusionFrame = proxy.reservedRegions(kind: .occlusion).first(where: \.isActive)?.frame
-        // Build 1 fix: the owner's own sim readings caught a division
-        // frame from the INNER display's own coordinate space (669 pt
-        // wide) reported once while this frame's own window was still
-        // the OUTER display's compact 466-pt one — a stale cross-display
-        // reading, one layout pass behind the window size that already
-        // changed. Such a frame does not fit inside this frame's own
-        // window at all (its far edge lands past this window's own
-        // edge), so `book`/`laptop`'s `division.height > division.width`
-        // test must never see it: a plain `nil` here, same as "no fold
+        let occlusionFrame = (proxy.reservedRegions(kind: .occlusion).first(where: \.isActive)?.frame).map(toWindowSpace)
+        // Build 1 fix, re-adapted round 2: the owner's own sim readings
+        // caught a division frame from the INNER display's own
+        // coordinate space (669 pt wide) reported once while this
+        // frame's own window was still the OUTER display's compact
+        // 466-pt one — a stale cross-display reading, one layout pass
+        // behind the window size that already changed. Such a frame
+        // does not fit inside this frame's own window at all (its far
+        // edge lands past this window's own edge), so
+        // `book`/`laptop`'s `division.height > division.width` test
+        // must never see it: a plain `nil` here, same as "no fold
         // active," is what every other `division` reader downstream
         // (`DuoLayout.division` itself, and anything that reads it off
         // this frame's `DuoLayout`) already expects. `CGRect.contains`
@@ -162,19 +201,39 @@ struct DuoLayout {
         // frame above would still pass, since its leading edge does
         // overlap this window's own leading edge even though its
         // trailing edge does not.
-        let windowBounds = CGRect(origin: .zero, size: proxy.size)
-        let rawDivisionFrame = proxy.reservedRegions(kind: .division).first(where: \.isActive)?.frame
+        //
+        // Round 2: this filter now tests against `windowSize`, not the
+        // old `proxy.size` — the Opus diagnosis's own root cause for
+        // the book pose misreading as a tent. The book's division is a
+        // near-full-height vertical line; `proxy.size.height` (the
+        // safe-area-shrunk content height) is shorter than the WINDOW'S
+        // own full height by exactly the top/bottom insets, so the old
+        // bounds could reject a perfectly real, in-window division
+        // whenever its own height came within that margin of the
+        // window's. `insetBy(dx: -1, dy: -1)` gives the comparison a
+        // 1pt tolerance against rounding, the same way a hand-off
+        // between two independently-measured geometry passes often
+        // needs one.
+        let windowBounds = CGRect(origin: .zero, size: windowSize).insetBy(dx: -1, dy: -1)
+        let rawDivisionFrame = (proxy.reservedRegions(kind: .division).first(where: \.isActive)?.frame).map(toWindowSpace)
         let divisionFrame = rawDivisionFrame.flatMap { (frame: CGRect) -> CGRect? in
             windowBounds.contains(frame) ? frame : nil
         }
         let pose = classify(
             horizontalSizeClass: horizontalSizeClass,
             verticalSizeClass: verticalSizeClass,
-            containerSize: proxy.size,
+            containerSize: windowSize,
             division: divisionFrame,
             barEdge: toolbarVerticalEdge,
             hinge: hinge
         )
+        // Round 2 debug probe only (`debugRawDivision`'s own comment):
+        // the SAME raw query, but `.includeInactive` and left in
+        // `proxy`'s own un-offset local space — a diagnostic snapshot
+        // of what the SDK reported before either correction above,
+        // for `-cloudfull-log-rotation` to print next to the corrected
+        // `division` on the next pass.
+        let debugRawDivision = proxy.reservedRegions(kind: .division, options: .includeInactive).first?.frame
         return DuoLayout(
             barEdge: toolbarVerticalEdge,
             barWidth: toolbarVerticalEdge == nil ? 0 : width,
@@ -182,7 +241,9 @@ struct DuoLayout {
             division: divisionFrame,
             pose: pose,
             hinge: hinge,
-            hingeDegrees: hingeDegrees
+            hingeDegrees: hingeDegrees,
+            debugRawDivision: debugRawDivision,
+            debugSafeAreaInsets: insets
         )
     }
 
@@ -208,17 +269,30 @@ struct DuoLayout {
     ///    laptop hinge along the bottom): `.laptop`. See this file's
     ///    "Fold-orientation check" in the build spec for the 951×669 /
     ///    669×951 arithmetic this falls out of.
-    /// 2. No division, a `.partial` hinge, and a window wider than it is
-    ///    tall is the tent (pose 2) — a nightstand candidate; until the
-    ///    nightstand actually engages, it still lays out like rule 4
-    ///    below. The window's own shape (`containerSize`) is what
-    ///    decides this, not a device stance: Apple's own rule (F1, this
-    ///    file's header comment) is no layout from device orientation,
-    ///    and real interface rotation (the audit's Decision A) already
-    ///    makes `containerSize.width > containerSize.height` the
-    ///    correct, geometry-only reading of "this window is sideways" —
-    ///    nothing here reads `UIDevice.current.orientation` or a
-    ///    `Stance`.
+    /// 2. No division, a `.partial` hinge, a window wider than it is
+    ///    tall, and NOT both size classes regular at once is the tent
+    ///    (pose 2) — a nightstand candidate; until the nightstand
+    ///    actually engages, it still lays out like rule 4 below. The
+    ///    window's own shape (`containerSize`) is what decides the
+    ///    wide/tall part, not a device stance: Apple's own rule (F1,
+    ///    this file's header comment) is no layout from device
+    ///    orientation, and real interface rotation (the audit's
+    ///    Decision A) already makes `containerSize.width >
+    ///    containerSize.height` the correct, geometry-only reading of
+    ///    "this window is sideways" — nothing here reads
+    ///    `UIDevice.current.orientation` or a `Stance`.
+    ///
+    ///    Round 2 (Opus diagnosis): the size-class exclusion is new.
+    ///    Apple's own tech talk (111461) gives the INNER display's own
+    ///    size classes as regular/regular always, the OUTER's as
+    ///    compact in at least one axis always — the tent is the OUTER
+    ///    display standing up, so it can never read regular/regular.
+    ///    Without this exclusion, the INNER display briefly reads a
+    ///    `.partial` hinge and a wide window too, while open and
+    ///    folding past the point a `.division` is still active (the
+    ///    book-to-wide-open transition passes through exactly this
+    ///    shape) — misreading that moment as the tent instead of
+    ///    falling through to rule 3's own `.openWide`.
     /// 3. No division, no tent: BOTH size classes regular at once is the
     ///    fully-open case — `.openWide` if the window is wider than
     ///    tall, else `.openTall`. Both axes together, not
@@ -245,10 +319,11 @@ struct DuoLayout {
         if let division {
             return division.height > division.width ? .book : .laptop
         }
-        if hinge == .partial, containerSize.width > containerSize.height {
+        let isFullyOpenSizeClass = horizontalSizeClass == .regular && verticalSizeClass == .regular
+        if hinge == .partial, containerSize.width > containerSize.height, !isFullyOpenSizeClass {
             return .tent
         }
-        if horizontalSizeClass == .regular, verticalSizeClass == .regular {
+        if isFullyOpenSizeClass {
             return containerSize.width > containerSize.height ? .openWide : .openTall
         }
         if barEdge != nil || hinge != nil {
@@ -470,19 +545,6 @@ struct DuoLayout {
     /// 3's wide-video box, pose 4W's box, and (elsewhere) the caption
     /// and right-page placements build 4 and later add.
     static let pagePad: CGFloat = 16
-    /// Build 8's own first-pass measurement of pose 6's horizontal
-    /// rail row: the x-spacing between consecutive buttons. No longer
-    /// read by `laptopRailRow` itself (re-adapted off the wireframe's
-    /// `669`-measured positions entirely, onto a live, equal six-way
-    /// split of the deck's own width) — kept only so
-    /// `DuoPosePreviews.swift`'s own static wireframe-reference scene,
-    /// which cites these two constants by name, still compiles.
-    static let laptopRailPitch: CGFloat = 100
-    /// Build 8's own first-pass measurement of pose 6's horizontal
-    /// rail row: the x of its first button. See `laptopRailPitch`'s
-    /// own comment — unused by the live layout now, kept for the
-    /// preview file alone.
-    static let laptopRailLead: CGFloat = 70
     /// Pose 5's chin: the gap above its own top edge, clear of the
     /// rail's last button — build 7.
     static let chinColumnGap: CGFloat = 40
