@@ -470,10 +470,18 @@ struct DuoLayout {
     /// 3's wide-video box, pose 4W's box, and (elsewhere) the caption
     /// and right-page placements build 4 and later add.
     static let pagePad: CGFloat = 16
-    /// Pose 6's (laptop) horizontal rail row: the x-spacing between
-    /// consecutive buttons — build 8.
+    /// Build 8's own first-pass measurement of pose 6's horizontal
+    /// rail row: the x-spacing between consecutive buttons. No longer
+    /// read by `laptopRailRow` itself (re-adapted off the wireframe's
+    /// `669`-measured positions entirely, onto a live, equal six-way
+    /// split of the deck's own width) — kept only so
+    /// `DuoPosePreviews.swift`'s own static wireframe-reference scene,
+    /// which cites these two constants by name, still compiles.
     static let laptopRailPitch: CGFloat = 100
-    /// Pose 6's horizontal rail row: the x of its first button — build 8.
+    /// Build 8's own first-pass measurement of pose 6's horizontal
+    /// rail row: the x of its first button. See `laptopRailPitch`'s
+    /// own comment — unused by the live layout now, kept for the
+    /// preview file alone.
     static let laptopRailLead: CGFloat = 70
     /// Pose 5's chin: the gap above its own top edge, clear of the
     /// rail's last button — build 7.
@@ -796,16 +804,29 @@ struct DuoLayout {
         return CGRect(x: containerSize.width, y: 0, width: 0, height: safeAreaTop)
     }
 
-    // MARK: - Laptop bottom deck (build 8b)
+    // MARK: - Laptop bottom deck (build 8b, re-adapted R2)
     //
     // Pose 6 only: everything below the fold's bottom edge — the
     // scrubber, the caption, the Mute/Filter/Bin zigzag row, the
     // horizontal action rail and its chin, and Previous/Next — is one
     // shared panel (`design/duo/duo_build_spec.md` §2.6), anchored to
-    // this frame's own `division`, never a fixed 669×951 window. Every
-    // function below reads only `laptopBottomRect` and `laptopScale`,
-    // so the whole deck moves together if either changes. "Shared"
-    // mirrors the audit's own call (`design/duo/duo_audit_apple_checklist.md`
+    // this frame's own `division`, never a fixed 669×951 window.
+    //
+    // Owner re-adapt: the first build scaled the wireframe's own
+    // measured x positions (120/220/420/452, 70…470, 535, 600, ∓120)
+    // by `containerSize.width / 669`. That is still a device-size
+    // constant in the numerator's shadow — 669 only ever meant anything
+    // because the laptop window happens to measure that wide — so the
+    // owner's rule rules it out too, denominator or not. Every number
+    // below instead comes from `laptopBottomRect`'s own live rect:
+    // the deck's four row-groups (scrubber+caption, zigzag, rail+chin,
+    // Previous/Next) are `laptopBand`'s own equal quarters of its
+    // height, and every x position is either the rect's own live
+    // width or a fraction/gap of the rail-and-chin row's own even,
+    // six-way split — never a ratio against a measured constant. Every
+    // function below reads only `laptopBottomRect`/`laptopBand`, so the
+    // whole deck moves together if either changes. "Shared" mirrors
+    // the audit's own call (`design/duo/duo_audit_apple_checklist.md`
     // §2): the pieces that describe the CURRENT item (the rail, the
     // caption, the scrubber) still render once per page, inside
     // `FeedPageContent`/`PlayerPageView`, same as every other pose —
@@ -826,82 +847,105 @@ struct DuoLayout {
                       height: max(0, containerSize.height - division.maxY - safeAreaBottom))
     }
 
-    /// "Scale the x constants by `W / 669`" — §2.6's own closing line.
-    /// Every x position the wireframe gives for this deck (120/220/
-    /// 420/452, 70…470, 535, 600, the Previous/Next ∓120) was measured
-    /// against the 669pt-wide laptop window (this file's own build-spec
-    /// header: "Inner sizes … 669×951 (tall)"). This is the one place
-    /// that ratio is computed, so a Mirroring window or a larger
-    /// Dynamic Type size that widens the laptop window keeps every one
-    /// of those positions proportional instead of pinned to a device-
-    /// measured pixel count.
-    private static func laptopScale(containerSize: CGSize) -> CGFloat {
-        containerSize.width / 669.0
+    /// The deck's four equal row-groups, in order: 0 scrubber+caption,
+    /// 1 the zigzag row, 2 the rail+chin, 3 Previous/Next — "Rows
+    /// evenly spaced in that rect … divide the rect height into equal
+    /// bands" (owner re-adapt). Every laptop-deck function below reads
+    /// its own band from here instead of a wireframe v-offset.
+    private static let laptopBandCount: CGFloat = 4
+    private static func laptopBand(_ bottom: CGRect, _ index: Int) -> CGRect {
+        let height = bottom.height / laptopBandCount
+        return CGRect(x: bottom.minX, y: bottom.minY + CGFloat(index) * height, width: bottom.width, height: height)
     }
 
-    /// The scrubber's own frame (§2.6, "v 34 … x 24…W − 24"): centred
-    /// at `(W/2, bottom.minY + 34)`, `W − 48` wide, 28 tall.
+    /// The scrubber's own frame, in band 0's own upper portion.
     /// `PlayerPageView` positions its own `ScrubberView` here, with
     /// `bandHeight: 0` — it owns `holder.progress`; this file stays a
     /// pure value type with no playback state of its own.
     func laptopScrubberRect(containerSize: CGSize, safeAreaBottom: CGFloat) -> CGRect? {
         guard let bottom = laptopBottomRect(containerSize: containerSize, safeAreaBottom: safeAreaBottom) else { return nil }
-        return CGRect(x: 24, y: bottom.minY + 34 - 14, width: max(0, containerSize.width - 48), height: 28)
+        let band = Self.laptopBand(bottom, 0)
+        return CGRect(x: band.minX + Self.pagePad, y: band.minY + band.height * 0.25 - 14,
+                      width: max(0, band.width - Self.pagePad * 2), height: 28)
     }
 
-    /// The Mute/Filter/Bin zigzag row (§2.6, "v 150"): "Mute x = 120,
-    /// Filter x = 220, Bin x = 420, counter leading at 452 (each sits
-    /// over a rail gap)" — the horizontal twin of `zigzagCenters`,
-    /// levelled with gaps in `laptopRailRow`'s own row instead of the
-    /// vertical rail's. `FeedView.overlayControls` mounts this; see
-    /// this group's own header comment for why it is global rather
-    /// than per-page.
-    func laptopZigzagRow(containerSize: CGSize, safeAreaBottom: CGFloat) -> (mute: CGPoint, filter: CGPoint, bin: CGPoint, counterLeadingX: CGFloat)? {
+    /// Band 0's own bottom edge — `FeedPageContent.duoLaptopCaption`'s
+    /// own bottom-aligned text box ends here, under the scrubber,
+    /// still inside the deck's first quarter.
+    func laptopCaptionBottomY(containerSize: CGSize, safeAreaBottom: CGFloat) -> CGFloat? {
         guard let bottom = laptopBottomRect(containerSize: containerSize, safeAreaBottom: safeAreaBottom) else { return nil }
-        let scale = Self.laptopScale(containerSize: containerSize)
-        let y = bottom.minY + 150
+        return Self.laptopBand(bottom, 0).maxY
+    }
+
+    /// The Mute/Filter/Bin zigzag row, centred in band 1: the
+    /// horizontal twin of `zigzagCenters`, levelled with gaps in
+    /// `laptopRailRow`'s own row instead of the vertical rail's — the
+    /// first 3 of that row's own 5 gaps, the same selection
+    /// `zigzagCenters` already makes among the vertical rail's own 4.
+    /// `FeedView.overlayControls` mounts this; see this group's own
+    /// header comment for why it is global rather than per-page.
+    func laptopZigzagRow(containerSize: CGSize, safeAreaBottom: CGFloat) -> (mute: CGPoint, filter: CGPoint, bin: CGPoint, counterLeadingX: CGFloat)? {
+        guard let bottom = laptopBottomRect(containerSize: containerSize, safeAreaBottom: safeAreaBottom),
+              let row = laptopRailRow(containerSize: containerSize, safeAreaBottom: safeAreaBottom)
+        else { return nil }
+        let y = Self.laptopBand(bottom, 1).midY
+        let xs = row.centers.map(\.x) + [row.chinCenter.x]
+        func gapX(_ i: Int) -> CGFloat { (xs[i] + xs[i + 1]) / 2 }
         return (
-            mute: CGPoint(x: 120 * scale, y: y),
-            filter: CGPoint(x: 220 * scale, y: y),
-            bin: CGPoint(x: 420 * scale, y: y),
-            counterLeadingX: 452 * scale
+            mute: CGPoint(x: gapX(0), y: y),
+            filter: CGPoint(x: gapX(1), y: y),
+            bin: CGPoint(x: gapX(2), y: y),
+            counterLeadingX: gapX(2) + Rail.hit / 2 + 6
         )
     }
 
-    /// The horizontal action rail (§2.6, "v 236"): the same five
+    /// The horizontal action rail, centred in band 2: the same five
     /// buttons `actionRail`/`actionRailColumn` already draw everywhere
-    /// else, this time in a row — x = `(laptopRailLead +
-    /// i·laptopRailPitch) · scale`, y = `bottom.minY + 236`.
-    /// `hairlineX`/`chinCenter` share this row's own y, at the
-    /// wireframe's own 535/600 x positions, scaled the same way:
-    /// "vertical hairline at x 535. Chin collapsed centre (600, v
-    /// 236)." `FeedPageContent` renders the five buttons and the
-    /// hairline (per-page, like every other pose's rail);
-    /// `FeedView.railAlignedChinCenter` reads `chinCenter` to anchor
+    /// else, this time in a row — 6 slots (Keep, Share, Album, Shrink,
+    /// Delete, then the chin) evenly distributed across the deck's own
+    /// live width, inset by `pagePad` on each side: "x positions …
+    /// from even distribution of the 5 rail items + chin" (owner
+    /// re-adapt). `hairlineX`/`hairlineY` mark the one gap this row
+    /// still needs a divider for — between Delete and the chin —
+    /// clamped by the caller to `Rail.itemHeight` tall, "a SHORT
+    /// divider only as tall as the rail row," not the whole deck.
+    /// `FeedPageContent` renders the five buttons and the hairline
+    /// (per-page, like every other pose's rail); `FeedView
+    /// .railAlignedChinCenter` reads `chinCenter` to anchor
     /// `ChinNavigation`'s own collapsed switcher here, the same
     /// position-based path pose 5's rail column already uses.
-    func laptopRailRow(containerSize: CGSize, safeAreaBottom: CGFloat) -> (centers: [CGPoint], hairlineX: CGFloat, chinCenter: CGPoint)? {
+    func laptopRailRow(containerSize: CGSize, safeAreaBottom: CGFloat) -> (centers: [CGPoint], hairlineX: CGFloat, hairlineY: CGFloat, chinCenter: CGPoint)? {
         guard let bottom = laptopBottomRect(containerSize: containerSize, safeAreaBottom: safeAreaBottom) else { return nil }
-        let scale = Self.laptopScale(containerSize: containerSize)
-        let y = bottom.minY + 236
-        let centers = (0..<5).map { i in
-            CGPoint(x: (Self.laptopRailLead + CGFloat(i) * Self.laptopRailPitch) * scale, y: y)
-        }
-        return (centers: centers, hairlineX: 535 * scale, chinCenter: CGPoint(x: 600 * scale, y: y))
+        let band = Self.laptopBand(bottom, 2)
+        let y = band.midY
+        let leading = band.minX + Self.pagePad
+        let usable = max(0, band.width - Self.pagePad * 2)
+        let slot = usable / 6
+        let xs = (0..<6).map { leading + (CGFloat($0) + 0.5) * slot }
+        let centers = xs.prefix(5).map { CGPoint(x: $0, y: y) }
+        let chinCenter = CGPoint(x: xs[5], y: y)
+        return (centers: Array(centers), hairlineX: (xs[4] + xs[5]) / 2, hairlineY: y, chinCenter: chinCenter)
     }
 
-    /// Previous/Next pill centres (§2.6, "v 380 … centres x = W/2 ∓
-    /// 120"), scaled the same way as every other x in this group.
-    /// `FeedView.laptopDeckControls` mounts the two pills here; §3d's
-    /// own `retreatToPreviousPage(from:)`/`advanceToNextPage(from:)`
-    /// page the feed.
-    func laptopPagerCenters(containerSize: CGSize, safeAreaBottom: CGFloat) -> (previous: CGPoint, next: CGPoint)? {
+    /// Previous/Next pill geometry, centred in band 3: two slots of
+    /// the deck's own live width, each inset by `pagePad` from the
+    /// deck's own edge and from each other, mirroring
+    /// `laptopRailRow`'s own even-distribution approach rather than a
+    /// fixed pill size. `FeedView.laptopDeckControls` mounts the two
+    /// pills here; §3d's own `retreatToPreviousPage(from:)`/
+    /// `advanceToNextPage(from:)` page the feed.
+    func laptopPagerCenters(containerSize: CGSize, safeAreaBottom: CGFloat) -> (previous: CGPoint, next: CGPoint, width: CGFloat, height: CGFloat)? {
         guard let bottom = laptopBottomRect(containerSize: containerSize, safeAreaBottom: safeAreaBottom) else { return nil }
-        let scale = Self.laptopScale(containerSize: containerSize)
-        let y = bottom.minY + 380
-        let offset = 120 * scale
-        return (previous: CGPoint(x: containerSize.width / 2 - offset, y: y),
-                next: CGPoint(x: containerSize.width / 2 + offset, y: y))
+        let band = Self.laptopBand(bottom, 3)
+        let y = band.midY
+        let width = max(0, (band.width - Self.pagePad * 3) / 2)
+        let height = min(60, max(44, band.height - 12))
+        return (
+            previous: CGPoint(x: band.minX + Self.pagePad + width / 2, y: y),
+            next: CGPoint(x: band.maxX - Self.pagePad - width / 2, y: y),
+            width: width,
+            height: height
+        )
     }
 }
 

@@ -1340,27 +1340,27 @@ struct FeedView: View {
                 }
             }
             if let pager = duoLayout.laptopPagerCenters(containerSize: containerSize, safeAreaBottom: safeAreaBottom) {
-                let scale = containerSize.width / 669.0
                 laptopPagerButton(title: "← Previous", identifier: "duo_prev",
-                                   center: pager.previous, scale: scale,
+                                   center: pager.previous, width: pager.width, height: pager.height,
                                    isEnabled: laptopPagerIndex.map { $0 > 0 } ?? false,
                                    action: { laptopGoToPreviousPage() })
                 laptopPagerButton(title: "Next →", identifier: "duo_next",
-                                   center: pager.next, scale: scale,
+                                   center: pager.next, width: pager.width, height: pager.height,
                                    isEnabled: laptopPagerIndex.map { $0 + 1 < viewModel.deck.count } ?? false,
                                    action: { laptopGoToNextPage() })
             }
         }
     }
 
-    /// One pill of the Previous/Next pair — 200×60 at the wireframe's
-    /// own scale, disabled and dimmed at either end of the deck.
-    private func laptopPagerButton(title: String, identifier: String, center: CGPoint, scale: CGFloat, isEnabled: Bool, action: @escaping () -> Void) -> some View {
+    /// One pill of the Previous/Next pair — `DuoLayout
+    /// .laptopPagerCenters`'s own live width/height, disabled and
+    /// dimmed at either end of the deck.
+    private func laptopPagerButton(title: String, identifier: String, center: CGPoint, width: CGFloat, height: CGFloat, isEnabled: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(title)
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.white)
-                .frame(width: 200 * scale, height: 60 * scale)
+                .frame(width: width, height: height)
                 .feedGlassButton(in: Capsule())
         }
         .buttonStyle(.plain)
@@ -2712,19 +2712,19 @@ private struct FeedPageContent: View {
 
     // MARK: - Pose 6 (laptop) caption + rail (build 8b)
 
-    /// Pose 6's own caption, in the shared bottom deck: "v 60, leading
-    /// 24" (`design/duo/duo_build_spec.md` §2.6) — the same
+    /// Pose 6's own caption, in the shared bottom deck's own band 0
+    /// (`design/duo/duo_build_spec.md` §2.6) — the same
     /// `.bottomLeading`-positioned-rect technique `duoOpenWideCaption`/
     /// `duoBookCaption` already use, so the text's own natural height
     /// never has to be hand-measured. Renders nothing when
-    /// `DuoLayout.laptopBottomRect` is `nil` (no active division this
-    /// frame).
+    /// `DuoLayout.laptopCaptionBottomY` is `nil` (no active division
+    /// this frame).
     @ViewBuilder
     private func duoLaptopCaption(containerSize: CGSize, safeAreaBottom: CGFloat) -> some View {
-        if let bottom = duoLayout.laptopBottomRect(containerSize: containerSize, safeAreaBottom: safeAreaBottom) {
+        if let bottomY = duoLayout.laptopCaptionBottomY(containerSize: containerSize, safeAreaBottom: safeAreaBottom) {
             let leading: CGFloat = 24
             let width = max(0, containerSize.width - leading - 16)
-            let rect = CGRect(x: leading, y: 0, width: width, height: bottom.minY + 60)
+            let rect = CGRect(x: leading, y: 0, width: width, height: bottomY)
             captionTexts
                 .feedShadow()
                 .frame(width: rect.width, alignment: .leading)
@@ -2740,24 +2740,26 @@ private struct FeedPageContent: View {
         }
     }
 
-    /// Pose 6's own horizontal action rail (§2.6, "v 236"): the same
-    /// five buttons `actionRail`/`actionRailColumn` draw everywhere
-    /// else, this time at `DuoLayout.laptopRailRow`'s own row of
-    /// points — per-page, like every other pose's rail, since it
-    /// describes the current item, not the screen (see
+    /// Pose 6's own horizontal action rail, centred in
+    /// `DuoLayout.laptopRailRow`'s own band — the same five buttons
+    /// `actionRail`/`actionRailColumn` draw everywhere else, this time
+    /// at that row's own points — per-page, like every other pose's
+    /// rail, since it describes the current item, not the screen (see
     /// `FeedView.laptopDeckControls`'s own comment on which pieces of
-    /// §2.6 are global instead). The vertical hairline at `hairlineX`
-    /// is this row's own divider, spanning the full bottom deck —
-    /// "vertical hairline at x 535."
+    /// §2.6 are global instead). The vertical hairline at
+    /// `hairlineX`/`hairlineY` is this row's own divider, between
+    /// Delete and the chin, clamped to `Rail.itemHeight` tall — owner
+    /// re-adapt: "a SHORT divider only as tall as the rail row," not
+    /// the whole deck (the first build's own bug, spanning
+    /// `bottom.height` and cutting through the Next pill below it).
     @ViewBuilder
     private func laptopHorizontalRail(containerSize: CGSize, safeAreaBottom: CGFloat) -> some View {
-        if let bottom = duoLayout.laptopBottomRect(containerSize: containerSize, safeAreaBottom: safeAreaBottom),
-           let row = duoLayout.laptopRailRow(containerSize: containerSize, safeAreaBottom: safeAreaBottom),
+        if let row = duoLayout.laptopRailRow(containerSize: containerSize, safeAreaBottom: safeAreaBottom),
            row.centers.count == 5 {
             Rectangle()
                 .fill(Color.white.opacity(0.2))
-                .frame(width: 1, height: bottom.height)
-                .position(x: row.hairlineX, y: bottom.midY)
+                .frame(width: 1, height: Rail.itemHeight)
+                .position(x: row.hairlineX, y: row.hairlineY)
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)
             likeButton(rail).position(row.centers[0])
