@@ -375,19 +375,33 @@ struct PlayerPageView: View {
     /// `(48, H − 113)`, above the caption; pose 4W, `(44, H − 79)`.
     /// `nil` when `usesFixedRingPoint` is `false`.
     ///
-    /// Both points sit outside pose 3's own stage box (which
-    /// `openWideWideVideoRect`'s own comment, and the per-pose table,
-    /// place well to the trailing side of x = 48 on every measured
-    /// window). `stageContent`'s own `.clipped()` would cut off
-    /// anything placed there from inside it, which is why this is a
-    /// second, separate `CloudDownloadRing` mounted at `body`'s own
+    /// Both points are meant to sit outside pose 3's own stage box
+    /// (which `openWideWideVideoRect`'s own comment, and the per-pose
+    /// table, place well to the trailing side of x = 48 on every
+    /// MEASURED window) — `stageContent`'s own `.clipped()` would cut
+    /// off anything placed there from inside it, which is why this is
+    /// a second, separate `CloudDownloadRing` mounted at `body`'s own
     /// outer level instead, never a repositioning of the existing one.
-    private func ringFixedPoint(containerSize: CGSize) -> CGPoint? {
+    ///
+    /// Owner-reported bug (Opus wireframe compare, pose 3): the ring
+    /// sat ON the video's own bottom-left corner on the real sim — a
+    /// window narrower (relative to the bar/chrome columns it
+    /// excludes) than whatever one `x = 48` was originally measured
+    /// against, where `stage.minX` falls inside the ring's own 30pt
+    /// disc instead of clear of it. `x` now clamps to the wireframe's
+    /// own 48/44 only when the stage leaves room for it, and backs off
+    /// to just clear of the stage's own real leading edge otherwise —
+    /// derived from the live geometry `openWideWideVideoRect` already
+    /// computes, not a second hand-measured number that can drift from
+    /// the first the way the un-clamped constant did.
+    private func ringFixedPoint(containerSize: CGSize, stageMinX: CGFloat) -> CGPoint? {
+        let ringRadius = CloudDownloadRing.standardDiameter / 2 + CloudDownloadRing.discPadding
+        let clearOfStage = stageMinX - ringRadius - 6
         switch duoLayout.pose {
         case .openWide:
-            return CGPoint(x: 48, y: containerSize.height - 113)
+            return CGPoint(x: min(48, clearOfStage), y: containerSize.height - 113)
         case .book where useVideoAspect:
-            return CGPoint(x: 44, y: containerSize.height - 79)
+            return CGPoint(x: min(44, clearOfStage), y: containerSize.height - 79)
         default:
             return nil
         }
@@ -900,7 +914,7 @@ struct PlayerPageView: View {
                 // `.accessibilityHidden(true)` always: the hidden
                 // instance still carries the real "Loading video"
                 // label, so VoiceOver never hears it twice.
-                if usesFixedRingPoint, let fixedPoint = ringFixedPoint(containerSize: proxy.size) {
+                if usesFixedRingPoint, let fixedPoint = ringFixedPoint(containerSize: proxy.size, stageMinX: stageRect.minX) {
                     CloudDownloadRing(fraction: downloadFraction, isRunning: showSpinner)
                         .allowsHitTesting(false)
                         .accessibilityHidden(true)
