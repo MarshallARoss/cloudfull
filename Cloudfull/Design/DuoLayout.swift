@@ -1181,3 +1181,99 @@ struct HingeReader: View {
         return .partial
     }
 }
+
+// MARK: - DEBUG alignment guides (`-cloudfull-duo-guides`)
+//
+// Owner, direct: "these lines are useful! can you add more so we can
+// use them as conversation references?" This section is the shared
+// plumbing every production view uses to report its own real rendered
+// frame to `FeedView.duoGuidesOverlay`'s own collector — the same "a
+// real view reports its own geometry up" pattern `DuoRightGridBottomKey`
+// already uses for the right page's grid bottom, extended to every
+// element a pose fix might ever need to talk about. A real frame, not
+// a second derivation of the same layout math, is the whole point:
+// the pose 5 ring-x round found a guide line that LOOKED right by eye
+// but was wrong by 8pt, because it was still redrawing the computed
+// number rather than measuring the real pixels. Marking the real view
+// instead removes that whole class of drift.
+
+/// True only behind `-cloudfull-duo-guides`, and only in a DEBUG
+/// build — the one flag `FeedView`'s own guide overlay and every
+/// `.duoGuideMark` call site across the app share, so there is a
+/// single source of truth instead of each file re-deriving its own
+/// bare launch-argument check. `false`, unconditionally, outside
+/// DEBUG: this must never read `true` in a shipped build regardless
+/// of what arguments a shipped binary happens to be launched with.
+enum DuoGuides {
+    #if DEBUG
+    static let isOn = ProcessInfo.processInfo.arguments.contains("-cloudfull-duo-guides")
+    #else
+    static let isOn = false
+    #endif
+}
+
+#if DEBUG
+/// One labeled rect this DEBUG session wants outlined on screen —
+/// `.duoGuideMark`'s own payload. `id` is the element's own name
+/// ("stage", "rail.keep", "grid.date", …), shown in the overlay's own
+/// label alongside the rect's live x, y, w, h.
+struct DuoGuideMark: Equatable {
+    let id: String
+    let rect: CGRect
+    let color: Color
+}
+
+/// Collects every `.duoGuideMark` reporting view's own frame this
+/// frame. `FeedView` reads this through a single `.onPreferenceChange`
+/// on its outer `ZStack`, the same way it already reads
+/// `DuoRightGridBottomKey` — preferences bubble up through the whole
+/// view tree on their own, so a mark set deep inside `PlayerPageView`
+/// or `DuoRightPage` reaches that one collector with no manual
+/// plumbing in between.
+struct DuoGuideMarksKey: PreferenceKey {
+    static var defaultValue: [DuoGuideMark] = []
+    static func reduce(value: inout [DuoGuideMark], nextValue: () -> [DuoGuideMark]) {
+        value.append(contentsOf: nextValue())
+    }
+}
+#endif
+
+extension View {
+    /// Marks this view's own real rendered frame, in window/`.global`
+    /// space — the same space `occlusion`/`division`/`railColumnRect`
+    /// and `duoRightGridBottomY` already read in, confirmed identical
+    /// for this app's one full-screen scene — for the DEBUG
+    /// alignment-guide overlay.
+    ///
+    /// `active` lets a per-PAGE call site (a pager can keep more than
+    /// one `PlayerPageView`/`FeedPageContent` mounted at once) report
+    /// only while it is the centred page — pass `isActive`, the same
+    /// guard every other per-page side effect in this app already
+    /// uses — so an off-screen neighbour never draws a second, stale
+    /// "stage" or "caption" box. Global, once-per-screen elements
+    /// (the chin, the top row, the deck) need no such guard and
+    /// default to `true`.
+    ///
+    /// A true no-op outside DEBUG, and a no-op at runtime whenever
+    /// `DuoGuides.isOn`/`active` is false — safe to call at any
+    /// production call site in either configuration.
+    @ViewBuilder
+    func duoGuideMark(_ name: String, color: Color, active: Bool = true) -> some View {
+        #if DEBUG
+        if DuoGuides.isOn && active {
+            self.background(
+                GeometryReader { proxy in
+                    Color.clear.preference(
+                        key: DuoGuideMarksKey.self,
+                        value: [DuoGuideMark(id: name, rect: proxy.frame(in: .global), color: color)]
+                    )
+                }
+            )
+        } else {
+            self
+        }
+        #else
+        self
+        #endif
+    }
+}

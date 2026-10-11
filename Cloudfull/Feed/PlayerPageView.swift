@@ -742,6 +742,7 @@ struct PlayerPageView: View {
                     stageContent(bottomBand: bottomSpace)
                         .frame(width: canvasWidth, height: canvasHeight)
                         .clipped()
+                        .duoGuideMark("stage", color: .purple, active: isActive)
                         // Tap-to-keep and tap-to-mute live on the stage, not
                         // on the whole page. A tap in the top black band, on
                         // or around the pills, must not toggle mute.
@@ -904,6 +905,7 @@ struct PlayerPageView: View {
                                     // owner's own "pose 5 = like 1V."
                                     pinsToBottomEdge: duoLayout.pose == .closed || duoLayout.pose == .openWide || duoLayout.pose == .book || duoLayout.pose == .openTall
                                 )
+                                .duoGuideMark("scrub", color: .brown, active: isActive)
                             }
                         }
                         // R4: no `.rotationEffect` — the window itself
@@ -947,6 +949,7 @@ struct PlayerPageView: View {
                         .allowsHitTesting(false)
                         .accessibilityHidden(true)
                         .position(fixedPoint)
+                        .duoGuideMark("cloud", color: .cyan, active: isActive)
                 }
                 // Build 8b: pose 6's own scrubber, in the shared bottom
                 // deck below the fold — "rendered by P in its outer
@@ -973,6 +976,7 @@ struct PlayerPageView: View {
                     )
                     .frame(width: scrubberRect.width, height: scrubberRect.height)
                     .position(x: scrubberRect.midX, y: scrubberRect.midY)
+                    .duoGuideMark("scrub", color: .brown, active: isActive)
                 }
             }
             .frame(width: proxy.size.width, height: proxy.size.height)
@@ -1492,6 +1496,7 @@ struct PlayerPageView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
                 .padding(.leading, isFullscreen ? fullscreenSafeArea.leading + 10 : 10)
                 .padding(.bottom, isFullscreen ? fullscreenSafeArea.bottom + 10 : loaderLift(bottomBand: bottomBand))
+                .duoGuideMark("cloud", color: .cyan, active: isActive && !usesFixedRingPoint)
                 // `spinnerRevealKey` folds `isLoading` and `isActive` into
                 // the task's own identity. So SwiftUI's `.task(id:)`
                 // cancel-and-restart cancels a pending reveal the instant

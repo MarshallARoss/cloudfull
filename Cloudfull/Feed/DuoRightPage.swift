@@ -92,6 +92,7 @@ struct DuoRightPage: View {
                 Text(sameDayHeader(sameDay))
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.7))
+                    .duoGuideMark("grid.date", color: .pink)
                 sameDayGrid(sameDay, dayKey: dayKey)
             }
         } else if isLoading {

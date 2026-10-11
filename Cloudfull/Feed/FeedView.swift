@@ -164,6 +164,11 @@ struct FeedView: View {
     /// the `.task(id: shrinkVerificationCompletionKey)` in `body`, never
     /// read fresh during a body pass. See that task's comment for why.
     @State private var shrinkVerificationCache = "shrink_verify_none"
+    /// Every `.duoGuideMark` reporting view's own frame this frame —
+    /// see `DuoGuideMarksKey`'s own comment. Caught by the
+    /// `.onPreferenceChange` next to `duoRightGridBottomY`'s own,
+    /// rendered by `duoGuidesOverlay`.
+    @State private var duoGuideMarks: [DuoGuideMark] = []
     #endif
 
     /// This uses `.shared`, the same pattern `AssetKeyResolver` and
@@ -497,6 +502,7 @@ struct FeedView: View {
                 .opacity(hidesGlobalChrome ? 0 : 1)
                 .allowsHitTesting(!hidesGlobalChrome)
                 .accessibilityHidden(hidesGlobalChrome)
+                .duoGuideMark("chin", color: .mint)
             // Step 12: the book pose's (4/4W) right page — mounted once
             // here, never inside `FeedPageContent`, for the same reason
             // `ChinNavigation` is — see `DuoRightPage`'s own header
@@ -577,7 +583,7 @@ struct FeedView: View {
             // guides are never hidden behind real chrome — see
             // `duoGuidesOverlay`'s own comment.
             if Self.showsDuoGuides {
-                duoGuidesOverlay(duoLayout: duoLayout, safeAreaTop: safeAreaTop, containerSize: windowSize)
+                duoGuidesOverlay(duoLayout: duoLayout, safeAreaTop: safeAreaTop, safeAreaInsets: fullscreenSafeArea, containerSize: windowSize)
             }
             #endif
             }
@@ -594,6 +600,12 @@ struct FeedView: View {
             // so it is where `DuoRightGridBottomKey`'s bubbled-up value
             // is caught, once, and handed down from here.
             .onPreferenceChange(DuoRightGridBottomKey.self) { duoRightGridBottomY = $0 }
+            #if DEBUG
+            // Same catch point, same reasoning, for every
+            // `.duoGuideMark` reporting view — see `DuoGuideMarksKey`'s
+            // own comment.
+            .onPreferenceChange(DuoGuideMarksKey.self) { duoGuideMarks = $0 }
+            #endif
         }
         // Hides the status bar and home indicator while `hidesGlobalChrome`
         // (`isFullscreen`) is on, the same chrome-hide condition
@@ -1917,23 +1929,44 @@ struct FeedView: View {
     /// turn on from the in-app diagnostics toggle, which would put
     /// this on screen in an otherwise-normal DEBUG session. This must
     /// never appear by accident, and never in a shipped build.
-    private static let showsDuoGuides = ProcessInfo.processInfo.arguments.contains("-cloudfull-duo-guides")
+    ///
+    /// Now a plain alias for `DuoGuides.isOn` — the shared flag every
+    /// `.duoGuideMark` call site across the app reads too, so there is
+    /// one source of truth instead of two bare launch-argument checks
+    /// that could drift.
+    private static var showsDuoGuides: Bool { DuoGuides.isOn }
 
-    /// Four geometry sources this file's own Duo math is built from,
-    /// drawn directly instead of trusted: `.occlusion` (red),
-    /// `.division` (blue), the REAL system bar column — `barEdge`/
-    /// `barWidth` construct this directly; there is no reserved-region
-    /// API for it, and it does not exist at all on a bar-off pose
-    /// (green, closed-bar poses only), `railColumnRect` (orange —
-    /// every pose with a column, real bar or computed) — and the one
-    /// x value `ringCenteredColumnX` actually hands the rail and chin
-    /// (yellow, a 1pt line, the line this debugging round exists to
-    /// check against the ring's own real centre). Each draws its own
-    /// live numbers as a small label, so one screenshot is enough to
-    /// compare this file's own math against Apple's, with no second
-    /// source of truth to keep in sync by hand.
+    /// Geometry sources this file's own Duo math is built from, drawn
+    /// directly instead of trusted: `.occlusion` (red), `.division`
+    /// (blue), the REAL system bar column — `barEdge`/`barWidth`
+    /// construct this directly; there is no reserved-region API for
+    /// it, and it does not exist at all on a bar-off pose (green,
+    /// closed-bar poses only), `railColumnRect` (orange — every pose
+    /// with a column, real bar or computed) — and the one x value
+    /// `ringCenteredColumnX` actually hands the rail and chin (yellow,
+    /// a 1pt line). Each draws its own live numbers as a small label,
+    /// so one screenshot is enough to compare this file's own math
+    /// against Apple's, with no second source of truth to keep in
+    /// sync by hand.
+    ///
+    /// Owner, direct: "these lines are useful! can you add more so we
+    /// can use them as conversation references?" Extended with: a
+    /// faint 50pt reference grid (`duoReferenceGrid`), dashed
+    /// safe-area lines (`duoSafeAreaGuides`), every element a pose fix
+    /// has ever needed to talk about — the top row and the right
+    /// page's grid/deck/pager read straight off the same pure
+    /// `DuoLayout` functions the real views use (no per-page state
+    /// involved, so no risk of drawing a stale neighbour's copy); the
+    /// video stage, its caption, its scrubber, its iCloud ring, the
+    /// chin, and each rail item instead report their own REAL
+    /// rendered frame through `.duoGuideMark` (`DuoGuideMarksKey`'s
+    /// own comment) — a measurement, not a second derivation, the
+    /// exact distinction the pose 5 ring-x round needed the hard way —
+    /// and a small legend in the corner.
     @ViewBuilder
-    private func duoGuidesOverlay(duoLayout: DuoLayout, safeAreaTop: CGFloat, containerSize: CGSize) -> some View {
+    private func duoGuidesOverlay(duoLayout: DuoLayout, safeAreaTop: CGFloat, safeAreaInsets: EdgeInsets, containerSize: CGSize) -> some View {
+        duoReferenceGrid(containerSize: containerSize)
+        duoSafeAreaGuides(containerSize: containerSize, safeAreaInsets: safeAreaInsets)
         if let occlusion = duoLayout.occlusion {
             duoGuideRect(occlusion, color: .red, label: "occlusion \(duoGuideFormat(occlusion))")
         }
@@ -1961,6 +1994,54 @@ struct FeedView: View {
                 .position(x: x, y: 40)
                 .allowsHitTesting(false)
         }
+        // The Mute/Filter/Bin row — global, mounted once by
+        // `chromeColumn`, not per-page — read straight off
+        // `zigzagCenters` rather than marked: no per-page state is
+        // involved, so there is no risk of a stale second copy.
+        duoGuideZigzag(duoLayout.zigzagCenters(containerSize: containerSize, safeAreaTop: safeAreaTop), prefix: "top")
+        // The right page's grid rect — pure `DuoLayout`, drawn
+        // directly like `occlusion`/`division` above. Its date line
+        // and the grid's own tiles still report through
+        // `.duoGuideMark` (`DuoRightPage`), since this rect alone does
+        // not know where the real content laid out inside it.
+        if let rightPage = duoLayout.rightPage(containerSize: containerSize, safeAreaTop: safeAreaTop) {
+            duoGuideRect(rightPage, color: .pink, label: "grid \(duoGuideFormat(rightPage))")
+        }
+        // The laptop deck's four bands — same `bottom.height / 4`
+        // split `DuoLayout.laptopBand` (private) already uses
+        // internally, read back here for the outline alone; every
+        // laptop-deck function in `DuoLayout` already reads ITS OWN
+        // band straight from `laptopBottomRect`, so this is not a
+        // second description of their placement, only of the band
+        // lines themselves.
+        if let bottom = duoLayout.laptopBottomRect(containerSize: containerSize, safeAreaBottom: safeAreaInsets.bottom) {
+            let bandHeight = bottom.height / 4
+            let names = ["deck1", "deck2", "deck3", "deck4"]
+            ForEach(0..<4, id: \.self) { index in
+                let band = CGRect(x: bottom.minX, y: bottom.minY + CGFloat(index) * bandHeight,
+                                   width: bottom.width, height: bandHeight)
+                duoGuideRect(band, color: .gray, label: "\(names[index]) \(duoGuideFormat(band))")
+            }
+        }
+        if let pager = duoLayout.laptopPagerCenters(containerSize: containerSize, safeAreaBottom: safeAreaInsets.bottom) {
+            let prevRect = CGRect(x: pager.previous.x - pager.width / 2, y: pager.previous.y - pager.height / 2,
+                                   width: pager.width, height: pager.height)
+            let nextRect = CGRect(x: pager.next.x - pager.width / 2, y: pager.next.y - pager.height / 2,
+                                   width: pager.width, height: pager.height)
+            duoGuideRect(prevRect, color: .gray, label: "prev \(duoGuideFormat(prevRect))")
+            duoGuideRect(nextRect, color: .gray, label: "next \(duoGuideFormat(nextRect))")
+        }
+        // Every production view's own real rendered frame — the
+        // stage, its caption (all four per-pose variants share the
+        // one "caption" name), its scrubber, its iCloud ring, the
+        // chin, the grid's date line, and each rail item (both the
+        // vertical and the laptop's horizontal row share the one
+        // "rail.*" name) — reported through `.duoGuideMark` at each
+        // real call site. See `DuoGuideMarksKey`'s own comment.
+        ForEach(duoGuideMarks, id: \.id) { mark in
+            duoGuideRect(mark.rect, color: mark.color, label: "\(mark.id) \(duoGuideFormat(mark.rect))")
+        }
+        duoGuideLegend(duoLayout: duoLayout, containerSize: containerSize)
     }
 
     /// One guide's own outline + label, positioned the same way every
@@ -2004,6 +2085,176 @@ struct FeedView: View {
             return CGRect(x: 0, y: 0, width: duoLayout.barWidth, height: containerSize.height)
         case .trailing:
             return CGRect(x: containerSize.width - duoLayout.barWidth, y: 0, width: duoLayout.barWidth, height: containerSize.height)
+        }
+    }
+
+    /// `zigzagCenters`'/`laptopZigzagRow`'s three points, each drawn
+    /// as a small `Rail.hit`-sized box named `"\(prefix).mute"` etc —
+    /// the same order `chromeColumn`/`laptopDeckControls` already
+    /// position Mute, Filter, Bin in.
+    @ViewBuilder
+    private func duoGuideZigzag(_ centers: [CGPoint], prefix: String) -> some View {
+        if centers.count == 3 {
+            let names = ["mute", "filter", "bin"]
+            ForEach(0..<3, id: \.self) { index in
+                let rect = CGRect(x: centers[index].x - Rail.hit / 2, y: centers[index].y - Rail.hit / 2,
+                                   width: Rail.hit, height: Rail.hit)
+                duoGuideRect(rect, color: .teal, label: "\(prefix).\(names[index]) \(duoGuideFormat(rect))")
+            }
+        }
+    }
+
+    /// A faint 50pt reference grid — column letters (A, B, C…) along
+    /// the top edge, row numbers (1, 2, 3…) down the leading edge —
+    /// owner, direct: "these lines are useful! can you add more so we
+    /// can use them as conversation references?" Lets a conversation
+    /// say "move Bin to C2" instead of a raw point pair. Deliberately
+    /// the faintest marks in this whole overlay, so the real UI stays
+    /// readable underneath.
+    @ViewBuilder
+    private func duoReferenceGrid(containerSize: CGSize) -> some View {
+        let step: CGFloat = 50
+        let columns = max(0, Int(containerSize.width / step))
+        let rows = max(0, Int(containerSize.height / step))
+        ForEach(0...columns, id: \.self) { i in
+            let x = CGFloat(i) * step
+            Rectangle()
+                .fill(Color.white.opacity(0.08))
+                .frame(width: 1, height: containerSize.height)
+                .position(x: x, y: containerSize.height / 2)
+                .allowsHitTesting(false)
+            if i < columns {
+                Text(Self.duoGuideColumnLetter(i))
+                    .font(.system(size: 8, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.4))
+                    .position(x: x + step / 2, y: 6)
+                    .allowsHitTesting(false)
+            }
+        }
+        ForEach(0...rows, id: \.self) { i in
+            let y = CGFloat(i) * step
+            Rectangle()
+                .fill(Color.white.opacity(0.08))
+                .frame(width: containerSize.width, height: 1)
+                .position(x: containerSize.width / 2, y: y)
+                .allowsHitTesting(false)
+            if i < rows {
+                Text("\(i + 1)")
+                    .font(.system(size: 8, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.4))
+                    .position(x: 6, y: y + step / 2)
+                    .allowsHitTesting(false)
+            }
+        }
+    }
+
+    /// A, B, C, … Z, AA, AB, … — spreadsheet-style column naming, for
+    /// however wide a window this grid ever needs to label.
+    private static func duoGuideColumnLetter(_ index: Int) -> String {
+        var n = index
+        var letters = ""
+        repeat {
+            letters = String(UnicodeScalar(65 + n % 26)!) + letters
+            n = n / 26 - 1
+        } while n >= 0
+        return letters
+    }
+
+    /// The four safe-area insets, as dashed lines — "safe-area insets
+    /// as dashed lines (label 'safe T/L/B/R = n')," the owner's own
+    /// spec. `safeAreaInsets` is `fullscreenSafeArea`, the real
+    /// per-frame reading `railAlignedChinCenter` and every other
+    /// Duo-aware call in this file already uses — never a flat
+    /// constant.
+    @ViewBuilder
+    private func duoSafeAreaGuides(containerSize: CGSize, safeAreaInsets: EdgeInsets) -> some View {
+        if safeAreaInsets.top > 0 {
+            duoGuideDashedLine(horizontalAt: safeAreaInsets.top, containerSize: containerSize, label: "safe T=\(Int(safeAreaInsets.top))")
+        }
+        if safeAreaInsets.bottom > 0 {
+            duoGuideDashedLine(horizontalAt: containerSize.height - safeAreaInsets.bottom, containerSize: containerSize, label: "safe B=\(Int(safeAreaInsets.bottom))")
+        }
+        if safeAreaInsets.leading > 0 {
+            duoGuideDashedLine(verticalAt: safeAreaInsets.leading, containerSize: containerSize, label: "safe L=\(Int(safeAreaInsets.leading))")
+        }
+        if safeAreaInsets.trailing > 0 {
+            duoGuideDashedLine(verticalAt: containerSize.width - safeAreaInsets.trailing, containerSize: containerSize, label: "safe R=\(Int(safeAreaInsets.trailing))")
+        }
+    }
+
+    private func duoGuideDashedLine(horizontalAt y: CGFloat, containerSize: CGSize, label: String) -> some View {
+        ZStack(alignment: .topLeading) {
+            Path { path in
+                path.move(to: CGPoint(x: 0, y: y))
+                path.addLine(to: CGPoint(x: containerSize.width, y: y))
+            }
+            .stroke(Color.white.opacity(0.6), style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+            Text(label)
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .foregroundStyle(.white)
+                .padding(2)
+                .background(Color.black.opacity(0.6))
+                .fixedSize()
+                .position(x: 36, y: max(8, y - 8))
+        }
+        .allowsHitTesting(false)
+    }
+
+    private func duoGuideDashedLine(verticalAt x: CGFloat, containerSize: CGSize, label: String) -> some View {
+        ZStack(alignment: .topLeading) {
+            Path { path in
+                path.move(to: CGPoint(x: x, y: 0))
+                path.addLine(to: CGPoint(x: x, y: containerSize.height))
+            }
+            .stroke(Color.white.opacity(0.6), style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+            Text(label)
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .foregroundStyle(.white)
+                .padding(2)
+                .background(Color.black.opacity(0.6))
+                .fixedSize()
+                .position(x: x, y: 70)
+        }
+        .allowsHitTesting(false)
+    }
+
+    /// A small legend box, in the bottom-leading corner — colours,
+    /// the current pose, and the window size (e.g. "pose openTall
+    /// 669x951"), the owner's own spec.
+    private func duoGuideLegend(duoLayout: DuoLayout, containerSize: CGSize) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("pose \(duoLayout.pose.rawValue) \(Int(containerSize.width))×\(Int(containerSize.height))")
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .foregroundStyle(.white)
+                .padding(.bottom, 2)
+            duoGuideLegendRow(.red, "occlusion")
+            duoGuideLegendRow(.blue, "division")
+            duoGuideLegendRow(.green, "bar")
+            duoGuideLegendRow(.orange, "railColumn")
+            duoGuideLegendRow(.yellow, "ringX")
+            duoGuideLegendRow(.teal, "top row")
+            duoGuideLegendRow(.purple, "stage")
+            duoGuideLegendRow(.pink, "caption / grid")
+            duoGuideLegendRow(.mint, "chin")
+            duoGuideLegendRow(.cyan, "cloud ring")
+            duoGuideLegendRow(.indigo, "rail item")
+            duoGuideLegendRow(.gray, "deck / prev-next")
+            duoGuideLegendRow(.white, "safe area")
+        }
+        .padding(6)
+        .background(Color.black.opacity(0.75))
+        .cornerRadius(4)
+        .fixedSize()
+        .position(x: 78, y: containerSize.height - 110)
+        .allowsHitTesting(false)
+    }
+
+    private func duoGuideLegendRow(_ color: Color, _ name: String) -> some View {
+        HStack(spacing: 4) {
+            Rectangle().fill(color).frame(width: 8, height: 8)
+            Text(name)
+                .font(.system(size: 8, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.85))
         }
     }
     #endif
@@ -2912,6 +3163,7 @@ private struct FeedPageContent: View {
         .accessibilityHidden(hideForFullscreen || hidden)
         .accessibilityIdentifier(isActive && !hideForFullscreen && !hidden ? "feed_caption" : "")
         .accessibilityLabel(meta.placeText.map { "\($0). " + meta.voiceOverLabel } ?? meta.voiceOverLabel)
+        .duoGuideMark("caption", color: .pink, active: isActive)
     }
 
     // MARK: - Pose 3/4/4W caption (build 4)
@@ -2957,6 +3209,7 @@ private struct FeedPageContent: View {
             .accessibilityLabel(meta.placeText.map { "\($0). " + meta.voiceOverLabel } ?? meta.voiceOverLabel)
             .frame(width: rect.width, height: rect.height, alignment: .bottomLeading)
             .position(x: rect.midX, y: rect.midY)
+            .duoGuideMark("caption", color: .pink, active: isActive)
     }
 
     /// Pose 4/4W's own caption: the right page, "leading
@@ -3003,6 +3256,7 @@ private struct FeedPageContent: View {
                 .accessibilityLabel(meta.placeText.map { "\($0). " + meta.voiceOverLabel } ?? meta.voiceOverLabel)
                 .frame(width: rect.width, height: rect.height, alignment: .topLeading)
                 .position(x: rect.midX, y: rect.midY)
+                .duoGuideMark("caption", color: .pink, active: isActive)
         }
     }
 
@@ -3033,6 +3287,7 @@ private struct FeedPageContent: View {
                 .accessibilityLabel(meta.placeText.map { "\($0). " + meta.voiceOverLabel } ?? meta.voiceOverLabel)
                 .frame(width: rect.width, height: rect.height, alignment: .bottomLeading)
                 .position(x: rect.midX, y: rect.midY)
+                .duoGuideMark("caption", color: .pink, active: isActive)
         }
     }
 
@@ -3059,10 +3314,15 @@ private struct FeedPageContent: View {
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)
             likeButton(rail).position(row.centers[0])
+                .duoGuideMark("rail.keep", color: .indigo, active: isActive)
             shareButton.position(row.centers[1])
+                .duoGuideMark("rail.share", color: .indigo, active: isActive)
             albumButton.position(row.centers[2])
+                .duoGuideMark("rail.album", color: .indigo, active: isActive)
             shrinkButton(rail).position(row.centers[3])
+                .duoGuideMark("rail.shrink", color: .indigo, active: isActive)
             deleteButton(rail).position(row.centers[4])
+                .duoGuideMark("rail.delete", color: .indigo, active: isActive)
         }
     }
 
@@ -3154,10 +3414,15 @@ private struct FeedPageContent: View {
                 railCallout(calloutMessage)
             }
             likeButton(rail)
+                .duoGuideMark("rail.keep", color: .indigo, active: isActive)
             shareButton
+                .duoGuideMark("rail.share", color: .indigo, active: isActive)
             albumButton
+                .duoGuideMark("rail.album", color: .indigo, active: isActive)
             shrinkButton(rail)
+                .duoGuideMark("rail.shrink", color: .indigo, active: isActive)
             deleteButton(rail)
+                .duoGuideMark("rail.delete", color: .indigo, active: isActive)
         }
         .animation(.easeInOut(duration: 0.2), value: shareCoordinator.calloutMessage)
         .padding(.top, top)
