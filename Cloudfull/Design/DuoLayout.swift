@@ -984,11 +984,18 @@ struct DuoLayout {
 
     /// The Mute/Filter/Bin zigzag row, centred in band 1: the
     /// horizontal twin of `zigzagCenters`, levelled with gaps in
-    /// `laptopRailRow`'s own row instead of the vertical rail's — the
-    /// first 3 of that row's own 5 gaps, the same selection
-    /// `zigzagCenters` already makes among the vertical rail's own 4.
+    /// `laptopRailRow`'s own row instead of the vertical rail's.
     /// `FeedView.overlayControls` mounts this; see this group's own
     /// header comment for why it is global rather than per-page.
+    ///
+    /// Owner re-adapt (Opus wireframe compare): Mute and Filter stay on
+    /// the left, level with the rail's own first two gaps
+    /// (Keep–Share, Share–Album) — unchanged. Bin moves from the THIRD
+    /// gap to the fourth: `design/duo/duo_build_spec.md`'s own §2.6
+    /// numbers (`Mute x = 120, Filter x = 220, Bin x = 420`) put Bin a
+    /// full two rail pitches past Filter, not one — "pushed right,"
+    /// roughly over the Shrink/Delete side of the rail, not evenly
+    /// stepped through the row's own gaps in order.
     func laptopZigzagRow(containerSize: CGSize, safeAreaBottom: CGFloat) -> (mute: CGPoint, filter: CGPoint, bin: CGPoint, counterLeadingX: CGFloat)? {
         guard let bottom = laptopBottomRect(containerSize: containerSize, safeAreaBottom: safeAreaBottom),
               let row = laptopRailRow(containerSize: containerSize, safeAreaBottom: safeAreaBottom)
@@ -999,8 +1006,8 @@ struct DuoLayout {
         return (
             mute: CGPoint(x: gapX(0), y: y),
             filter: CGPoint(x: gapX(1), y: y),
-            bin: CGPoint(x: gapX(2), y: y),
-            counterLeadingX: gapX(2) + Rail.hit / 2 + 6
+            bin: CGPoint(x: gapX(3), y: y),
+            counterLeadingX: gapX(3) + Rail.hit / 2 + 6
         )
     }
 
