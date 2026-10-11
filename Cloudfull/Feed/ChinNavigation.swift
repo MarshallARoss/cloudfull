@@ -64,11 +64,25 @@ struct ChinNavigation: View {
     /// not an observed change on today's iPhones.
     let railBottom: CGFloat
 
-    /// When non-nil, the collapsed resting position: `.position(x:y:)`
-    /// to this point instead of the usual bottom-trailing anchor
-    /// (`.padding(.trailing, 12)` + `resolvedBottomPadding`), and
-    /// `collapsedHeight` becomes `Rail.hit` instead of the plain
+    /// When non-nil, the collapsed resting position: `resolvedTrailingPadding`/
+    /// `resolvedBottomPadding` solve for the `.padding(.trailing:)` +
+    /// `.padding(.bottom:)` pair that puts this view's own center on
+    /// this point, instead of the usual bottom-trailing anchor
+    /// (plain 12pt trailing + `resolvedBottomPadding`'s fixed anchor),
+    /// and `collapsedHeight` becomes `Rail.hit` instead of the plain
     /// default, to match a rail button's own size.
+    ///
+    /// Solved as padding on the ordinary view, not a separate
+    /// `.position()` on a separate branch: a `.position()` branch that
+    /// only applied while collapsed, falling through to the padding
+    /// branch the instant `isExpanded` turned true, swapped the view's
+    /// own identity mid-tap. SwiftUI had nothing to interpolate across
+    /// that swap, so the capsule jumped to its expanded spot instead of
+    /// growing out of the rail-aligned circle — main's morph lost.
+    /// Padding on one unconditional view keeps the identity stable
+    /// across the whole gesture, so the same `expand()`/`collapse()`
+    /// springs that animate every other host's trailing/bottom padding
+    /// now animate this one's too.
     ///
     /// `nil` everywhere but two `FeedView` poses: the open-tall rail
     /// column (bar off) — the owner's own review there, "the buttons
@@ -82,13 +96,13 @@ struct ChinNavigation: View {
     /// `FeedView.railAlignedChinCenter` for which point each pose
     /// supplies.
     ///
-    /// Read only while collapsed (see `body`): an EXPANDED capsule
-    /// centred this close to the trailing edge would grow mostly
-    /// off-screen, since `.position()` centres the whole shape
-    /// wherever its own frame currently is. A tap in this pose falls
-    /// back to the ordinary bottom-trailing anchor the moment
-    /// `isExpanded` turns true, the same anchor the capsule has always
-    /// expanded from — no new expanded layout was built for this pose.
+    /// Read only while collapsed (see `resolvedTrailingPadding`/
+    /// `resolvedBottomPadding`): an EXPANDED capsule centred this close
+    /// to the trailing edge would grow mostly off-screen. A tap in this
+    /// pose morphs back to the ordinary bottom-trailing anchor the
+    /// moment `isExpanded` turns true, the same anchor the capsule has
+    /// always expanded from — no new expanded layout was built for this
+    /// pose, only how the collapsed spot gets there.
     let railAlignedCenter: CGPoint?
 
     /// Step 7 (`design/duo/duo_build_spec.md` §3c, `design/duo/duo_audit_apple_checklist.md`
@@ -224,27 +238,45 @@ struct ChinNavigation: View {
                     // own comment. No capsule, no expand/collapse: three
                     // always-visible buttons, each a direct mode switch.
                     columnTabs(top: columnTabsTop, x: columnX)
-                } else if let railAlignedCenter, !isExpanded {
-                    // Pose 5 (the open-tall rail column): rests beside
-                    // the rail's own last item instead — see
-                    // `railAlignedCenter`'s own comment. Only while
-                    // collapsed; expanding falls through to the
-                    // ordinary anchor below, unchanged.
-                    switcher(containerWidth: proxy.size.width)
-                        .position(x: railAlignedCenter.x, y: railAlignedCenter.y)
-                        .duoGuideMark("chin", color: .mint)
                 } else {
+                    // One modifier chain for every other host and pose —
+                    // `railAlignedCenter`'s collapsed resting spot (the
+                    // open-tall rail column, the laptop rail row) and the
+                    // ordinary bottom-trailing anchor both resolve down
+                    // to trailing/bottom padding on the SAME view, never
+                    // a `.position()` on a separate branch.
+                    //
+                    // That used to be two mutually exclusive branches: a
+                    // `.position()` one while collapsed-and-rail-aligned,
+                    // and this padding one everywhere else, including the
+                    // moment that same control expands. Switching branches
+                    // mid-animation swaps the view's identity, so SwiftUI
+                    // had nothing to interpolate — the capsule jumped
+                    // straight to its expanded spot instead of growing out
+                    // of the rail-aligned circle, breaking main's morph.
+                    // Resolving both cases to padding on one unconditional
+                    // view keeps the identity stable, so `expand()`'s and
+                    // `collapse()`'s own springs (unchanged below) morph it
+                    // exactly as they do on a regular iPhone, from
+                    // whichever collapsed spot this pose uses.
                     switcher(containerWidth: proxy.size.width)
-                        // 12pt from the right edge, so the control does not
-                        // sit under the trash can. The bottom padding centers
-                        // the shape on `captionCenterFromBottom`, pulled
+                        // 12pt from the right edge on every host that has
+                        // no rail-aligned spot, or once expanded — the
+                        // control does not sit under the trash can. A
+                        // rail-aligned pose pulls this in instead while
+                        // collapsed, to its own measured spot — see
+                        // `resolvedTrailingPadding`.
+                        .padding(.trailing, resolvedTrailingPadding(containerWidth: proxy.size.width))
+                        // The bottom padding centers the shape on
+                        // `captionCenterFromBottom` by default — pulled
                         // closer to the page bottom only if the rail's own
-                        // reach this frame would otherwise sit under it —
-                        // see `resolvedBottomPadding`. The control's center
+                        // reach this frame would otherwise sit under it,
+                        // or replaced outright by a rail-aligned pose's
+                        // own spot while collapsed — see
+                        // `resolvedBottomPadding`. The control's center
                         // then aligns with the caption text in Videos and
                         // Photos, exactly as before, on every screen that
-                        // does not need the adjustment.
-                        .padding(.trailing, 12)
+                        // does not need either adjustment.
                         .padding(.bottom, resolvedBottomPadding(containerHeight: proxy.size.height))
                         .duoGuideMark("chin", color: .mint)
                 }
@@ -319,13 +351,37 @@ struct ChinNavigation: View {
     /// does not already guarantee.
     private static let railGap: CGFloat = 8
 
+    /// This control's own trailing padding — the distance between its
+    /// own trailing edge and the page's.
+    ///
+    /// `railAlignedCenter == nil`, or expanded: the plain 12pt every
+    /// host has always used, unconditionally — pixel-identical to what
+    /// this control has always done.
+    ///
+    /// `railAlignedCenter != nil` and collapsed: solved for the
+    /// trailing padding that puts this view's own center — the ZStack
+    /// aligns it `.bottomTrailing`, `collapsedTapTarget` wide — exactly
+    /// on `railAlignedCenter.x`, the same point `.position(x:,y:)` used
+    /// to be handed directly. Expressing the pose's own spot as padding
+    /// on the ordinary view, instead of a separate `.position()` on a
+    /// separate branch, is what lets `expand()`/`collapse()`'s springs
+    /// (unchanged) animate the move — see `body`'s own comment.
+    private func resolvedTrailingPadding(containerWidth: CGFloat) -> CGFloat {
+        guard let railAlignedCenter, !isExpanded else { return 12 }
+        return containerWidth - railAlignedCenter.x - collapsedTapTarget / 2
+    }
+
     /// This control's own bottom padding — the distance between its
     /// own bottom edge and the page's.
     ///
-    /// `railBottom <= 0` (the default, every host but `FeedView`'s
-    /// Videos mode): returns the plain, fixed anchor unconditionally,
-    /// with no dependence on `containerHeight` at all — pixel-identical
-    /// to what this control has always done.
+    /// `railAlignedCenter != nil` and collapsed: solved the same way
+    /// `resolvedTrailingPadding` solves for `x`, this time for
+    /// `railAlignedCenter.y` — see that function's own comment.
+    ///
+    /// Otherwise, `railBottom <= 0` (the default, every host but
+    /// `FeedView`'s Videos mode): returns the plain, fixed anchor
+    /// unconditionally, with no dependence on `containerHeight` at all
+    /// — pixel-identical to what this control has always done.
     ///
     /// `railBottom > 0`: that plain anchor still wins whenever it
     /// already clears the rail's own reach by `railGap` or more — the
@@ -337,6 +393,9 @@ struct ChinNavigation: View {
     /// control's own anchor down toward the page bottom instead,
     /// capped at 0 (flush with the bottom edge, never past it).
     private func resolvedBottomPadding(containerHeight: CGFloat) -> CGFloat {
+        if let railAlignedCenter, !isExpanded {
+            return containerHeight - railAlignedCenter.y - collapsedTapTarget / 2
+        }
         let fixedAnchor = StageGeometry.captionCenterFromBottom - currentHeight / 2
         guard railBottom > 0 else { return fixedAnchor }
         let railClearFromBottom = containerHeight - railBottom
