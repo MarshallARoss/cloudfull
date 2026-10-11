@@ -232,6 +232,7 @@ struct ChinNavigation: View {
                     // ordinary anchor below, unchanged.
                     switcher(containerWidth: proxy.size.width)
                         .position(x: railAlignedCenter.x, y: railAlignedCenter.y)
+                        .duoGuideMark("chin", color: .mint)
                 } else {
                     switcher(containerWidth: proxy.size.width)
                         // 12pt from the right edge, so the control does not
@@ -245,6 +246,7 @@ struct ChinNavigation: View {
                         // does not need the adjustment.
                         .padding(.trailing, 12)
                         .padding(.bottom, resolvedBottomPadding(containerHeight: proxy.size.height))
+                        .duoGuideMark("chin", color: .mint)
                 }
             }
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: .bottomTrailing)

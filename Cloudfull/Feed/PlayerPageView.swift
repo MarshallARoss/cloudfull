@@ -1444,6 +1444,13 @@ struct PlayerPageView: View {
                 .allowsHitTesting(false)
                 .accessibilityLabel("Loading video")
                 .accessibilityHidden(!showSpinner)
+                // Marked HERE, before the full-bleed
+                // `.frame(maxWidth: .infinity, maxHeight: .infinity,
+                // alignment: .bottomLeading)` a few lines down —
+                // marking after that frame reported the WHOLE stage
+                // (the same mistake the chin's own outer frame made),
+                // not the small ring itself.
+                .duoGuideMark("cloud", color: .cyan, active: isActive && !usesFixedRingPoint)
                 // `feed_spinner` lives on a marker sibling below, not on
                 // the ring itself. An indeterminate spinner never surfaces
                 // an identifier in the accessibility tree, even with
@@ -1505,7 +1512,6 @@ struct PlayerPageView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
                 .padding(.leading, isFullscreen ? fullscreenSafeArea.leading + 10 : 10)
                 .padding(.bottom, isFullscreen ? fullscreenSafeArea.bottom + 10 : loaderLift(bottomBand: bottomBand))
-                .duoGuideMark("cloud", color: .cyan, active: isActive && !usesFixedRingPoint)
                 // `spinnerRevealKey` folds `isLoading` and `isActive` into
                 // the task's own identity. So SwiftUI's `.task(id:)`
                 // cancel-and-restart cancels a pending reveal the instant

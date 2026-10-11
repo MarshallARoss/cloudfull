@@ -502,7 +502,14 @@ struct FeedView: View {
                 .opacity(hidesGlobalChrome ? 0 : 1)
                 .allowsHitTesting(!hidesGlobalChrome)
                 .accessibilityHidden(hidesGlobalChrome)
-                .duoGuideMark("chin", color: .mint)
+                // "chin" is marked INSIDE `ChinNavigation`, on the
+                // small `switcher(...)` view itself, not here — this
+                // call site's own frame is the whole window (its
+                // `GeometryReader`/`ZStack(alignment: .bottomTrailing)`
+                // own body), not the visible button. Owner re-adapt
+                // (pose pass): the first round marked this coarser
+                // outer frame; tightened once the owner pointed out
+                // the box was far bigger than the circle on screen.
             // Step 12: the book pose's (4/4W) right page — mounted once
             // here, never inside `FeedPageContent`, for the same reason
             // `ChinNavigation` is — see `DuoRightPage`'s own header
@@ -2055,6 +2062,33 @@ struct FeedView: View {
         ZStack(alignment: .topLeading) {
             Rectangle()
                 .stroke(color, lineWidth: 1)
+            // Owner re-adapt (pose pass): a small (icon-sized) box's
+            // own label used to `.fixedSize()`, the same as every
+            // other box here — fine for a wide box with clear room
+            // around it, but a tiny 40×40 top-row/rail-item box sits
+            // close enough to its neighbours that the UNCLIPPED label
+            // ran straight across the next box's own label. Clipping
+            // to the box's own width ONLY below this 60pt threshold
+            // keeps every other, roomier label exactly as it was.
+            duoGuideLabel(label, color: color, maxWidth: rect.width > 0 && rect.width < 60 ? max(rect.width, 20) : nil)
+        }
+        .frame(width: max(0, rect.width), height: max(0, rect.height), alignment: .topLeading)
+        .position(x: rect.midX, y: rect.midY)
+        .allowsHitTesting(false)
+    }
+
+    @ViewBuilder
+    private func duoGuideLabel(_ label: String, color: Color, maxWidth: CGFloat?) -> some View {
+        if let maxWidth {
+            Text(label)
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(color)
+                .padding(2)
+                .background(Color.black.opacity(0.6))
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: maxWidth, alignment: .leading)
+        } else {
             Text(label)
                 .font(.system(size: 9, weight: .bold))
                 .foregroundStyle(color)
@@ -2062,9 +2096,6 @@ struct FeedView: View {
                 .background(Color.black.opacity(0.6))
                 .fixedSize()
         }
-        .frame(width: max(0, rect.width), height: max(0, rect.height), alignment: .topLeading)
-        .position(x: rect.midX, y: rect.midY)
-        .allowsHitTesting(false)
     }
 
     private func duoGuideFormat(_ rect: CGRect) -> String {
@@ -2218,9 +2249,15 @@ struct FeedView: View {
         .allowsHitTesting(false)
     }
 
-    /// A small legend box, in the bottom-leading corner — colours,
-    /// the current pose, and the window size (e.g. "pose openTall
-    /// 669x951"), the owner's own spec.
+    /// A small legend box — colours, the current pose, and the
+    /// window size (e.g. "pose openTall 669x951"), the owner's own
+    /// spec. Top-leading, not bottom-leading: the owner reported the
+    /// legend sitting on top of pose 3's own caption at the bottom.
+    /// Every caption variant in this file anchors bottom or
+    /// bottom-leading (`captionZone`/`duoOpenWideCaption`/
+    /// `duoBookCaption`/`duoLaptopCaption`), and the rail/chin/top row
+    /// all sit on the TRAILING edge or at the very bottom, so
+    /// top-leading is the one corner no real pose puts content in.
     private func duoGuideLegend(duoLayout: DuoLayout, containerSize: CGSize) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text("pose \(duoLayout.pose.rawValue) \(Int(containerSize.width))×\(Int(containerSize.height))")
@@ -2245,7 +2282,7 @@ struct FeedView: View {
         .background(Color.black.opacity(0.75))
         .cornerRadius(4)
         .fixedSize()
-        .position(x: 78, y: containerSize.height - 110)
+        .position(x: 85, y: 130)
         .allowsHitTesting(false)
     }
 
