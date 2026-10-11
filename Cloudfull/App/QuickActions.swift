@@ -9,6 +9,7 @@
 import SwiftUI
 import UIKit
 import UserNotifications
+import os
 
 /// A long press on the home-screen icon opens Cloudfull directly to Photos
 /// or Videos. A setting in Settings sets which mode is the default.
@@ -141,9 +142,41 @@ final class CloudfullSceneDelegate: NSObject, UIWindowSceneDelegate {
     /// (`application(_:supportedInterfaceOrientationsFor:)`) this is
     /// easy to confuse it with. Verified by compiling a conforming type
     /// against the real SDK, not assumed from the header's prose alone.
+    /// Owner bug (closed + a tall video still rotating to landscape):
+    /// `hinge-closed-0` at the moment of the bad rotation rules out
+    /// the `.partial`-hinge pass-through this file's own
+    /// `RotationPolicy` comment blamed first. Before guessing again,
+    /// this logs what the system is ACTUALLY asking and what this
+    /// method ACTUALLY answers, every single call — not only the
+    /// SwiftUI-state-driven snapshots `PlayerPageView.logRotationPose`
+    /// already takes. Same `"Rotation"` log category, so
+    /// `xcrun simctl spawn <UDID> log stream --predicate 'subsystem ==
+    /// "com.cloudfull.app" and category == "Rotation"'` interleaves
+    /// both. `windowScene.session.persistentIdentifier` and the
+    /// screen's own size are logged specifically to answer whether
+    /// the closed/outer display is a SEPARATE `UIWindowScene` this
+    /// override is never consulted for — if the outer display's own
+    /// rotation is never preceded by a `mask_` line here, that is the
+    /// root cause, not anything `allowsLandscape` itself computes.
     func supportedInterfaceOrientations(for windowScene: UIWindowScene) -> UIInterfaceOrientationMask {
-        RotationPolicy.shared.allowsLandscape ? .allButUpsideDown : .portrait
+        let allowsLandscape = RotationPolicy.shared.allowsLandscape
+        let mask: UIInterfaceOrientationMask = allowsLandscape ? .allButUpsideDown : .portrait
+        #if DEBUG
+        if DiagnosticsGate.isOn("-cloudfull-log-rotation") {
+            let screenSize = windowScene.screen.bounds.size
+            let message = "mask_\(allowsLandscape ? "allButUpsideDown" : "portrait")"
+                + "_allowsLandscape-\(allowsLandscape)_scene-\(windowScene.session.persistentIdentifier)"
+                + "_screen-\(Int(screenSize.width))x\(Int(screenSize.height))"
+            Self.rotationMaskLog.notice("\(message, privacy: .public)")
+            DiagnosticsLog.shared.log("Rotation", message)
+        }
+        #endif
+        return mask
     }
+
+    #if DEBUG
+    private static let rotationMaskLog = Logger(subsystem: "com.cloudfull.app", category: "Rotation")
+    #endif
 
     func sceneDidBecomeActive(_ scene: UIScene) {
         QuickActions.install()

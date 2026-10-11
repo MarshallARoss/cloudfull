@@ -501,6 +501,14 @@ struct PlayerPageView: View {
     /// either correction, so a future containment-filter false negative
     /// (the book-as-tent bug this round fixed) shows both readings side
     /// by side instead of only the filtered one.
+    /// Round 3 (owner bug, closed + a tall video still rotating):
+    /// `allowsLandscape`/`aspect`/`wide` added, so this page's own
+    /// `_hinge-closed-0_` line (the moment the bug reproduced) can be
+    /// read against `RotationPolicy`'s own answer at the same moment
+    /// — `aspect`/`wide` read `videoAspectRatio`/`videoIsLandscape`
+    /// directly, so a stale aspect from the PREVIOUS page's own video
+    /// shows up here as a mismatch against what the centred page
+    /// actually holds, rather than staying a guess.
     private func logRotationPose() {
         guard isActive, DiagnosticsGate.isOn("-cloudfull-log-rotation") else { return }
         let hSC = horizontalSizeClass.map { "\($0)" } ?? "nil"
@@ -509,6 +517,7 @@ struct PlayerPageView: View {
         let message = "rotation_\(windowOrientationProbeName)_hSC-\(hSC)_vSC-\(vSC)_\(Int(windowSize.width))x\(Int(windowSize.height))"
             + "_pose-\(duoLayout.pose.rawValue)_div-\(rectProbe(duoLayout.division))_occ-\(rectProbe(duoLayout.occlusion))_\(hingeProbe)"
             + "_rawdiv-\(rectProbe(duoLayout.debugRawDivision))_insets-\(Int(insets.top)),\(Int(insets.leading)),\(Int(insets.bottom)),\(Int(insets.trailing))"
+            + "_allowsLandscape-\(RotationPolicy.shared.allowsLandscape)_aspect-\(String(format: "%.3f", videoAspectRatio))_wide-\(videoIsLandscape)"
         Self.rotationLog.notice("\(message, privacy: .public)")
         DiagnosticsLog.shared.log("Rotation", message)
     }
