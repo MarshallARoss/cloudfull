@@ -63,7 +63,7 @@ struct DuoRightPage: View {
     /// `rect`'s own top — the 80pt bottom clearance the first build
     /// reserved here for `FeedPageContent.duoBookCaption`'s own
     /// screen-bottom anchor is gone too, now that the caption follows
-    /// the grid's own live bottom instead (`DuoRightPageMetrics`,
+    /// the grid's own live bottom instead (`DuoRightGridBottomKey`,
     /// below) rather than sitting at a fixed spot this view would
     /// otherwise have to dodge.
     private var contentRect: CGRect { rect }
@@ -79,7 +79,6 @@ struct DuoRightPage: View {
         .position(x: contentRect.midX, y: contentRect.midY)
         .task(id: currentAssetID) { await reload() }
         .onChange(of: trashService.count) { _, _ in Task { await reload() } }
-        .onDisappear { DuoRightPageMetrics.shared.gridBottomY = nil }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("duo_right_page")
     }
@@ -103,6 +102,17 @@ struct DuoRightPage: View {
     /// 3×3, "tile width `(pageWidth − 40 − 2·10)/3`, height ×1.55, gap
     /// 10" (§3b). `pageWidth` is `contentRect.width`, measured live —
     /// never a fixed page size.
+    ///
+    /// Owner re-adapt (pose pass, book pose, second round): the
+    /// `GeometryReader` background reports this grid's own real,
+    /// just-laid-out bottom edge through `DuoRightGridBottomKey` —
+    /// see that type's own comment. Replaces a formula that
+    /// recomputed the same shape (`rows`/`tileHeight`/`gridHeight`)
+    /// by hand from `result.assets.count` alone, published once from
+    /// `reload()` after its own async query finished: two
+    /// descriptions of the same layout, one of them always a frame or
+    /// more behind whatever SwiftUI actually drew. Reading the real
+    /// layout directly removes the second description entirely.
     private func sameDayGrid(_ result: DuoContextQueries.SameDayResult, dayKey: Date) -> some View {
         let tileWidth = Self.tileWidth(forContentWidth: contentRect.width)
         let tileSize = CGSize(width: tileWidth, height: tileWidth * Self.tileAspect)
@@ -115,6 +125,11 @@ struct DuoRightPage: View {
                 .accessibilityIdentifier("duo_right_tile_\(asset.id)")
             }
         }
+        .background(
+            GeometryReader { proxy in
+                Color.clear.preference(key: DuoRightGridBottomKey.self, value: proxy.frame(in: .global).maxY)
+            }
+        )
     }
 
     /// "Same day · Jun 8", or "Same week · Jun 3–9" once
@@ -128,22 +143,16 @@ struct DuoRightPage: View {
         return "Same day · \(Self.monthDayFormatter.string(from: result.referenceDate))"
     }
 
-    // MARK: - Grid geometry (shared with `DuoRightPageMetrics`)
+    // MARK: - Grid geometry
 
-    /// `tileWidth`'s own formula, pulled out so both the grid itself
-    /// and the grid-bottom publish below (which needs it before any
-    /// tile has actually laid out) read one definition.
+    /// `tileWidth`'s own formula — the grid's own `sameDayGrid` is
+    /// this type's one caller now that the grid-bottom publish reads
+    /// the real laid-out grid instead of recomputing its shape by
+    /// hand (see `DuoRightGridBottomKey`).
     private static func tileWidth(forContentWidth width: CGFloat) -> CGFloat {
         max(0, (width - 40 - 2 * 10) / 3)
     }
     private static let tileAspect: CGFloat = 1.55
-    /// The header line's own height plus the `VStack(spacing: 10)`
-    /// gap above the grid — hand-measured (13pt semibold's own line
-    /// height, about 18pt, plus that 10pt spacing), the same
-    /// "measured/wireframe, no API" category `DuoLayout`'s own pose-
-    /// table constants already use. Flagged for the owner's own look
-    /// at the sim, same as those.
-    private static let headerBlockHeight: CGFloat = 28
 
     // MARK: - Load
 
@@ -175,7 +184,6 @@ struct DuoRightPage: View {
             sameDay = nil
             dayKey = nil
             isLoading = false
-            DuoRightPageMetrics.shared.gridBottomY = nil
             return
         }
         let resolvedSameDay = await DuoContextQueries.sameDay(around: date, excluding: assetID)
@@ -183,50 +191,32 @@ struct DuoRightPage: View {
         sameDay = resolvedSameDay
         dayKey = Calendar.current.startOfDay(for: date)
         isLoading = false
-        publishGridBottom(assetCount: resolvedSameDay.assets.count)
-    }
-
-    /// Owner re-adapt (pose pass): the date + "4K · 0:04 · 14 KB"
-    /// caption used to sit fixed at the screen's own bottom edge;
-    /// the wireframe puts it directly UNDER the grid instead, "small
-    /// gap, e.g. 16pt." `FeedPageContent.duoBookCaption` is a
-    /// per-page view with no direct binding to this, the one
-    /// globally-mounted right page, so this publishes the grid's own
-    /// live bottom edge (window space, the same space `rect` itself
-    /// is in) through `DuoRightPageMetrics.shared` — the same
-    /// cross-view sharing shape `AssetKeyResolver.shared`/
-    /// `ScrollPhaseGate.shared` already use elsewhere in this app for
-    /// exactly this kind of structurally-separate-view state.
-    ///
-    /// Follows a 2-row or 3-row grid (or fewer): `rows` is `0` for an
-    /// empty result (no grid at all, caption falls back), else
-    /// `⌈assetCount / 3⌉`.
-    private func publishGridBottom(assetCount: Int) {
-        guard assetCount > 0 else {
-            DuoRightPageMetrics.shared.gridBottomY = nil
-            return
-        }
-        let rows = Int((Double(assetCount) / 3.0).rounded(.up))
-        let tileWidth = Self.tileWidth(forContentWidth: contentRect.width)
-        let tileHeight = tileWidth * Self.tileAspect
-        let gridHeight = CGFloat(rows) * tileHeight + CGFloat(max(0, rows - 1)) * 10
-        let gridTop = contentRect.minY + 16 + Self.headerBlockHeight
-        DuoRightPageMetrics.shared.gridBottomY = gridTop + gridHeight
     }
 }
 
-/// See `DuoRightPage.publishGridBottom`'s own comment: the grid's live
-/// bottom edge, shared from the one globally-mounted `DuoRightPage` to
-/// every per-page `FeedPageContent.duoBookCaption` that needs it.
-@MainActor
-final class DuoRightPageMetrics: ObservableObject {
-    static let shared = DuoRightPageMetrics()
-    /// Window-space y, or `nil` when there is no loaded grid to anchor
-    /// against (not yet loaded, no active right page, or an empty
-    /// result) — `duoBookCaption` falls back to its own old
-    /// screen-bottom anchor in that case.
-    @Published var gridBottomY: CGFloat?
-    private init() {}
+/// `FeedView.duoBookCaption`'s own anchor — the book pose's (4/4W)
+/// right-page grid's own real bottom edge, in `.global` space, reported
+/// by a `GeometryReader` background on `DuoRightPage.sameDayGrid` (see
+/// that function's own comment) and bubbled up to `FeedView`, the
+/// nearest ancestor both `DuoRightPage` and the pager (which mounts
+/// `FeedPageContent`) sit inside as siblings.
+///
+/// `reduce` keeps the latest reported value — there is only ever one
+/// `DuoRightPage` mounted at a time, so in practice there is only ever
+/// one contributor. Resets to `defaultValue` (`nil`) on its own,
+/// automatically, whenever `DuoRightPage` (or its grid specifically —
+/// the loading/empty branches of `sameDayTab` mount no `GeometryReader`
+/// of their own) is not on screen to report a value: SwiftUI recomputes
+/// a preference's aggregate from only the views currently in the tree
+/// on every pass, so there is no "last known value" to go stale, unlike
+/// the async singleton this replaced (`DuoRightPageMetrics`, now
+/// deleted) — see `FeedView.duoRightGridBottomY`'s own comment for the
+/// bug that forced the replacement.
+struct DuoRightGridBottomKey: PreferenceKey {
+    static let defaultValue: CGFloat? = nil
+    static func reduce(value: inout CGFloat?, nextValue: () -> CGFloat?) {
+        if let next = nextValue() { value = next }
+    }
 }
 
 // MARK: - Same day tile

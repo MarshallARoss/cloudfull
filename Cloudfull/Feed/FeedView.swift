@@ -99,6 +99,29 @@ struct FeedView: View {
     /// `DeviceHinge.angle.degrees` alongside `hingeStatus`, read by
     /// `logRotationPose`'s DEBUG probe only.
     @State private var hingeDegrees: Double?
+    /// Owner re-adapt (pose pass, book pose, second round): the book
+    /// pose's (4/4W) right-page grid's own real bottom edge, in
+    /// window space — replaces `DuoRightPageMetrics.shared`, an async
+    /// singleton `DuoRightPage.reload()` used to publish by hand after
+    /// its own PhotoKit query finished. That publish could lag or race
+    /// a page change (a new `DuoRightPage` mounts, a stale one's
+    /// `.onDisappear` clears the value, or the query simply has not
+    /// finished yet), which left `FeedPageContent.duoBookCaption`
+    /// reading a stale or `nil` value and falling back to its own old
+    /// screen-bottom anchor — the owner's own "sits at the bottom, not
+    /// under the grid" report.
+    ///
+    /// This value instead comes from `DuoRightGridBottomKey`, a
+    /// `PreferenceKey` `DuoRightPage`'s own grid reports from a
+    /// `GeometryReader` background — SwiftUI's own layout pass, not an
+    /// async callback, so there is nothing for it to race: whatever
+    /// the grid is ACTUALLY showing right now is what this reads,
+    /// every frame, including instantly on the first one. Caught once
+    /// here, on the ZStack both `DuoRightPage` and the pager (which
+    /// mounts `FeedPageContent`) are siblings inside, then threaded
+    /// down to each `FeedPageContent` the same way `safeAreaBottom`
+    /// already is.
+    @State private var duoRightGridBottomY: CGFloat?
     /// Both read by `DuoLayout.classify` (Decision B,
     /// `design/duo/duo_audit_apple_checklist.md` §4): neither axis alone
     /// identifies a display — a 17 Pro resized large enough in iPhone
@@ -516,6 +539,12 @@ struct FeedView: View {
             // `pose` never changes (always `.regularPhone`), so this is a
             // no-op there: zero risk to the "byte-for-byte" promise.
             .animation(.default, value: duoLayout.pose)
+            // See `duoRightGridBottomY`'s own comment. This ZStack is
+            // the nearest ancestor both `DuoRightPage` and the pager
+            // (which mounts `FeedPageContent`) sit inside as siblings,
+            // so it is where `DuoRightGridBottomKey`'s bubbled-up value
+            // is caught, once, and handed down from here.
+            .onPreferenceChange(DuoRightGridBottomKey.self) { duoRightGridBottomY = $0 }
         }
         // Hides the status bar and home indicator while `hidesGlobalChrome`
         // (`isFullscreen`) is on, the same chrome-hide condition
@@ -802,6 +831,7 @@ struct FeedView: View {
                             safeAreaTop: safeAreaTop,
                             safeAreaBottom: fullscreenSafeArea.bottom,
                             duoLayout: duoLayout,
+                            duoRightGridBottomY: duoRightGridBottomY,
                             keepRequestNonce: doubleTapKeepNonces[entry.id] ?? 0
                         )
                         .opacity(isFullscreen ? 0 : 1)
@@ -2246,6 +2276,13 @@ private struct FeedPageContent: View {
     /// parameter existed. See `DuoLayout.railColumnRect` and this
     /// file's `body`/`actionRailColumn` for how it is used.
     let duoLayout: DuoLayout
+    /// The book pose's (4/4W) right-page grid's own real bottom edge,
+    /// threaded the same way `safeAreaTop` is — see `FeedView
+    /// .duoRightGridBottomY`'s own comment. Read only by
+    /// `duoBookCaption`. `nil` on every pose but book, and on book
+    /// itself until `DuoRightPage`'s own grid has laid out at least
+    /// once this launch.
+    let duoRightGridBottomY: CGFloat?
     /// Bumped by `FeedView` on every double tap of this page's video — see
     /// `FeedView.doubleTapKeepNonces`. Watched below; each bump is one
     /// `keepFromDoubleTap()`.
@@ -2258,12 +2295,6 @@ private struct FeedPageContent: View {
     /// `@State rail` react to a like, unlike, queue, restore, empty, or
     /// resolution event that happened on a different page.
     @ObservedObject private var resolver = AssetKeyResolver.shared
-
-    /// Owner re-adapt (pose pass): `duoBookCaption`'s own anchor —
-    /// `DuoRightPage`'s own live grid-bottom publisher. See
-    /// `DuoRightPageMetrics`'s own comment for why a per-page view
-    /// needs this rather than a direct binding.
-    @ObservedObject private var duoRightPageMetrics = DuoRightPageMetrics.shared
 
     /// Bumped only when this page's own like turns on. Drives this page's
     /// heart `.symbolEffect(.bounce)`. Local to the page rather than
@@ -2791,18 +2822,25 @@ private struct FeedPageContent: View {
     /// Owner re-adapt (pose pass): was bottom-anchored at the screen's
     /// own bottom edge ("bottom 30"); the wireframe puts it directly
     /// UNDER the grid instead, a small gap below the last tile row.
-    /// `duoRightPageMetrics.gridBottomY` is that live edge, published
-    /// by the one globally-mounted `DuoRightPage` — see
-    /// `DuoRightPageMetrics`'s own comment. Falls back to the old
-    /// screen-bottom anchor when nothing has published yet (first
-    /// frame, or the grid came back empty).
+    ///
+    /// Owner re-adapt (pose pass, second round): `duoRightGridBottomY`
+    /// — see `FeedView`'s own property of that name — replaces an
+    /// earlier version that read an async singleton `DuoRightPage
+    /// .reload()` published by hand; that value could lag or race a
+    /// page change and leave this reading stale data, the owner's own
+    /// "sits at the bottom, not under the grid" report. This one comes
+    /// from a `GeometryReader`/`PreferenceKey` pair instead — always
+    /// whatever `DuoRightPage`'s own grid is actually showing, this
+    /// frame, never stale. Falls back to the old screen-bottom anchor
+    /// only when nothing has ever laid out yet (this launch's first
+    /// frame), or the grid came back empty.
     @ViewBuilder
     private func duoBookCaption(containerSize: CGSize, safeAreaTop: CGFloat) -> some View {
         if let rightPage = duoLayout.rightPage(containerSize: containerSize, safeAreaTop: safeAreaTop) {
             let leading = rightPage.minX + 20
             let width = max(0, rightPage.maxX - leading)
             let captionHeight: CGFloat = 40
-            let top = duoRightPageMetrics.gridBottomY.map { $0 + 16 } ?? max(0, containerSize.height - 30 - captionHeight)
+            let top = duoRightGridBottomY.map { $0 + 16 } ?? max(0, containerSize.height - 30 - captionHeight)
             let rect = CGRect(x: leading, y: top, width: width, height: captionHeight)
             captionTexts
                 .feedShadow()
