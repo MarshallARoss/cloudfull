@@ -1237,14 +1237,25 @@ struct PlayerPageView: View {
             // give the two branches different types. SwiftUI would then
             // build a new `AVPlayerLayer` on every flip. The old one
             // detaches while the new one attaches on another thread.
-            PlayerLayerView(player: holder.player, onReadyForDisplay: { isReadyForDisplay = $0 }, attach: playerLayerMounted && !scrollGate.isScrolling)
+            //
+            // Owner re-adapt (Opus wireframe compare, pose 1H): "wide
+            // video FILLS the screen, as today" — `fillsScreen` passes
+            // `isFullscreen` straight through, so this crops edge to
+            // edge instead of letterboxing whenever the rotation hack
+            // is on, on a regular iPhone exactly as it already did on
+            // the Duo's own closed-sideways case. `PlayerLayerView`
+            // itself stays one stable instance across the flip (see
+            // the comment just above); only its own `videoGravity`
+            // updates reactively — see that type's own `updateUIView`.
+            PlayerLayerView(player: holder.player, onReadyForDisplay: { isReadyForDisplay = $0 }, attach: playerLayerMounted && !scrollGate.isScrolling, fillsScreen: isFullscreen)
 
             // Sits directly above `PlayerLayerView`, so it covers the
             // layer's own black while nothing has decoded yet. It fades
             // out the instant `isReadyForDisplay` reports a real frame is
             // on screen.
-            // `.aspectFit` matches `PlayerLayerView`'s `.resizeAspect`
-            // gravity, so the poster never crops relative to the video it
+            // `contentMode` matches `PlayerLayerView`'s own gravity —
+            // `.fill` in fullscreen, `.fit` otherwise — so the poster
+            // never crops (or fails to crop) relative to the video it
             // stands in for.
             //
             // `poster`, written by `deliverPoster()`, drives every
@@ -1267,8 +1278,9 @@ struct PlayerPageView: View {
                    !isReadyForDisplay {
                     Image(uiImage: displayPoster)
                         .resizable()
-                        .aspectRatio(contentMode: .fit)
+                        .aspectRatio(contentMode: isFullscreen ? .fill : .fit)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .clipped()
                         .transition(.opacity)
                         .allowsHitTesting(false)
                         .accessibilityHidden(true)
@@ -2716,8 +2728,8 @@ private final class PlayerHolder: ObservableObject {
 }
 
 /// A thin `UIViewRepresentable` around an `AVPlayerLayer`-backed view,
-/// aspect-fit on black, with no default AVKit controls to interfere with
-/// the app's own tap-to-mute gesture.
+/// aspect-fit on black by default, with no default AVKit controls to
+/// interfere with the app's own tap-to-mute gesture.
 private struct PlayerLayerView: UIViewRepresentable {
     let player: AVPlayer
     /// Forwards the layer's own `isReadyForDisplay` up to
@@ -2728,11 +2740,23 @@ private struct PlayerLayerView: UIViewRepresentable {
     /// window. Passed as a plain input, so SwiftUI re-runs `updateUIView`
     /// when it flips. False disconnects the layer from the player.
     let attach: Bool
+    /// `PlayerPageView.isFullscreen`, passed straight through — Opus
+    /// wireframe compare, pose 1H: "wide video FILLS the screen, as
+    /// today." `.resizeAspectFill` crops edge to edge instead of
+    /// letterboxing whenever the rotation hack is on, the same whether
+    /// that is a regular iPhone turned landscape or the Duo's own
+    /// closed-sideways case — `isFullscreen` already reads identically
+    /// for both (see that property's own comment). Read again, live,
+    /// in `updateUIView` below: this stable `PlayerLayerContainerView`
+    /// instance persists across the fullscreen flip on purpose (see
+    /// `stageContent`'s own comment on why), so the gravity has to
+    /// update in place rather than at creation only.
+    let fillsScreen: Bool
 
     func makeUIView(context: Context) -> PlayerLayerContainerView {
         let view = PlayerLayerContainerView()
         view.backgroundColor = .black
-        view.playerLayer.videoGravity = .resizeAspect
+        view.playerLayer.videoGravity = fillsScreen ? .resizeAspectFill : .resizeAspect
         view.onReadyForDisplay = onReadyForDisplay
         // `hookUp` connects only when `attach` is true. `attach` is false
         // mid-swipe, when `makeUIView` usually runs: it runs exactly when
