@@ -1316,28 +1316,38 @@ struct FeedView: View {
 
     /// Pose 5's (open-tall) replacement for `topChrome`'s own Mute,
     /// Filter, and Bin: "one row, y-centre = `statusBlock.midY`;
-    /// Mute at `stage.minX + 16`, Filter next to it (`Rail.spacing`);
-    /// Bin trailing edge = `statusBlock.minX − 8`; counter left of
-    /// Bin" (`DUO_POSES.md`'s per-pose table). Counter-left-of-Bin is
+    /// Mute at `stage.minX + 16` ... counter left of Bin"
+    /// (`DUO_POSES.md`'s per-pose table). Counter-left-of-Bin is
     /// already this row's own child order — the same as `topChrome`'s
     /// own `counterCapsule`, `binButton` pair — so nothing extra is
     /// needed for that part.
     ///
     /// Anchored the same way `actionRailColumn`/`chromeColumn`'s own
-    /// siblings are: a target rect from the leading edge
-    /// (`stage.minX + 16`) to the trailing edge (`statusBlock.minX −
-    /// 8`), `.frame(width:height:alignment:.center)` to give the row
-    /// a known box, then `.position(x: rect.midX, y: statusBlock
-    /// .midY)`. The row's own `Spacer(minLength: 8)` between Mute/
-    /// Filter and the counter/Bin pair pushes Bin's own trailing
-    /// edge out to fill `rect.width` exactly, landing it on
-    /// `statusBlock.minX − 8` the same way `topChrome`'s identical
-    /// `Spacer` already fills its own row.
+    /// siblings are: a target rect from the leading edge to the
+    /// trailing edge, `.frame(width:height:alignment:.center)` to
+    /// give the row a known box, then `.position(x: rect.midX, y:
+    /// statusBlock.midY)`. The row's own `Spacer(minLength: 8)`
+    /// between Mute/Filter and the counter/Bin pair pushes Bin's own
+    /// trailing edge out to fill `rect.width` exactly, the same way
+    /// `topChrome`'s identical `Spacer` already fills its own row.
+    ///
+    /// Owner re-adapt (pose pass, 1V): the trailing edge used to be
+    /// `statusBlock.minX − 8` — fine for pose 5, where that point
+    /// still falls inside the stage/video, but for pose 1V it does
+    /// not: `statusBlock` there is the small `.occlusion` camera
+    /// cutout, well inside the BAR column the video excludes, so
+    /// `statusBlock.minX − 8` landed past the video's own right edge
+    /// — the Bin pill the owner's own screenshot caught straddling
+    /// into the black bar column. Both edges now come from the stage
+    /// itself — `stage.maxX − 16`, the same 16pt margin `leading`
+    /// already gives Mute from `stage.minX` — so the row can never
+    /// read past the video it sits on, in either pose; `statusBlock`
+    /// still decides only the row's own `y`.
     private func pose5TopRow(duoLayout: DuoLayout, safeAreaTop: CGFloat, containerSize: CGSize) -> some View {
         let statusBlock = duoLayout.statusBlock(containerSize: containerSize, safeAreaTop: safeAreaTop)
-        let stageMinX = duoLayout.stageRect(containerSize: containerSize, safeAreaTop: safeAreaTop).minX
-        let leading = stageMinX + 16
-        let trailing = statusBlock.minX - 8
+        let stageRect = duoLayout.stageRect(containerSize: containerSize, safeAreaTop: safeAreaTop)
+        let leading = stageRect.minX + 16
+        let trailing = stageRect.maxX - 16
         let width = max(0, trailing - leading)
         return HStack(spacing: Rail.spacing) {
             muteButton
