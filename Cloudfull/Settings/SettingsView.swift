@@ -9,8 +9,10 @@
 import StoreKit
 import SwiftUI
 
-/// The third tab destination. A plain `List` in the style of the
-/// Photos app.
+/// The third chin-nav destination. A plain `List` in the style of the
+/// Photos app. This view mounts its own `ChinNavigation` with
+/// `bottomBand: 0`. Settings has no 9:16 stage, so the switcher sits on
+/// the bottom safe area.
 struct SettingsView: View {
     /// No row on this screen writes this key. `PhotoFeedView` reads it
     /// once, in its `.task`, to seed the session-only `isLiveOn` toggle
@@ -53,47 +55,49 @@ struct SettingsView: View {
     #endif
 
     var body: some View {
-        NavigationStack {
-            // Each section is its own computed property. One `body`
-            // holding every `Section` inline was slow enough for
-            // SourceKit to give up type-checking it; splitting the
-            // list this way keeps each piece small for the compiler.
-            List {
-                appHeaderSection
-                reminderSection
-                preferencesSection
-                storageSection
-                assistanceSection
-                tipJarSection
-                otherProjectsSection
-                #if DEBUG
-                diagnosticsSection
-                #endif
-                versionSection
-            }
-            .accessibilityIdentifier("settings_root")     // set on the List itself; this identifier must not change
-            // Switches are green by default. The tint makes them
-            // use the accent color, like the buttons and links.
-            .tint(.accentColor)
-            // Catches every `Link` on this screen in one place, so a
-            // new link row needs no new gesture wiring to be counted.
-            // Always lets the system open the URL; this only observes.
-            .environment(\.openURL, OpenURLAction { url in
-                if let link = SettingsLinks.link(for: url) {
-                    Usage.shared.settingsLinkTapped(link)
+        ZStack(alignment: .bottomTrailing) {
+            NavigationStack {
+                // Each section is its own computed property. One `body`
+                // holding every `Section` inline was slow enough for
+                // SourceKit to give up type-checking it; splitting the
+                // list this way keeps each piece small for the compiler.
+                List {
+                    appHeaderSection
+                    reminderSection
+                    preferencesSection
+                    storageSection
+                    assistanceSection
+                    tipJarSection
+                    otherProjectsSection
+                    #if DEBUG
+                    diagnosticsSection
+                    #endif
+                    versionSection
                 }
-                return .systemAction
-            })
-            // `appHeader` already shows the name and icon at the
-            // top. An inline title keeps the name from showing
-            // twice.
-            .navigationBarTitleDisplayMode(.inline)
-            // Owner re-adapt, "every iPhone": the old chin nav floated
-            // over the List's own bottom 90 points, so the last rows
-            // needed this scroll-content margin to stay tappable under
-            // it. The system tab bar (`RootView`'s own `TabView`)
-            // reserves its own space in this List's bottom safe area
-            // inset instead — no margin of this view's own to keep.
+                .accessibilityIdentifier("settings_root")     // set on the List itself; this identifier must not change
+                // Switches are green by default. The tint makes them
+                // use the accent color, like the buttons and links.
+                .tint(.accentColor)
+                // Catches every `Link` on this screen in one place, so a
+                // new link row needs no new gesture wiring to be counted.
+                // Always lets the system open the URL; this only observes.
+                .environment(\.openURL, OpenURLAction { url in
+                    if let link = SettingsLinks.link(for: url) {
+                        Usage.shared.settingsLinkTapped(link)
+                    }
+                    return .systemAction
+                })
+                // `appHeader` already shows the name and icon at the
+                // top. An inline title keeps the name from showing
+                // twice.
+                .navigationBarTitleDisplayMode(.inline)
+                // The switcher stays expanded on Settings and floats
+                // over the bottom 90 points. Without this margin, the
+                // last rows (Version, Diagnostics) sit under it and
+                // cannot be tapped.
+                .contentMargins(.bottom, 96, for: .scrollContent)
+            }
+            ChinNavigation(bottomBand: 0)
         }
         .onAppear {
             Usage.shared.settingsOpened()
