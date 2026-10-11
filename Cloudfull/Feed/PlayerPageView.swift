@@ -899,6 +899,26 @@ struct PlayerPageView: View {
         .task(id: posterKey) {
             await deliverPoster()
         }
+        // Owner-reported bug (pose 3, wide video): the stage visibly
+        // resized right after a swipe landed. Root cause: `load()`'s own
+        // `videoIsLandscape`/`videoAspectRatio` write sat behind
+        // `holder.waitUntilReady()` — a FULL "ready for display" wait,
+        // not merely `scrollGate.waitUntilIdle()` — so a page whose
+        // `load()` was still in flight when it became active read the
+        // default 9:16 stage for its first frame(s), then jumped to its
+        // real shape once that whole chain finally finished. `holder
+        // .presentationSize` is `configure(with:)`'s own KVO observation
+        // on `AVPlayerItem.presentationSize` (`options: [.initial,
+        // .new]`) — it updates the moment AVFoundation itself reports a
+        // real size, with no "ready for display" gate of its own, so
+        // this fires well before `load()`'s later read does whenever
+        // the two disagree on timing. `load()`'s own write stays as a
+        // fallback (harmless once both agree), not removed here.
+        .onChange(of: holder.presentationSize) { _, size in
+            guard size.width > 0, size.height > 0 else { return }
+            videoIsLandscape = size.width > size.height
+            videoAspectRatio = size.width / size.height
+        }
         // `initial: true` so the holder knows this page's intent from the
         // moment it exists, not only once that intent next changes.
         // The holder's stored intent, never a value captured by an async
@@ -1685,6 +1705,14 @@ struct PlayerPageView: View {
             guard !Task.isCancelled else { return }
             holder.noteReady(duration: facts.1)
             let size = facts.0
+            // Owner-reported bug fix: `holder.presentationSize`'s own
+            // `.onChange` (mounted in `body`) is now the PRIMARY writer
+            // of `videoIsLandscape`/`videoAspectRatio` — it observes the
+            // same `presentationSize` property but starts at attach, in
+            // `configure(with:)`, well before this `waitUntilReady()`
+            // call above even returns. This write stays as a fallback:
+            // harmless whenever the two already agree, and a safety net
+            // if the KVO observation were ever missed.
             videoIsLandscape = size.width > size.height && size.width > 0
             // Guards `size.height > 0` the same way `videoIsLandscape`
             // guards `size.width > 0`; a zero reading can only mean
@@ -1696,14 +1724,6 @@ struct PlayerPageView: View {
             if size.height > 0 {
                 videoAspectRatio = size.width / size.height
             }
-            #if DEBUG
-            // The readout follows `presentationSize` for as long as this
-            // item is attached, rather than reading it once at ready.
-            // AVFoundation can report `.zero` or a placeholder size until
-            // a frame has actually decoded.
-            PlaybackReadout.shared.notePlayed(size)
-            holder.watchPresentationSize()
-            #endif
             // Apple does not publish the size of a proxy video, so this
             // measures the size the player actually shows. It compares
             // that size with the asset's own resolution
@@ -1966,6 +1986,17 @@ private final class PlayerHolder: ObservableObject {
     @Published private(set) var isPlaying = false
     private var rateObservation: NSKeyValueObservation?
 
+    /// `AVPlayerItem.presentationSize`, observed from the moment
+    /// `configure(with:)` attaches the item — see that method's own
+    /// `presentationObservation` for why this needs no "ready for
+    /// display" gate of its own to start reporting a real value.
+    /// `PlayerPageView` reads this `@Published` to set `videoIsLandscape`/
+    /// `videoAspectRatio` as early as AVFoundation itself allows, rather
+    /// than only once `load()`'s own later, slower read completes — see
+    /// that `.onChange`'s own comment for the owner-reported bug this
+    /// fixes (pose 3 wide video resizing right after a swipe).
+    @Published private(set) var presentationSize: CGSize = .zero
+
     private func setIsPlaying(_ playing: Bool) {
         guard playing != isPlaying else { return }
         isPlaying = playing
@@ -2057,22 +2088,13 @@ private final class PlayerHolder: ObservableObject {
     /// it, because `automaticallyWaitsToMinimizeStalling` already handles
     /// the recovery.
     private var bufferEmptyObservation: NSKeyValueObservation?
-    #if DEBUG
-    /// The on-screen resolution readout. `presentationSize` can change
-    /// after the item is ready, so it is observed rather than read once.
+    /// Publishes `presentationSize` above and, in DEBUG, the on-screen
+    /// resolution readout — both from the same KVO subscription, started
+    /// in `configure(with:)` rather than waited for: `presentationSize`
+    /// can change after the item is ready, so it is observed rather than
+    /// read once, and shipped unconditionally now rather than only in
+    /// DEBUG, since `PlayerPageView` depends on it for real layout.
     private var presentationObservation: NSKeyValueObservation?
-
-    func watchPresentationSize() {
-        presentationObservation?.invalidate()
-        guard let item = attachedItem else { return }
-        presentationObservation = item.observe(\.presentationSize, options: [.initial, .new]) { observed, _ in
-            let size = observed.presentationSize
-            DispatchQueue.main.async {
-                MainActor.assumeIsolated { PlaybackReadout.shared.notePlayed(size) }
-            }
-        }
-    }
-    #endif
 
     func noteReady(duration: Double) {
         cachedDuration = duration.isFinite && duration > 0 ? duration : 0
@@ -2144,6 +2166,22 @@ private final class PlayerHolder: ObservableObject {
         attachedItem = item
         isItemReady = false
         cachedDuration = 0
+        // Started here, at attach, not waited for: this is what lets
+        // `presentationSize` reach `PlayerPageView` before `load()`'s own
+        // later, "ready for display"-gated read does — see that
+        // property's own comment.
+        presentationObservation?.invalidate()
+        presentationObservation = item.observe(\.presentationSize, options: [.initial, .new]) { [weak self] observed, _ in
+            let size = observed.presentationSize
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    self?.presentationSize = size
+                    #if DEBUG
+                    PlaybackReadout.shared.notePlayed(size)
+                    #endif
+                }
+            }
+        }
         // A paused neighbour under the automatic buffer policy (0) fills
         // only enough to reach `.readyToPlay` and then stops. There is no
         // forward playback for the automatic policy to run ahead of.
@@ -2500,10 +2538,11 @@ private final class PlayerHolder: ObservableObject {
         // `configure` installs a fresh one for the next item.
         bufferEmptyObservation?.invalidate()
         bufferEmptyObservation = nil
-        #if DEBUG
+        // Shipped unconditionally now — see `presentationObservation`'s
+        // own comment on why this is no longer DEBUG-only.
         presentationObservation?.invalidate()
         presentationObservation = nil
-        #endif
+        presentationSize = .zero
         attachedItem = nil
         isItemReady = false
         cachedDuration = 0
