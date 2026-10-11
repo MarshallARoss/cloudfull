@@ -358,31 +358,19 @@ struct DuoLayout {
     ///
     /// Returns the full container unchanged when no column applies, so
     /// a regular iPhone's math is untouched.
-    ///
-    /// Owner re-adapt, "every iPhone": `safeAreaBottom`, default `0` so
-    /// every existing caller that does not pass it keeps today's exact
-    /// rect, excludes the system tab bar's own real bottom inset
-    /// (`RootView`'s own `TabView`) the same way `column` excludes its
-    /// width. Apple puts that bar in the rail/bar column itself whenever
-    /// one is real (`barEdge != nil`) — `rootProxy.safeAreaInsets.bottom`
-    /// then measures ~0 there on its own, so subtracting it is a no-op —
-    /// and floats it at the bottom on every pose that has no such
-    /// column, where the real inset measures the bar's actual height
-    /// instead of a guess.
-    func availableRect(containerSize: CGSize, safeAreaTop: CGFloat, safeAreaBottom: CGFloat = 0) -> CGRect {
-        let height = max(0, containerSize.height - safeAreaBottom)
+    func availableRect(containerSize: CGSize, safeAreaTop: CGFloat) -> CGRect {
         guard let column = railColumn(containerSize: containerSize, safeAreaTop: safeAreaTop) else {
-            return CGRect(x: 0, y: 0, width: containerSize.width, height: height)
+            return CGRect(origin: .zero, size: containerSize)
         }
         switch column.edge {
         case .leading:
             return CGRect(x: column.width, y: 0,
                           width: max(0, containerSize.width - column.width),
-                          height: height)
+                          height: containerSize.height)
         case .trailing:
             return CGRect(x: 0, y: 0,
                           width: max(0, containerSize.width - column.width),
-                          height: height)
+                          height: containerSize.height)
         }
     }
 
@@ -435,24 +423,14 @@ struct DuoLayout {
     /// `division.minX`, not the bar column, is what bounds the left
     /// page, since the fold sits well inside where the bar column
     /// would start to matter.
-    /// Owner re-adapt, "every iPhone": `safeAreaBottom`, default `0`,
-    /// is the same real tab-bar exclusion `availableRect`'s own doc
-    /// comment explains — threaded here too since `.openWide`'s and
-    /// `.book`'s own wide-video/tall-video boxes below bypass
-    /// `availableRect` entirely. The `.laptop` branch takes no such
-    /// term: its own box is bounded by the fold (`division.minY − 14`),
-    /// well above where a floating tab bar would ever reach; the
-    /// bottom DECK below the fold, not this stage, is what actually
-    /// borders the tab bar there, and that deck already reads its own
-    /// `safeAreaBottom` straight from `laptopBottomRect`.
-    func stageRect(containerSize: CGSize, safeAreaTop: CGFloat, aspectRatio: CGFloat = 9.0 / 16.0, safeAreaBottom: CGFloat = 0) -> CGRect {
+    func stageRect(containerSize: CGSize, safeAreaTop: CGFloat, aspectRatio: CGFloat = 9.0 / 16.0) -> CGRect {
         if pose == .openWide, aspectRatio >= 1 {
             return openWideWideVideoRect(containerSize: containerSize, safeAreaTop: safeAreaTop, aspectRatio: aspectRatio)
         }
         if pose == .book, let division {
             return aspectRatio >= 1
-                ? bookWideVideoRect(division: division, containerSize: containerSize, aspectRatio: aspectRatio, safeAreaBottom: safeAreaBottom)
-                : fitRect(in: CGRect(x: 0, y: 0, width: max(0, division.minX), height: max(0, containerSize.height - safeAreaBottom)),
+                ? bookWideVideoRect(division: division, containerSize: containerSize, aspectRatio: aspectRatio)
+                : fitRect(in: CGRect(x: 0, y: 0, width: max(0, division.minX), height: containerSize.height),
                           aspectRatio: aspectRatio)
         }
         if pose == .laptop, let division {
@@ -471,7 +449,7 @@ struct DuoLayout {
             let box = CGRect(x: 0, y: top, width: containerSize.width, height: bottom - top)
             return fitRect(in: box, aspectRatio: aspectRatio)
         }
-        let avail = availableRect(containerSize: containerSize, safeAreaTop: safeAreaTop, safeAreaBottom: safeAreaBottom)
+        let avail = availableRect(containerSize: containerSize, safeAreaTop: safeAreaTop)
         return fitRect(in: avail, aspectRatio: aspectRatio)
     }
 
@@ -532,17 +510,14 @@ struct DuoLayout {
     /// one like every other case in this file: the left page's own
     /// width is fixed first (`division.minX`, `pagePad` clear on each
     /// side of that span), then the height follows from `aspectRatio`
-    /// alone, centred vertically in the window height left over once
-    /// `safeAreaBottom` (default `0`, see `stageRect`'s own comment) is
-    /// excluded. This differs from `fitRect` deliberately — a FIT box
-    /// here could bind on height first for a near-square
-    /// `division.minX`, which would narrow the video below the
-    /// wireframe's own fixed width.
-    private func bookWideVideoRect(division: CGRect, containerSize: CGSize, aspectRatio: CGFloat, safeAreaBottom: CGFloat = 0) -> CGRect {
+    /// alone, centred vertically in the full window height. This
+    /// differs from `fitRect` deliberately — a FIT box here could
+    /// bind on height first for a near-square `division.minX`, which
+    /// would narrow the video below the wireframe's own fixed width.
+    private func bookWideVideoRect(division: CGRect, containerSize: CGSize, aspectRatio: CGFloat) -> CGRect {
         let width = max(0, division.minX - Self.pagePad * 2)
         let height = width / aspectRatio
-        let availableHeight = max(0, containerSize.height - safeAreaBottom)
-        return CGRect(x: Self.pagePad, y: (availableHeight - height) / 2, width: width, height: height)
+        return CGRect(x: Self.pagePad, y: (containerSize.height - height) / 2, width: width, height: height)
     }
 
     // MARK: - Pose-table constants (build 3)
@@ -570,6 +545,12 @@ struct DuoLayout {
     /// 3's wide-video box, pose 4W's box, and (elsewhere) the caption
     /// and right-page placements build 4 and later add.
     static let pagePad: CGFloat = 16
+    /// Pose 5's chin: the gap above its own top edge, clear of the
+    /// rail's last button — build 7.
+    static let chinColumnGap: CGFloat = 40
+    /// Pose 5's chin: its own size once expanded in its column —
+    /// build 7.
+    static let columnChinSize: CGFloat = 56
 
     // MARK: - Rail column (step 3; extended by steps 4, 5, and the pose fixes)
     //
@@ -791,14 +772,16 @@ struct DuoLayout {
     /// identical `bottomBand + Rail.seamClearance` padding, which this
     /// mirrors so the two can never disagree.
     ///
-    /// Owner re-adapt, "every iPhone": this was `ChinNavigation`'s own
-    /// clearance read, keeping its top edge below the rail's with a
-    /// minimum gap. `ChinNavigation` is gone — the system tab bar
-    /// (`RootView`'s own `TabView`) needs no clearance read of its
-    /// own, since Apple positions it independently of this rail. Kept
-    /// as a general "where does the rail's last button actually end"
-    /// query; `DuoPosePreviews.swift`'s preview board is its one
-    /// remaining caller.
+    /// `ChinNavigation` reads this (as `railBottom`) to keep its own
+    /// top edge below the rail's, with a minimum gap, instead of
+    /// relying on a fixed offset that only happens to clear it on
+    /// whichever screen it was tuned against. Bar ON, this is a no-op
+    /// in practice: both this and the chin's own fixed anchor derive
+    /// from the same chin position, so they can never disagree by more
+    /// than rounding. Bar OFF, the rail's bottom now sits well above
+    /// the chin (it hangs from the stage's own top, not the page's
+    /// own bottom), so the clamp stays a no-op there too — just no
+    /// longer for the same algebraic reason.
     func railBottom(safeAreaTop: CGFloat, containerSize: CGSize) -> CGFloat {
         if let extent = railVerticalExtent(containerSize: containerSize, safeAreaTop: safeAreaTop) {
             return extent.bottom
@@ -991,16 +974,16 @@ struct DuoLayout {
     /// The Mute/Filter/Bin zigzag row, centred in band 1: the
     /// horizontal twin of `zigzagCenters`, levelled with gaps in
     /// `laptopRailRow`'s own row instead of the vertical rail's — the
-    /// first 3 of that row's own 4 gaps, the same selection
+    /// first 3 of that row's own 5 gaps, the same selection
     /// `zigzagCenters` already makes among the vertical rail's own 4.
     /// `FeedView.overlayControls` mounts this; see this group's own
     /// header comment for why it is global rather than per-page.
     func laptopZigzagRow(containerSize: CGSize, safeAreaBottom: CGFloat) -> (mute: CGPoint, filter: CGPoint, bin: CGPoint, counterLeadingX: CGFloat)? {
         guard let bottom = laptopBottomRect(containerSize: containerSize, safeAreaBottom: safeAreaBottom),
-              let centers = laptopRailRow(containerSize: containerSize, safeAreaBottom: safeAreaBottom)
+              let row = laptopRailRow(containerSize: containerSize, safeAreaBottom: safeAreaBottom)
         else { return nil }
         let y = Self.laptopBand(bottom, 1).midY
-        let xs = centers.map(\.x)
+        let xs = row.centers.map(\.x) + [row.chinCenter.x]
         func gapX(_ i: Int) -> CGFloat { (xs[i] + xs[i + 1]) / 2 }
         return (
             mute: CGPoint(x: gapX(0), y: y),
@@ -1012,23 +995,30 @@ struct DuoLayout {
 
     /// The horizontal action rail, centred in band 2: the same five
     /// buttons `actionRail`/`actionRailColumn` already draw everywhere
-    /// else, this time in a row — 5 slots (Keep, Share, Album, Shrink,
-    /// Delete) evenly distributed across the deck's own live width,
-    /// inset by `pagePad` on each side. Owner re-adapt, "every
-    /// iPhone": the sixth slot this row once reserved for the chin
-    /// (and the hairline divider between it and Delete) is gone along
-    /// with `ChinNavigation` — this row is now the same 5-way even
-    /// distribution every other pose's rail already uses, just laid
-    /// out horizontally. `FeedPageContent` renders the five buttons
-    /// (per-page, like every other pose's rail).
-    func laptopRailRow(containerSize: CGSize, safeAreaBottom: CGFloat) -> [CGPoint]? {
+    /// else, this time in a row — 6 slots (Keep, Share, Album, Shrink,
+    /// Delete, then the chin) evenly distributed across the deck's own
+    /// live width, inset by `pagePad` on each side: "x positions …
+    /// from even distribution of the 5 rail items + chin" (owner
+    /// re-adapt). `hairlineX`/`hairlineY` mark the one gap this row
+    /// still needs a divider for — between Delete and the chin —
+    /// clamped by the caller to `Rail.itemHeight` tall, "a SHORT
+    /// divider only as tall as the rail row," not the whole deck.
+    /// `FeedPageContent` renders the five buttons and the hairline
+    /// (per-page, like every other pose's rail); `FeedView
+    /// .railAlignedChinCenter` reads `chinCenter` to anchor
+    /// `ChinNavigation`'s own collapsed switcher here, the same
+    /// position-based path pose 5's rail column already uses.
+    func laptopRailRow(containerSize: CGSize, safeAreaBottom: CGFloat) -> (centers: [CGPoint], hairlineX: CGFloat, hairlineY: CGFloat, chinCenter: CGPoint)? {
         guard let bottom = laptopBottomRect(containerSize: containerSize, safeAreaBottom: safeAreaBottom) else { return nil }
         let band = Self.laptopBand(bottom, 2)
         let y = band.midY
         let leading = band.minX + Self.pagePad
         let usable = max(0, band.width - Self.pagePad * 2)
-        let slot = usable / 5
-        return (0..<5).map { CGPoint(x: leading + (CGFloat($0) + 0.5) * slot, y: y) }
+        let slot = usable / 6
+        let xs = (0..<6).map { leading + (CGFloat($0) + 0.5) * slot }
+        let centers = xs.prefix(5).map { CGPoint(x: $0, y: y) }
+        let chinCenter = CGPoint(x: xs[5], y: y)
+        return (centers: Array(centers), hairlineX: (xs[4] + xs[5]) / 2, hairlineY: y, chinCenter: chinCenter)
     }
 
     /// Previous/Next pill geometry, centred in band 3: two slots of
