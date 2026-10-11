@@ -822,14 +822,30 @@ struct PlayerPageView: View {
                                     // Owner re-adapt (pose pass, pose
                                     // 1V): "the line's slightly above
                                     // the bottom — it should be on the
-                                    // bezel." Pose 1V only — see
+                                    // bezel." Pose 1V — see
                                     // `ScrubberView.pinsToBottomEdge`'s
                                     // own comment for why this is safe
                                     // only where this view's own frame
                                     // bottom already IS the true screen
                                     // edge, with nothing below it to
                                     // extend into.
-                                    pinsToBottomEdge: duoLayout.pose == .closed
+                                    //
+                                    // Owner re-adapt (Opus wireframe
+                                    // compare, poses 3/4): the same
+                                    // "slightly above the edge" defect,
+                                    // reported as "~15pt inside the
+                                    // picture" there — without this,
+                                    // the line draws at the TOP of its
+                                    // own 28pt touch-target box
+                                    // (`ScrubberView.trackBoxHeight`),
+                                    // not flush with it. `bandHeight: 0`
+                                    // just above already puts that box
+                                    // on the video's own bottom edge
+                                    // for these two poses; this is the
+                                    // same fix 1V already needed to
+                                    // land the visible LINE there too,
+                                    // not just the box.
+                                    pinsToBottomEdge: duoLayout.pose == .closed || duoLayout.pose == .openWide || duoLayout.pose == .book
                                 )
                             }
                         }
@@ -2769,6 +2785,10 @@ private struct PlayerLayerView: UIViewRepresentable {
         wdMark("layerUpdate")
         hookUp(uiView)
         uiView.onReadyForDisplay = onReadyForDisplay
+        let gravity: AVLayerVideoGravity = fillsScreen ? .resizeAspectFill : .resizeAspect
+        if uiView.playerLayer.videoGravity != gravity {
+            uiView.playerLayer.videoGravity = gravity
+        }
     }
 
     /// Reading `playerLayer.player` on every SwiftUI update would wait
