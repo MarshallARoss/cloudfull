@@ -442,87 +442,7 @@ struct FeedView: View {
         return .none
     }
 
-    /// Owner experiment, `-cloudfull-duo-statusbar-test N` (DEBUG only,
-    /// commit separate from everything else, easy to revert): pose 5's
-    /// time + network ring sit side by side; pose 3's own stack. "What
-    /// if we squish it with a view to the left of it? It might
-    /// autostack." The status bar itself is drawn by the system,
-    /// outside every view this file owns, so nothing here can reflow
-    /// it directly — but the three N values below are the cheap ways
-    /// to actually find out rather than assume. See `DuoStatusBarTest`
-    /// for N's own parsing, and each N's own comment at its call site
-    /// for what it does and why.
     var body: some View {
-        #if DEBUG
-        if DuoStatusBarTest.value == 2 {
-            // N=2: wrap the feed in a real `NavigationStack` with
-            // trailing toolbar items, so the system has an actual top
-            // bar of its own to negotiate space with the status
-            // items — unlike N=1's own opaque view, which lives in
-            // OUR content, not the system's chrome layer, this at
-            // least puts something in the SAME layer the status items
-            // occupy. Still expected to do nothing: a `NavigationStack`
-            // toolbar and the status bar are two different system
-            // regions even on a regular iPhone, with no documented
-            // relationship between them — this is the test that rules
-            // that out rather than assumes it.
-            if #available(iOS 27.1, *) {
-                NavigationStack {
-                    feedBody
-                        .toolbar {
-                            ToolbarItem(placement: .topBarTrailing) {
-                                Image(systemName: "line.3.horizontal.decrease.circle")
-                            }
-                            ToolbarItem(placement: .topBarTrailing) {
-                                Image(systemName: "speaker.wave.2.fill")
-                            }
-                        }
-                        .toolbarVerticalCompressionBehavior(.prefersTabBar)
-                }
-                .toolbarTitleDisplayMode(.inline)
-            } else {
-                // `toolbarVerticalCompressionBehavior` itself needs
-                // iOS 27.1 — still worth the plain `NavigationStack`
-                // + toolbar on an older OS, since that half of the
-                // test (does ANY system toolbar reflow the status
-                // items) needs no new API at all.
-                NavigationStack {
-                    feedBody
-                        .toolbar {
-                            ToolbarItem(placement: .topBarTrailing) {
-                                Image(systemName: "line.3.horizontal.decrease.circle")
-                            }
-                            ToolbarItem(placement: .topBarTrailing) {
-                                Image(systemName: "speaker.wave.2.fill")
-                            }
-                        }
-                }
-            }
-        } else if DuoStatusBarTest.value == 3 {
-            // N=3, the control: these two should change nothing by
-            // themselves — `.statusBarHidden(false)` is already the
-            // default, and `.automatic` is already the default
-            // toolbar-vertical-behavior. If THIS N shows any visible
-            // difference at all, something about this app's own
-            // defaults differs from the system's own, which would be
-            // worth knowing on its own.
-            if #available(iOS 27.1, *) {
-                feedBody
-                    .statusBarHidden(false)
-                    .toolbarVerticalBehavior(.automatic)
-            } else {
-                feedBody
-                    .statusBarHidden(false)
-            }
-        } else {
-            feedBody
-        }
-        #else
-        feedBody
-        #endif
-    }
-
-    private var feedBody: some View {
         // The one place that measures the device's real top safe-area
         // inset. This reader sits above the pager's `.ignoresSafeArea()`,
         // so it reports the true inset (59pt on 16 Pro, 62pt on 17 Pro).
@@ -738,26 +658,6 @@ struct FeedView: View {
                 // missing it.
                 duoGuidesOverlay(duoLayout: duoLayout, safeAreaTop: safeAreaTop, safeAreaInsets: fullscreenSafeArea, containerSize: windowSize)
                     .ignoresSafeArea()
-            }
-            // N=1 of the owner's own status-bar autostack experiment
-            // (`-cloudfull-duo-statusbar-test 1`, `body`'s own doc
-            // comment) — an OPAQUE view, flush against pose 5's own
-            // `.occlusion` (the time + ring block) at its leading
-            // edge, 20pt of its own width overlapping into it. Pose 5
-            // only: that pose is the one with the side-by-side time +
-            // ring the owner wants to see stack. Solid, not a guide
-            // stroke, so a screenshot can confirm it actually landed
-            // where intended, independent of whatever it does or does
-            // not do to the system's own status items.
-            if DuoStatusBarTest.value == 1, duoLayout.pose == .openTall,
-               let occlusion = duoLayout.occlusion {
-                Rectangle()
-                    .fill(Color.red)
-                    .frame(width: 60, height: occlusion.height)
-                    .position(x: occlusion.minX - 20, y: occlusion.midY)
-                    .ignoresSafeArea()
-                    .allowsHitTesting(false)
-                    .accessibilityHidden(true)
             }
             #endif
             }
