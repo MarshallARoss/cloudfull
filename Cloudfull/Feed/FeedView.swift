@@ -539,6 +539,14 @@ struct FeedView: View {
             // `pool_total_`, `pool_filtered_`, and `main_stalls_` need to
             // keep reading independent of which mode is on screen.
             // `trash_rows_` lives there for the same reason.
+            //
+            // Drawn last, above every other child in this ZStack
+            // (including `overlayControls`/`ChinNavigation`), so the
+            // guides are never hidden behind real chrome — see
+            // `duoGuidesOverlay`'s own comment.
+            if Self.showsDuoGuides {
+                duoGuidesOverlay(duoLayout: duoLayout, safeAreaTop: safeAreaTop, containerSize: windowSize)
+            }
             #endif
             }
             .frame(width: rootProxy.size.width, height: rootProxy.size.height)
@@ -1865,6 +1873,106 @@ struct FeedView: View {
             .accessibilityIdentifier(
                 "backfill_\(backfill.state.rawValue)_\(backfill.resolved)_\(backfill.pending)_\(backfill.total)"
             )
+    }
+
+    // MARK: - Duo alignment guides
+
+    /// Owner, direct: "if you have to add a helper box or line to the
+    /// UI in dev that's fine, cause you're not nailing the network
+    /// status icon alignment at all." DEBUG-only, on only behind
+    /// `-cloudfull-duo-guides` — deliberately a bare launch-argument
+    /// check, not `DiagnosticsGate`/`DiagnosticsSwitch`: those also
+    /// turn on from the in-app diagnostics toggle, which would put
+    /// this on screen in an otherwise-normal DEBUG session. This must
+    /// never appear by accident, and never in a shipped build.
+    private static let showsDuoGuides = ProcessInfo.processInfo.arguments.contains("-cloudfull-duo-guides")
+
+    /// Four geometry sources this file's own Duo math is built from,
+    /// drawn directly instead of trusted: `.occlusion` (red),
+    /// `.division` (blue), the REAL system bar column — `barEdge`/
+    /// `barWidth` construct this directly; there is no reserved-region
+    /// API for it, and it does not exist at all on a bar-off pose
+    /// (green, closed-bar poses only), `railColumnRect` (orange —
+    /// every pose with a column, real bar or computed) — and the one
+    /// x value `ringCenteredColumnX` actually hands the rail and chin
+    /// (yellow, a 1pt line, the line this debugging round exists to
+    /// check against the ring's own real centre). Each draws its own
+    /// live numbers as a small label, so one screenshot is enough to
+    /// compare this file's own math against Apple's, with no second
+    /// source of truth to keep in sync by hand.
+    @ViewBuilder
+    private func duoGuidesOverlay(duoLayout: DuoLayout, safeAreaTop: CGFloat, containerSize: CGSize) -> some View {
+        if let occlusion = duoLayout.occlusion {
+            duoGuideRect(occlusion, color: .red, label: "occlusion \(duoGuideFormat(occlusion))")
+        }
+        if let division = duoLayout.division {
+            duoGuideRect(division, color: .blue, label: "division \(duoGuideFormat(division))")
+        }
+        if let barRect = duoGuideBarRect(duoLayout: duoLayout, containerSize: containerSize) {
+            duoGuideRect(barRect, color: .green, label: "bar \(duoGuideFormat(barRect))")
+        }
+        if let columnRect = duoLayout.railColumnRect(containerSize: containerSize, safeAreaTop: safeAreaTop) {
+            duoGuideRect(columnRect, color: .orange, label: "railColumn \(duoGuideFormat(columnRect))")
+        }
+        if let x = duoLayout.ringCenteredColumnX(containerSize: containerSize, safeAreaTop: safeAreaTop) {
+            Rectangle()
+                .fill(Color.yellow)
+                .frame(width: 1, height: containerSize.height)
+                .position(x: x, y: containerSize.height / 2)
+                .allowsHitTesting(false)
+            Text("ringX \(Int(x))")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(.yellow)
+                .padding(2)
+                .background(Color.black.opacity(0.6))
+                .fixedSize()
+                .position(x: x, y: 40)
+                .allowsHitTesting(false)
+        }
+    }
+
+    /// One guide's own outline + label, positioned the same way every
+    /// other absolute-positioned overlay in this file already is —
+    /// `.frame(width:height:)` then `.position(x: rect.midX, y:
+    /// rect.midY)` — so these guides sit in exactly the window space
+    /// every real caller already reads `occlusion`/`division`/
+    /// `railColumnRect` in, with no translation of their own to get
+    /// wrong.
+    private func duoGuideRect(_ rect: CGRect, color: Color, label: String) -> some View {
+        ZStack(alignment: .topLeading) {
+            Rectangle()
+                .stroke(color, lineWidth: 1)
+            Text(label)
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(color)
+                .padding(2)
+                .background(Color.black.opacity(0.6))
+                .fixedSize()
+        }
+        .frame(width: max(0, rect.width), height: max(0, rect.height), alignment: .topLeading)
+        .position(x: rect.midX, y: rect.midY)
+        .allowsHitTesting(false)
+    }
+
+    private func duoGuideFormat(_ rect: CGRect) -> String {
+        "\(Int(rect.minX)),\(Int(rect.minY)) \(Int(rect.width))×\(Int(rect.height)) midX=\(Int(rect.midX))"
+    }
+
+    /// The REAL system bar column's own rect — `barEdge`/`barWidth`
+    /// construct this directly, the same way `railColumn`'s own
+    /// closed-bar branch does; there is no reserved-region API for a
+    /// "bar" kind to read it from instead. `nil` on any bar-off pose
+    /// (no real bar to draw), kept as a plain (non-`@ViewBuilder`)
+    /// function since the `switch` it needs cannot live inside
+    /// `duoGuidesOverlay`'s own view-builder body.
+    private func duoGuideBarRect(duoLayout: DuoLayout, containerSize: CGSize) -> CGRect? {
+        guard let barEdge = duoLayout.barEdge, duoLayout.barWidth > 0 else { return nil }
+        switch barEdge {
+        case .leading:
+            return CGRect(x: 0, y: 0, width: duoLayout.barWidth, height: containerSize.height)
+        case .trailing:
+            return CGRect(x: containerSize.width - duoLayout.barWidth, y: 0, width: duoLayout.barWidth, height: containerSize.height)
+        }
     }
     #endif
 
