@@ -1341,14 +1341,30 @@ struct FeedView: View {
     /// into the black bar column. Both edges now come from the stage
     /// itself — `stage.maxX − 16`, the same 16pt margin `leading`
     /// already gives Mute from `stage.minX` — so the row can never
-    /// read past the video it sits on, in either pose; `statusBlock`
-    /// still decides only the row's own `y`.
+    /// read past the video it sits on, in either pose.
+    ///
+    /// Owner re-adapt (pose pass, 1V, second round): `y` used to be
+    /// `statusBlock.midY` for both poses — correct for pose 5, where
+    /// that is genuinely the real time/connectivity ring's own
+    /// vertical centre, but wrong for 1V: there `statusBlock` reads
+    /// the small `.occlusion` camera cutout instead (the ring itself
+    /// has no reserved-region API of its own there — see
+    /// `statusBlock`'s own comment), which the owner's own screenshot
+    /// showed centred around y 47pt, visibly below the screen's true
+    /// top edge. Pose 1V now pins `y` to `safeAreaTop + 8 + 20`
+    /// instead — this row's own fixed 40pt height means its top edge
+    /// lands exactly 8pt below the real top safe-area inset (0 in
+    /// 1V), "the very top of the video." Pose 5 is unchanged: it
+    /// keeps centring on `statusBlock.midY`, the owner's own explicit
+    /// "don't change pose 5."
     private func pose5TopRow(duoLayout: DuoLayout, safeAreaTop: CGFloat, containerSize: CGSize) -> some View {
         let statusBlock = duoLayout.statusBlock(containerSize: containerSize, safeAreaTop: safeAreaTop)
         let stageRect = duoLayout.stageRect(containerSize: containerSize, safeAreaTop: safeAreaTop)
         let leading = stageRect.minX + 16
         let trailing = stageRect.maxX - 16
         let width = max(0, trailing - leading)
+        let rowHeight: CGFloat = 40
+        let centerY = duoLayout.pose == .closed ? safeAreaTop + 8 + rowHeight / 2 : statusBlock.midY
         return HStack(spacing: Rail.spacing) {
             muteButton
             FilterMenuView(store: optionsStore, hidesChrome: hidesGlobalChrome)
@@ -1356,8 +1372,8 @@ struct FeedView: View {
             counterCapsule
             binButton
         }
-        .frame(width: width, height: 40, alignment: .center)
-        .position(x: leading + width / 2, y: statusBlock.midY)
+        .frame(width: width, height: rowHeight, alignment: .center)
+        .position(x: leading + width / 2, y: centerY)
     }
 
     // MARK: - Laptop deck globals (build 8b)
