@@ -141,13 +141,26 @@ struct PlayerPageView: View {
 
     // MARK: - Landscape fullscreen state
 
-    /// Set once per successful `load()`, from `AVPlayerItem.presentationSize`:
-    /// the display size, after the track's own `preferredTransform`.
-    /// Resets to `false` at the top of every `load()`, and whenever the
-    /// page leaves the preload window. A stale reading can never outlive
-    /// its item.
+    /// Owner-reported bug (pose 3, wide video): the stage visibly
+    /// resized well after a swipe landed. Root cause: this used to be
+    /// set only from `AVPlayerItem.presentationSize`, which needs a
+    /// real player attached — gated behind `scrollGate.waitUntilIdle()`
+    /// in `load()`, so a page that became active before its own
+    /// `load()` reached that point showed the default 9:16 stage for
+    /// its first frame(s), then jumped once attach finally happened.
+    ///
+    /// `loadAssetAspect()`'s own early `PHAsset.pixelWidth`/`pixelHeight`
+    /// read now sets this first — see that method's own comment for
+    /// why that read has no player, and so no scroll-gate, to wait on.
+    /// `holder.presentationSize`'s own `.onChange` (below) still
+    /// corrects it from the real decoded video if the two ever
+    /// disagree (rotation metadata PhotoKit's own asset record does
+    /// not always capture exactly). Resets to `false` at the top of
+    /// every `load()`, and whenever the page leaves the preload
+    /// window. A stale reading can never outlive its item.
     @State private var videoIsLandscape = false
-    /// The same `presentationSize` reading as `videoIsLandscape`, kept as
+    /// The same dual source as `videoIsLandscape` — `loadAssetAspect()`
+    /// first, `holder.presentationSize` as a correction — kept as
     /// width ÷ height rather than a bare bool, so `useVideoAspect` can
     /// size the stage to the video's own shape instead of the fixed 9:16
     /// box every other case still wants. Reset alongside
@@ -899,21 +912,35 @@ struct PlayerPageView: View {
         .task(id: posterKey) {
             await deliverPoster()
         }
-        // Owner-reported bug (pose 3, wide video): the stage visibly
-        // resized right after a swipe landed. Root cause: `load()`'s own
-        // `videoIsLandscape`/`videoAspectRatio` write sat behind
-        // `holder.waitUntilReady()` — a FULL "ready for display" wait,
-        // not merely `scrollGate.waitUntilIdle()` — so a page whose
-        // `load()` was still in flight when it became active read the
-        // default 9:16 stage for its first frame(s), then jumped to its
-        // real shape once that whole chain finally finished. `holder
-        // .presentationSize` is `configure(with:)`'s own KVO observation
-        // on `AVPlayerItem.presentationSize` (`options: [.initial,
-        // .new]`) — it updates the moment AVFoundation itself reports a
-        // real size, with no "ready for display" gate of its own, so
-        // this fires well before `load()`'s later read does whenever
-        // the two disagree on timing. `load()`'s own write stays as a
-        // fallback (harmless once both agree), not removed here.
+        // Owner-reported bug (pose 3, wide video), round 2: the KVO fix
+        // below still was not enough — `holder.presentationSize` needs
+        // a real player attached, and `configure(with:)` (where that
+        // KVO observation starts) is itself gated behind `scrollGate
+        // .waitUntilIdle()` in `load()`. A page that became active
+        // before `load()` reached that point still read the default
+        // 9:16 stage for its first frame(s) after the swipe landed.
+        // `loadAssetAspect()` has no player and no scroll gate to wait
+        // on at all — see that method's own comment — so this is the
+        // PRIMARY source now. Keyed on the same `taskKey` as `load()`
+        // itself (not bare `assetID`), so it reruns in exactly the
+        // same situations that one does — a new asset, a retry, and a
+        // page re-entering the preload window after leaving it (the
+        // `isPreloadable` term in `taskKey`) — the last of which bare
+        // `assetID` alone would miss, since `assetID` would not have
+        // changed. A neighbour page gets its real aspect the moment it
+        // is created, long before it is ever swiped to.
+        .task(id: taskKey) {
+            await loadAssetAspect()
+        }
+        // `holder.presentationSize` is `configure(with:)`'s own KVO
+        // observation on `AVPlayerItem.presentationSize` (`options:
+        // [.initial, .new]`). With `loadAssetAspect()` above now the
+        // primary source, this is a CORRECTION pass only: the decoded
+        // video's own real shape, for the rare case it disagrees with
+        // `PHAsset.pixelWidth`/`pixelHeight` (rotation metadata
+        // PhotoKit's own asset record does not always capture
+        // exactly). Harmless and a no-op whenever the two already
+        // agree, which is the common case.
         .onChange(of: holder.presentationSize) { _, size in
             guard size.width > 0, size.height > 0 else { return }
             videoIsLandscape = size.width > size.height
@@ -1629,6 +1656,33 @@ struct PlayerPageView: View {
         }
         onScrubbingChanged(false)
         holder.applyPlaybackState()
+    }
+
+    /// Owner-reported bug fix (pose 3, wide video): `PHAsset.pixelWidth`/
+    /// `pixelHeight` are known the moment PhotoKit resolves the asset
+    /// record — metadata, not a decoded frame — so this needs no
+    /// player, no `AVPlayerItem`, and therefore no `scrollGate
+    /// .waitUntilIdle()` wait at all; `load()`'s own aspect read sits
+    /// behind both of those (see `videoIsLandscape`'s own comment).
+    /// Runs for every mounted page, not gated on `isPreloadable` the
+    /// way `load()` is — the point is to have the real shape ready
+    /// well before a page might ever become active, not merely once
+    /// it does.
+    ///
+    /// PhotoKit reports these dimensions already display-oriented
+    /// (after the asset's own rotation metadata), the same convention
+    /// `AVPlayerItem.presentationSize` uses — see `holder
+    /// .presentationSize`'s own `.onChange`, which corrects this
+    /// reading in the rare case the two disagree.
+    private func loadAssetAspect() async {
+        let id = assetID
+        let size = await Task.detached(priority: .userInitiated) { () -> CGSize? in
+            guard let asset = PhotoLibraryService.fetchAsset(id) else { return nil }
+            return CGSize(width: asset.pixelWidth, height: asset.pixelHeight)
+        }.value
+        guard !Task.isCancelled, let size, size.width > 0, size.height > 0 else { return }
+        videoIsLandscape = size.width > size.height
+        videoAspectRatio = size.width / size.height
     }
 
     private func load() async {
