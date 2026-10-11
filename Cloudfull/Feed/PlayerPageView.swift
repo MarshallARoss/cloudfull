@@ -855,7 +855,18 @@ struct PlayerPageView: View {
                                     // differently-proportioned closed
                                     // window still lands the line on
                                     // the video's own edge.
-                                    bandHeight: (duoLayout.pose == .openWide || duoLayout.pose == .book || duoLayout.pose == .closed)
+                                    //
+                                    // Pose 5 (`.openTall`) joins them
+                                    // too (Opus round-3 compare, owner:
+                                    // "pose 5 = like 1V") — was reading
+                                    // the real `bottomSpace` instead,
+                                    // which lifted the line by
+                                    // `ScrubberView.trackBoxHeight`
+                                    // whenever that band was 50pt or
+                                    // more (`seamOffset`'s own rule),
+                                    // "~16pt above the bottom edge" on
+                                    // the sim.
+                                    bandHeight: (duoLayout.pose == .openWide || duoLayout.pose == .book || duoLayout.pose == .closed || duoLayout.pose == .openTall)
                                         ? 0 : bottomSpace,
                                     isActive: isActive,
                                     reduceMotion: reduceMotion,
@@ -887,7 +898,11 @@ struct PlayerPageView: View {
                                     // same fix 1V already needed to
                                     // land the visible LINE there too,
                                     // not just the box.
-                                    pinsToBottomEdge: duoLayout.pose == .closed || duoLayout.pose == .openWide || duoLayout.pose == .book
+                                    //
+                                    // Pose 5 (Opus round-3 compare):
+                                    // same treatment as 1V, per the
+                                    // owner's own "pose 5 = like 1V."
+                                    pinsToBottomEdge: duoLayout.pose == .closed || duoLayout.pose == .openWide || duoLayout.pose == .book || duoLayout.pose == .openTall
                                 )
                             }
                         }
