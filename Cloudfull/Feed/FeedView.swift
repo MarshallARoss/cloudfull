@@ -297,6 +297,27 @@ struct FeedView: View {
     /// Deliberately still scoped to `.openTall`/`.closed`, not every
     /// closed-bar pose: pose 3/4/4W's own chin is untouched this
     /// round, unverified against this change.
+    ///
+    /// Owner correction (pose 1V, collapsed chin): "the COLLAPSED chin
+    /// must sit exactly where the Home Screen's own Search button sits
+    /// on the closed display — the bottom of the bar column," not
+    /// `extent.bottom + Rail.spacing` (under Delete), which the owner
+    /// measured as "about 70pt too high." The owner's own screenshot
+    /// measurements (closed, 466×678pt): Search button bottom ≈ 652pt,
+    /// 26pt above the window's own true bottom edge, against a 34pt
+    /// bottom safe-area inset there — 8pt inside that inset line, not
+    /// on it exactly. `closedCollapsedChinBottomOffset` is that 8pt,
+    /// applied to the REAL, live `safeAreaBottom` rather than a flat
+    /// 628/652: `containerSize.height - safeAreaBottom +
+    /// closedCollapsedChinBottomOffset` reproduces the owner's own
+    /// 652pt exactly at the measured 34pt inset, and stays correct at
+    /// any other inset this app ever sees. Pose 5 is UNCHANGED — its
+    /// own wireframe explicitly wants the chin "40pt clear of Delete,"
+    /// which `extent.bottom + Rail.spacing` already gives it; this is
+    /// the EXPANDED side's own anchor there regardless (pose 5's own
+    /// tabs stay open per §3c), so the collapsed case barely shows.
+    /// `ChinNavigation`'s own EXPANDED-capsule position is untouched
+    /// either way — `railAlignedCenter` is read only while collapsed.
     private func railAlignedChinCenter(duoLayout: DuoLayout, safeAreaTop: CGFloat, safeAreaBottom: CGFloat, containerSize: CGSize) -> CGPoint? {
         if duoLayout.pose == .laptop {
             return duoLayout.laptopRailRow(containerSize: containerSize, safeAreaBottom: safeAreaBottom)?.chinCenter
@@ -305,9 +326,20 @@ struct FeedView: View {
               let centerX = duoLayout.ringCenteredColumnX(containerSize: containerSize, safeAreaTop: safeAreaTop),
               let extent = duoLayout.railVerticalExtent(containerSize: containerSize, safeAreaTop: safeAreaTop)
         else { return nil }
-        let centerY = extent.bottom + Rail.spacing + Rail.hit / 2
+        let centerY: CGFloat
+        if duoLayout.pose == .closed {
+            let bottom = containerSize.height - safeAreaBottom + Self.closedCollapsedChinBottomOffset
+            centerY = bottom - Rail.hit / 2
+        } else {
+            centerY = extent.bottom + Rail.spacing + Rail.hit / 2
+        }
         return CGPoint(x: centerX, y: centerY)
     }
+
+    /// See `railAlignedChinCenter`'s own comment: the owner's measured
+    /// 8pt the Home Screen's Search button sits inside the real
+    /// bottom safe-area inset line, on the closed display.
+    private static let closedCollapsedChinBottomOffset: CGFloat = 8
 
     /// Step 7's own anchor (`design/duo/duo_build_spec.md` §3c): the
     /// column tabs' own top edge ("Delete bottom + 40") and horizontal
