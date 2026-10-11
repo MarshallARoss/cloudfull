@@ -61,7 +61,33 @@ final class RotationPolicy {
     /// Tells the system to re-ask `supportedInterfaceOrientations(for:)`
     /// right away, rather than waiting for some unrelated rotation event
     /// to notice the mask changed (`UIViewController.h:391`, iOS 16).
+    ///
+    /// Owner bug (pose pass): closed + a TALL video still rotated to
+    /// landscape, and stayed landscape — rail gone — even after the
+    /// hinge finished closing and this type's own `allowsLandscape`
+    /// read back `false`. `setNeedsUpdateOfSupportedInterfaceOrientations`
+    /// alone only affects the NEXT system-driven rotation query; it
+    /// never corrects a window that is ALREADY in an orientation the
+    /// mask no longer allows. The hinge close passes through
+    /// `.partiallyOpen` on its way to `.closed` — `FeedView
+    /// .allowsLandscape`'s own `hingeStatus == .partial` clause allows
+    /// landscape there BY DESIGN, for the 1H → tent flow — so a window
+    /// can commit to landscape during that brief window and then simply
+    /// never be told to leave it once the hinge finishes closing.
+    /// `requestGeometryUpdate` is the active counterpart: unlike the
+    /// invalidation call, it asks the system to move the window to a
+    /// given orientation NOW. Calling both, every time `allowsLandscape`
+    /// changes — not only on a close — means a page/pose change that
+    /// disallows landscape self-corrects immediately too, not just on
+    /// the next incidental rotation.
     private func requestUpdate() {
-        scene?.keyWindow?.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations()
+        guard let scene else { return }
+        scene.keyWindow?.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations()
+        let preferred: UIInterfaceOrientationMask = allowsLandscape ? .allButUpsideDown : .portrait
+        scene.requestGeometryUpdate(.iOS(interfaceOrientations: preferred)) { error in
+            #if DEBUG
+            print("[RotationPolicy] requestGeometryUpdate failed: \(error)")
+            #endif
+        }
     }
 }
