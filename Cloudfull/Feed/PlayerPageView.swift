@@ -553,7 +553,8 @@ struct PlayerPageView: View {
             let stageRect = duoLayout.stageRect(
                 containerSize: proxy.size,
                 safeAreaTop: safeAreaTop,
-                aspectRatio: useVideoAspect ? videoAspectRatio : 9.0 / 16.0
+                aspectRatio: useVideoAspect ? videoAspectRatio : 9.0 / 16.0,
+                safeAreaBottom: fullscreenSafeArea.bottom
             )
             let stageWidth = stageRect.width
             let stageHeight = stageRect.height
