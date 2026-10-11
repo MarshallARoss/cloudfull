@@ -1530,6 +1530,15 @@ struct FeedView: View {
         .buttonBorderShape(.circle)
         .controlSize(.small)
         .tint(.white)
+        // Owner re-adapt (Opus wireframe compare): `.controlSize(.small)`
+        // draws this glass circle at about 32pt — under Apple's own
+        // 44×44pt minimum tap target. The frame grows the hit area
+        // alone; the visual circle (sized by its own content above)
+        // stays the same small glass glyph, centred inside it. One
+        // definition, every pose that mounts `muteButton` — topChrome,
+        // pose5TopRow, chromeColumn, laptopDeckControls — picks this up
+        // without its own fix.
+        .frame(minWidth: 44, minHeight: 44)
         // Identifier gated directly on `hidesGlobalChrome`, the same
         // condition that actually hides this row — the same pattern
         // every other top-chrome control uses.
@@ -1678,6 +1687,12 @@ struct FeedView: View {
         // modifier the Photos top bar uses, so the two bars cannot
         // disagree about the threshold or the intensity.
         .binShake(count: trashService.count)
+        // Owner re-adapt (Opus wireframe compare): see `muteButton`'s
+        // identical frame for why — the icon-only (empty bin) case
+        // drew at about 32pt wide, under the 44pt minimum. `minWidth`,
+        // not a fixed width: a queued count or byte figure still grows
+        // the capsule past 44pt on its own, unclipped.
+        .frame(minWidth: 44, minHeight: 44)
         // See `FilterMenuView`'s identical `hidesGlobalChrome`-gated
         // identifier pattern.
         .accessibilityIdentifier(hidesGlobalChrome ? "" : "bin_open")
