@@ -551,6 +551,12 @@ struct DuoLayout {
     /// Pose 5's chin: its own size once expanded in its column —
     /// build 7.
     static let columnChinSize: CGFloat = 56
+    /// Pose 5's real network ring centre, measured inward from
+    /// `occlusion.maxX` — `occlusion` there covers the time text AND
+    /// the ring together, so its own trailing edge, not its `midX`,
+    /// is the stable anchor. See `ringCenteredColumnX`'s own doc for
+    /// the measurement this came from.
+    static let openTallRingInsetFromTrailingEdge: CGFloat = 47.7
 
     // MARK: - Rail column (step 3; extended by steps 4, 5, and the pose fixes)
     //
@@ -739,19 +745,28 @@ struct DuoLayout {
     /// it shares with that text — so `occlusion.midX` there is the
     /// midpoint between the two, not the ring's own centre, which
     /// sits further toward the region's own trailing edge.
-    /// `openTallRingOffset` is that gap, measured directly from the
-    /// owner's own screenshot (rail, using this function pre-fix,
-    /// measured 1501px of a 2×, 669pt-wide capture; the ring itself
-    /// measured 1524px — an 11.5pt gap, rounded to 11) — flagged, like
-    /// every "measured, no API" constant in this file, for the owner's
-    /// own look once the DEBUG guides can confirm it directly against
-    /// pose 5 on the sim. 1V is unchanged: its own `occlusion` already
+    /// `openTallRingOffset` was that gap, first measured directly from
+    /// the owner's own screenshot at 11pt — superseded below.
+    ///
+    /// Owner re-adapt (DEBUG guide capture `guides_p5_r2.png`, pose
+    /// 5): the `+11` guess above still sat the guide line ~8pt LEFT
+    /// of the ring's real centre — a visual check at normal zoom
+    /// called it exact, but a pixel-level crop of the ring's own
+    /// white arc did not. Measured straight from that capture:
+    /// `occlusion` reads `535,0,134×951` (`maxX` 669pt); the ring's
+    /// own arc spans 1803–1925px of a 3×, 2007pt-wide capture →
+    /// centre 621.3pt. So the ring's real centre sits
+    /// `Self.openTallRingInsetFromTrailingEdge` (47.7pt) inside
+    /// `occlusion`'s own trailing edge, not at its `midX` plus a
+    /// small nudge. 1V is unchanged: its own `occlusion` already
     /// reads as the ring alone, with nothing to add.
     func ringCenteredColumnX(containerSize: CGSize, safeAreaTop: CGFloat) -> CGFloat? {
         guard let columnRect = railColumnRect(containerSize: containerSize, safeAreaTop: safeAreaTop) else { return nil }
         if let occlusion, occlusion.midX >= columnRect.minX - 8, occlusion.midX <= columnRect.maxX + 8 {
-            let openTallRingOffset: CGFloat = pose == .openTall ? 11 : 0
-            return occlusion.midX + openTallRingOffset
+            if pose == .openTall {
+                return occlusion.maxX - Self.openTallRingInsetFromTrailingEdge
+            }
+            return occlusion.midX
         }
         return columnRect.midX
     }
