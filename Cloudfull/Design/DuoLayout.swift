@@ -954,10 +954,10 @@ struct DuoLayout {
         return CGRect(x: containerSize.width, y: 0, width: 0, height: safeAreaTop)
     }
 
-    // MARK: - Laptop bottom deck (build 8b, re-adapted R2)
+    // MARK: - Laptop bottom deck (build 8b, re-adapted R2, re-adapted R4)
     //
     // Pose 6 only: everything below the fold's bottom edge — the
-    // scrubber, the caption, the Mute/Filter/Bin zigzag row, the
+    // scrubber, the caption, the Mute/Filter/Bin group, the
     // horizontal action rail and its chin, and Previous/Next — is one
     // shared panel (`design/duo/duo_build_spec.md` §2.6), anchored to
     // this frame's own `division`, never a fixed 669×951 window.
@@ -969,8 +969,8 @@ struct DuoLayout {
     // because the laptop window happens to measure that wide — so the
     // owner's rule rules it out too, denominator or not. Every number
     // below instead comes from `laptopBottomRect`'s own live rect:
-    // the deck's four row-groups (scrubber+caption, zigzag, rail+chin,
-    // Previous/Next) are `laptopBand`'s own equal quarters of its
+    // the deck's three row-groups (scrubber+caption+group, rail+chin,
+    // Previous/Next) are `laptopBand`'s own equal thirds of its
     // height, and every x position is either the rect's own live
     // width or a fraction/gap of the rail-and-chin row's own even,
     // six-way split — never a ratio against a measured constant. Every
@@ -981,9 +981,26 @@ struct DuoLayout {
     // caption, the scrubber) still render once per page, inside
     // `FeedPageContent`/`PlayerPageView`, same as every other pose —
     // only the two pieces that are genuinely screen-global (the Mute/
-    // Filter/Bin row, and Previous/Next, which pages the feed) mount
+    // Filter/Bin group, and Previous/Next, which pages the feed) mount
     // once in `FeedView.overlayControls`. See each call site's own
     // comment.
+    //
+    // Owner re-adapt (round 4): "put the filters in the top right of
+    // the bottom section, across and aligned from the date and time."
+    // The group no longer has its own row — it now shares band 0 with
+    // the scrubber/caption, right-aligned to that band's own trailing
+    // margin (the same `pagePad` inset `laptopScrubberRect`'s own
+    // right edge already uses) and vertically centred on the
+    // caption's own date line. That date line's real position is a
+    // genuine on-screen fact a pure-geometry type like this one cannot
+    // read for itself — `FeedView.laptopCaptionDateLineCenterY` reads
+    // it live, the same `GeometryReader`/`PreferenceKey` technique
+    // `duoRightGridBottomY` already uses (see that property's own
+    // comment); `laptopControlGroupGeometry` below hands back only the
+    // X axis and a same-launch fallback Y. The deck drops from four
+    // bands to three: band 0 now carries the group too, so `laptopZigzagRow`
+    // (its own now-empty row) is gone, and the rail/chin and
+    // Previous/Next rows each shift up one band index.
 
     /// Pose 6's bottom-of-fold panel: "`CGRect(0, division.maxY, W, H
     /// − division.maxY − safeAreaBottom)`" (§2.6) — `nil` outside the
@@ -997,12 +1014,14 @@ struct DuoLayout {
                       height: max(0, containerSize.height - division.maxY - safeAreaBottom))
     }
 
-    /// The deck's four equal row-groups, in order: 0 scrubber+caption,
-    /// 1 the zigzag row, 2 the rail+chin, 3 Previous/Next — "Rows
-    /// evenly spaced in that rect … divide the rect height into equal
-    /// bands" (owner re-adapt). Every laptop-deck function below reads
-    /// its own band from here instead of a wireframe v-offset.
-    private static let laptopBandCount: CGFloat = 4
+    /// The deck's three equal row-groups, in order: 0
+    /// scrubber+caption+group, 1 the rail+chin, 2 Previous/Next —
+    /// "Rows evenly spaced in that rect … divide the rect height into
+    /// equal bands" (owner re-adapt), now three instead of four since
+    /// the group (round 4) folded into band 0 rather than keeping its
+    /// own row. Every laptop-deck function below reads its own band
+    /// from here instead of a wireframe v-offset.
+    private static let laptopBandCount: CGFloat = 3
     private static func laptopBand(_ bottom: CGRect, _ index: Int) -> CGRect {
         let height = bottom.height / laptopBandCount
         return CGRect(x: bottom.minX, y: bottom.minY + CGFloat(index) * height, width: bottom.width, height: height)
@@ -1021,42 +1040,45 @@ struct DuoLayout {
 
     /// Band 0's own bottom edge — `FeedPageContent.duoLaptopCaption`'s
     /// own bottom-aligned text box ends here, under the scrubber,
-    /// still inside the deck's first quarter.
+    /// still inside the deck's first third (now shared with the
+    /// Mute/Filter/Bin group — see `laptopControlGroupGeometry`).
     func laptopCaptionBottomY(containerSize: CGSize, safeAreaBottom: CGFloat) -> CGFloat? {
         guard let bottom = laptopBottomRect(containerSize: containerSize, safeAreaBottom: safeAreaBottom) else { return nil }
         return Self.laptopBand(bottom, 0).maxY
     }
 
-    /// The Mute/Filter/Bin zigzag row, centred in band 1: the
-    /// horizontal twin of `zigzagCenters`, levelled with gaps in
-    /// `laptopRailRow`'s own row instead of the vertical rail's.
-    /// `FeedView.overlayControls` mounts this; see this group's own
-    /// header comment for why it is global rather than per-page.
+    /// The Mute/Filter/Bin group's own X-axis geometry, in band 0 —
+    /// owner re-adapt (round 4): "put the filters in the top right of
+    /// the bottom section, across and aligned from the date and
+    /// time." `trailingX` is band 0's own trailing margin, the same
+    /// `pagePad` inset `laptopScrubberRect`'s own right edge already
+    /// uses, so the group's right edge lines up directly under the
+    /// scrubber's own right end — `FeedView.laptopDeckControls` right-
+    /// aligns the group's own `HStack` to it with a `.frame(width:
+    /// trailingX, alignment: .trailing)`/`.position(x: trailingX / 2,
+    /// y:)` pair (the same "zero-anchored box, aligned content"
+    /// technique `duoLaptopCaption`'s own `rect` already uses), which
+    /// is what actually shifts the group left on its own, with no
+    /// gap math here, when `binBadgeText` widens it.
     ///
-    /// Owner re-adapt (Opus wireframe compare): Mute and Filter stay on
-    /// the left, level with the rail's own first two gaps
-    /// (Keep–Share, Share–Album) — unchanged. Bin moves from the THIRD
-    /// gap to the fourth: `design/duo/duo_build_spec.md`'s own §2.6
-    /// numbers (`Mute x = 120, Filter x = 220, Bin x = 420`) put Bin a
-    /// full two rail pitches past Filter, not one — "pushed right,"
-    /// roughly over the Shrink/Delete side of the rail, not evenly
-    /// stepped through the row's own gaps in order.
-    func laptopZigzagRow(containerSize: CGSize, safeAreaBottom: CGFloat) -> (mute: CGPoint, filter: CGPoint, bin: CGPoint, counterLeadingX: CGFloat)? {
-        guard let bottom = laptopBottomRect(containerSize: containerSize, safeAreaBottom: safeAreaBottom),
-              let row = laptopRailRow(containerSize: containerSize, safeAreaBottom: safeAreaBottom)
-        else { return nil }
-        let y = Self.laptopBand(bottom, 1).midY
-        let xs = row.centers.map(\.x) + [row.chinCenter.x]
-        func gapX(_ i: Int) -> CGFloat { (xs[i] + xs[i + 1]) / 2 }
-        return (
-            mute: CGPoint(x: gapX(0), y: y),
-            filter: CGPoint(x: gapX(1), y: y),
-            bin: CGPoint(x: gapX(3), y: y),
-            counterLeadingX: gapX(3) + Rail.hit / 2 + 6
-        )
+    /// The Y axis is NOT this function's job: vertically the group
+    /// centres on the caption's own date line, a real on-screen fact
+    /// (`FeedView.laptopCaptionDateLineCenterY`, measured the same
+    /// `GeometryReader`/`PreferenceKey` way `duoRightGridBottomY`
+    /// already is) this pure-geometry type cannot read for itself.
+    /// `fallbackY` is this function's own best guess for the one
+    /// frame before that measurement has ever landed this launch —
+    /// proportioned the same way `laptopScrubberRect`'s own
+    /// `band.height * 0.25` is: flagged for the owner's own look at
+    /// the sim, same as every other "measured, no API" constant in
+    /// this file.
+    func laptopControlGroupGeometry(containerSize: CGSize, safeAreaBottom: CGFloat) -> (trailingX: CGFloat, fallbackY: CGFloat)? {
+        guard let bottom = laptopBottomRect(containerSize: containerSize, safeAreaBottom: safeAreaBottom) else { return nil }
+        let band = Self.laptopBand(bottom, 0)
+        return (trailingX: band.maxX - Self.pagePad, fallbackY: band.minY + band.height * 0.62)
     }
 
-    /// The horizontal action rail, centred in band 2: the same five
+    /// The horizontal action rail, centred in band 1: the same five
     /// buttons `actionRail`/`actionRailColumn` already draw everywhere
     /// else, this time in a row — 6 slots (Keep, Share, Album, Shrink,
     /// Delete, then the chin) evenly distributed across the deck's own
@@ -1073,7 +1095,7 @@ struct DuoLayout {
     /// position-based path pose 5's rail column already uses.
     func laptopRailRow(containerSize: CGSize, safeAreaBottom: CGFloat) -> (centers: [CGPoint], hairlineX: CGFloat, hairlineY: CGFloat, chinCenter: CGPoint)? {
         guard let bottom = laptopBottomRect(containerSize: containerSize, safeAreaBottom: safeAreaBottom) else { return nil }
-        let band = Self.laptopBand(bottom, 2)
+        let band = Self.laptopBand(bottom, 1)
         let y = band.midY
         let leading = band.minX + Self.pagePad
         let usable = max(0, band.width - Self.pagePad * 2)
@@ -1084,7 +1106,7 @@ struct DuoLayout {
         return (centers: Array(centers), hairlineX: (xs[4] + xs[5]) / 2, hairlineY: y, chinCenter: chinCenter)
     }
 
-    /// Previous/Next pill geometry, centred in band 3: two slots of
+    /// Previous/Next pill geometry, centred in band 2: two slots of
     /// the deck's own live width, each inset by `pagePad` from the
     /// deck's own edge and from each other, mirroring
     /// `laptopRailRow`'s own even-distribution approach rather than a
@@ -1093,7 +1115,7 @@ struct DuoLayout {
     /// `advanceToNextPage(from:)` page the feed.
     func laptopPagerCenters(containerSize: CGSize, safeAreaBottom: CGFloat) -> (previous: CGPoint, next: CGPoint, width: CGFloat, height: CGFloat)? {
         guard let bottom = laptopBottomRect(containerSize: containerSize, safeAreaBottom: safeAreaBottom) else { return nil }
-        let band = Self.laptopBand(bottom, 3)
+        let band = Self.laptopBand(bottom, 2)
         let y = band.midY
         let width = max(0, (band.width - Self.pagePad * 3) / 2)
         let height = min(60, max(44, band.height - 12))

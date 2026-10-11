@@ -122,6 +122,33 @@ struct FeedView: View {
     /// down to each `FeedPageContent` the same way `safeAreaBottom`
     /// already is.
     @State private var duoRightGridBottomY: CGFloat?
+    /// Pose 6 (laptop), round 4: the active page's own caption date
+    /// line (`FeedPageContent.duoLaptopCaption`), in window space —
+    /// owner re-adapt: "put the filters in the top right of the
+    /// bottom section, across and aligned from the date and time," so
+    /// the Mute/Filter/Bin group (`laptopDeckControls`) needs this
+    /// line's real vertical centre, not the caption block's as a
+    /// whole. The same `GeometryReader`/`PreferenceKey` technique
+    /// `duoRightGridBottomY` just above already uses — see that
+    /// property's own comment — caught at the same ZStack, reported
+    /// only by the page `FeedPageContent.isActive` marks active (see
+    /// `LaptopCaptionDateLineCenterKey`'s own comment), so a preloaded
+    /// neighbor page can never steal it mid-swipe. `nil` outside pose
+    /// 6, or before the active page's own caption has laid out even
+    /// once this launch; `laptopDeckControls` falls back to
+    /// `DuoLayout.laptopControlGroupGeometry`'s own `fallbackY` for
+    /// that one frame.
+    @State private var laptopCaptionDateLineCenterY: CGFloat?
+    /// Pose 6 (laptop), round 4: the Mute/Filter/Bin group's
+    /// (`laptopDeckControls`) own real, just-laid-out left edge, in
+    /// window space — `FeedPageContent.duoLaptopCaption` keeps its
+    /// own caption text clear of it, the same live-measurement
+    /// reasoning as `laptopCaptionDateLineCenterY` just above, mounted
+    /// once (never per-page), so there is no reduce ambiguity to guard
+    /// against here. `nil` outside pose 6, or before the group has
+    /// ever laid out this launch; `duoLaptopCaption` falls back to its
+    /// own old near-full-width clearance for that one frame.
+    @State private var laptopControlGroupLeadingX: CGFloat?
     /// Both read by `DuoLayout.classify` (Decision B,
     /// `design/duo/duo_audit_apple_checklist.md` §4): neither axis alone
     /// identifies a display — a 17 Pro resized large enough in iPhone
@@ -615,6 +642,11 @@ struct FeedView: View {
             // so it is where `DuoRightGridBottomKey`'s bubbled-up value
             // is caught, once, and handed down from here.
             .onPreferenceChange(DuoRightGridBottomKey.self) { duoRightGridBottomY = $0 }
+            // Same catch point, same reasoning, for pose 6's own pair
+            // of live measurements — see `laptopCaptionDateLineCenterY`/
+            // `laptopControlGroupLeadingX`'s own comments.
+            .onPreferenceChange(LaptopCaptionDateLineCenterKey.self) { laptopCaptionDateLineCenterY = $0 }
+            .onPreferenceChange(LaptopControlGroupLeadingXKey.self) { laptopControlGroupLeadingX = $0 }
             #if DEBUG
             // Same catch point, same reasoning, for every
             // `.duoGuideMark` reporting view — see `DuoGuideMarksKey`'s
@@ -908,6 +940,7 @@ struct FeedView: View {
                             safeAreaBottom: fullscreenSafeArea.bottom,
                             duoLayout: duoLayout,
                             duoRightGridBottomY: duoRightGridBottomY,
+                            laptopControlGroupLeadingX: laptopControlGroupLeadingX,
                             keepRequestNonce: doubleTapKeepNonces[entry.id] ?? 0
                         )
                         .opacity(isFullscreen ? 0 : 1)
@@ -1255,7 +1288,7 @@ struct FeedView: View {
             // already generalizes to both poses untouched.
             let usesPose5TopRow = duoLayout.pose == .openTall || duoLayout.pose == .closed
             // Build 8b: pose 6 (laptop) mounts its own shared bottom
-            // deck here — the Mute/Filter/Bin zigzag row and
+            // deck here — the Mute/Filter/Bin group and
             // Previous/Next are the two pieces of §2.6 genuinely
             // global to the screen, not to any one page; see
             // `laptopDeckControls`'s own comment and this group's
@@ -1317,7 +1350,7 @@ struct FeedView: View {
     /// sim.
     private func topChrome(duoLayout: DuoLayout, safeAreaTop: CGFloat, containerSize: CGSize) -> some View {
         // Build 8b: pose 6 (laptop) adds to this suppression too. Mute,
-        // Filter, and Bin move into the bottom deck's own zigzag row
+        // Filter, and Bin move into the bottom deck's own group
         // (`laptopDeckControls`); nothing interactive belongs above the
         // fold — the build-list's own check for this step, "Duo 6:
         // nothing interactive above the fold." Pose 1V (`.closed`)
@@ -1485,11 +1518,11 @@ struct FeedView: View {
         .position(x: leading + width / 2, y: centerY)
     }
 
-    // MARK: - Laptop deck globals (build 8b)
+    // MARK: - Laptop deck globals (build 8b, re-adapted R4)
 
     /// Pose 6's (laptop) own two screen-global pieces of the shared
     /// bottom deck — `design/duo/duo_build_spec.md` §2.6: the Mute/
-    /// Filter/Bin zigzag row, and Previous/Next. Mounted here, not in
+    /// Filter/Bin group, and Previous/Next. Mounted here, not in
     /// `FeedPageContent`, for the same reason `chromeColumn`/
     /// `pose5TopRow` already are: these describe the SCREEN, not the
     /// current page — a shrink's progress capsule, mute state, and
@@ -1500,33 +1533,62 @@ struct FeedView: View {
     /// caption, which DO describe the current item, stay in
     /// `FeedPageContent`/`PlayerPageView` instead — see
     /// `FeedPageContent.laptopHorizontalRail`/`duoLaptopCaption`.
+    ///
+    /// Owner re-adapt (round 4): "put the filters in the top right of
+    /// the bottom section, across and aligned from the date and
+    /// time." The group now shares band 0 with the caption instead of
+    /// owning its own row — `DuoLayout.laptopControlGroupGeometry`
+    /// gives the X axis (band 0's own trailing margin); `y` is
+    /// `laptopCaptionDateLineCenterY`, this launch's latest real
+    /// measurement of the caption's own date line (falling back to
+    /// that function's own `fallbackY` for the one frame before any
+    /// measurement has landed). The `HStack`/`.frame(width:
+    /// group.trailingX, alignment: .trailing)`/`.position(x:
+    /// group.trailingX / 2, y:)` trio is the same "zero-anchored box,
+    /// aligned content" technique `duoLaptopCaption`'s own `rect`
+    /// already uses: the box's right edge always sits at
+    /// `group.trailingX` regardless of the group's own rendered
+    /// width, so `binBadgeText` widening the group shifts it LEFT on
+    /// its own — "when it appears the group shifts left so it stays
+    /// inside" — with no gap arithmetic here at all. The `background`
+    /// `GeometryReader` reports that real, just-laid-out left edge
+    /// back up through `LaptopControlGroupLeadingXKey`, attached to
+    /// the `HStack` itself (before the outer `.frame` inflates it to
+    /// the box's own full width), so what bubbles up is the group's
+    /// own tight bounds, not the box's.
     private func laptopDeckControls(duoLayout: DuoLayout, safeAreaBottom: CGFloat, containerSize: CGSize) -> some View {
         Group {
-            if let zigzag = duoLayout.laptopZigzagRow(containerSize: containerSize, safeAreaBottom: safeAreaBottom) {
-                muteButton
-                    .position(zigzag.mute)
-                FilterMenuView(store: optionsStore, hidesChrome: hidesGlobalChrome)
-                    .duoGuideMark("top.filter", color: .teal)
-                    .position(zigzag.filter)
-                binButton
-                    .position(zigzag.bin)
-                // `binButton`'s own inline badge already rides inside
-                // its capsule (same as every call site of this button);
-                // this repeats the count at the wireframe's own "counter
-                // leading at 452" position, the same doubled-but-
-                // deliberate pattern `chromeColumn`'s identical comment
-                // already documents for the vertical zigzag column.
-                if let binBadgeText {
-                    Text(binBadgeText)
-                        .font(.system(size: 11, weight: .medium))
-                        .monospacedDigit()
-                        .foregroundStyle(.white)
-                        .feedShadow()
-                        .lineLimit(1)
-                        .fixedSize()
-                        .frame(width: 60, alignment: .leading)
-                        .position(x: zigzag.counterLeadingX + 30, y: zigzag.bin.y)
+            if let group = duoLayout.laptopControlGroupGeometry(containerSize: containerSize, safeAreaBottom: safeAreaBottom) {
+                let centerY = laptopCaptionDateLineCenterY ?? group.fallbackY
+                HStack(spacing: 12) {
+                    muteButton
+                    FilterMenuView(store: optionsStore, hidesChrome: hidesGlobalChrome)
+                        .duoGuideMark("top.filter", color: .teal)
+                    binButton
+                    // `binButton`'s own inline badge already rides inside
+                    // its capsule (same as every call site of this button);
+                    // this repeats the count trailing of Bin, inside the
+                    // deck's own margin, the same doubled-but-deliberate
+                    // pattern `chromeColumn`'s identical comment already
+                    // documents for the vertical zigzag column (now gone,
+                    // but the pattern itself is unchanged).
+                    if let binBadgeText {
+                        Text(binBadgeText)
+                            .font(.system(size: 11, weight: .medium))
+                            .monospacedDigit()
+                            .foregroundStyle(.white)
+                            .feedShadow()
+                            .lineLimit(1)
+                            .fixedSize()
+                    }
                 }
+                .background(
+                    GeometryReader { proxy in
+                        Color.clear.preference(key: LaptopControlGroupLeadingXKey.self, value: proxy.frame(in: .global).minX)
+                    }
+                )
+                .frame(width: group.trailingX, alignment: .trailing)
+                .position(x: group.trailingX / 2, y: centerY)
             }
             if let pager = duoLayout.laptopPagerCenters(containerSize: containerSize, safeAreaBottom: safeAreaBottom) {
                 laptopPagerButton(title: "← Previous", identifier: "duo_prev",
@@ -2045,20 +2107,36 @@ struct FeedView: View {
         if let rightPage = duoLayout.rightPage(containerSize: containerSize, safeAreaTop: safeAreaTop) {
             duoGuideRect(rightPage, color: .pink, label: "grid \(duoGuideFormat(rightPage))")
         }
-        // The laptop deck's four bands — same `bottom.height / 4`
-        // split `DuoLayout.laptopBand` (private) already uses
-        // internally, read back here for the outline alone; every
-        // laptop-deck function in `DuoLayout` already reads ITS OWN
-        // band straight from `laptopBottomRect`, so this is not a
-        // second description of their placement, only of the band
-        // lines themselves.
+        // The laptop deck's three bands (round 4: down from four — the
+        // Mute/Filter/Bin group folded into band 0, see
+        // `DuoLayout.laptopControlGroupGeometry`'s own comment) — same
+        // `bottom.height / 3` split `DuoLayout.laptopBand` (private)
+        // already uses internally, read back here for the outline
+        // alone; every laptop-deck function in `DuoLayout` already
+        // reads ITS OWN band straight from `laptopBottomRect`, so this
+        // is not a second description of their placement, only of the
+        // band lines themselves.
         if let bottom = duoLayout.laptopBottomRect(containerSize: containerSize, safeAreaBottom: safeAreaInsets.bottom) {
-            let bandHeight = bottom.height / 4
-            let names = ["deck1", "deck2", "deck3", "deck4"]
-            ForEach(0..<4, id: \.self) { index in
+            let bandHeight = bottom.height / 3
+            let names = ["deck1 (scrubber/caption/group)", "deck2 (rail/chin)", "deck3 (prev/next)"]
+            ForEach(0..<3, id: \.self) { index in
                 let band = CGRect(x: bottom.minX, y: bottom.minY + CGFloat(index) * bandHeight,
                                    width: bottom.width, height: bandHeight)
                 duoGuideRect(band, color: .gray, label: "\(names[index]) \(duoGuideFormat(band))")
+            }
+        }
+        // The Mute/Filter/Bin group's own real rendered box (round 4)
+        // — unlike `top.mute`/`top.filter`/`top.bin` above, which mark
+        // each BUTTON, this marks the GROUP as a whole, the same
+        // trailing-margin box `laptopDeckControls` itself positions,
+        // so the guide shows whether the group is actually staying
+        // inside band 0's own trailing margin (and shifting left for
+        // `binBadgeText`) rather than just where its buttons landed.
+        if let group = duoLayout.laptopControlGroupGeometry(containerSize: containerSize, safeAreaBottom: safeAreaInsets.bottom) {
+            let centerY = laptopCaptionDateLineCenterY ?? group.fallbackY
+            if let leadingX = laptopControlGroupLeadingX {
+                let rect = CGRect(x: leadingX, y: centerY - 22, width: group.trailingX - leadingX, height: 44)
+                duoGuideRect(rect, color: .teal, label: "deck.group \(duoGuideFormat(rect))")
             }
         }
         if let pager = duoLayout.laptopPagerCenters(containerSize: containerSize, safeAreaBottom: safeAreaInsets.bottom) {
@@ -2686,6 +2764,36 @@ struct FeedView: View {
     #endif
 }
 
+/// `FeedView.laptopCaptionDateLineCenterY`'s own anchor — see that
+/// property's comment, and `DuoRightGridBottomKey`'s identical pattern
+/// (`Cloudfull/Feed/DuoRightPage.swift`) this mirrors for the same
+/// cross-view geometry problem: a value only a real, laid-out view can
+/// report, needed by a sibling that cannot read it any other way.
+/// Reported only by the ACTIVE page's own `FeedPageContent
+/// .duoLaptopCaption` (gated on `isActive` at that call site, through
+/// `captionTexts(measureDateLineCenter:)`); a preloaded neighbor page
+/// reports nothing at all, so it can never win the `reduce` below and
+/// steal this value mid-swipe.
+struct LaptopCaptionDateLineCenterKey: PreferenceKey {
+    static let defaultValue: CGFloat? = nil
+    static func reduce(value: inout CGFloat?, nextValue: () -> CGFloat?) {
+        if let next = nextValue() { value = next }
+    }
+}
+
+/// `FeedView.laptopControlGroupLeadingX`'s own anchor — the Mute/
+/// Filter/Bin group's real left edge, reported by `FeedView
+/// .laptopDeckControls` itself. That view mounts once, globally, never
+/// per page, so — unlike `LaptopCaptionDateLineCenterKey` above —
+/// there is no second contributor this `reduce` ever needs to guard
+/// against.
+struct LaptopControlGroupLeadingXKey: PreferenceKey {
+    static let defaultValue: CGFloat? = nil
+    static func reduce(value: inout CGFloat?, nextValue: () -> CGFloat?) {
+        if let next = nextValue() { value = next }
+    }
+}
+
 /// One page's own bottom-band content: its caption — date, resolution,
 /// duration, size — and its action rail (Keep, Share, Shrink, Delete).
 /// Both scroll with that page's video instead of staying fixed to the
@@ -2754,6 +2862,14 @@ private struct FeedPageContent: View {
     /// itself until `DuoRightPage`'s own grid has laid out at least
     /// once this launch.
     let duoRightGridBottomY: CGFloat?
+    /// Pose 6 (laptop), round 4: the Mute/Filter/Bin group's own real
+    /// left edge, threaded the same way `duoRightGridBottomY` is — see
+    /// `FeedView.laptopControlGroupLeadingX`'s own comment. Read only
+    /// by `duoLaptopCaption`, to keep the caption's own text clear of
+    /// the group sharing its row. `nil` on every pose but laptop, and
+    /// on laptop itself until the group has laid out at least once
+    /// this launch.
+    let laptopControlGroupLeadingX: CGFloat?
     /// Bumped by `FeedView` on every double tap of this page's video — see
     /// `FeedView.doubleTapKeepNonces`. Watched below; each bump is one
     /// `keepFromDoubleTap()`.
@@ -3115,7 +3231,15 @@ private struct FeedPageContent: View {
     /// `duoOpenWideCaption`/`duoBookCaption`, which each wrap this in
     /// their own absolute-positioned frame instead of `captionZone`'s
     /// flow-based padding.
-    private var captionTexts: some View {
+    ///
+    /// `measureDateLineCenter` (round 4, default `false`, every call
+    /// site but `duoLaptopCaption`'s own): reports the date line's
+    /// real, just-laid-out vertical centre through
+    /// `LaptopCaptionDateLineCenterKey` — see that key's own comment,
+    /// and `FeedView.laptopCaptionDateLineCenterY`'s. `duoLaptopCaption`
+    /// passes `isActive` here, so only the one page genuinely on
+    /// screen (not a preloaded neighbor) ever reports a position.
+    private func captionTexts(measureDateLineCenter: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(dateLine)                           // "<date> · <time> · <place>"
                 .font(.system(size: 16, weight: .semibold))
@@ -3125,6 +3249,13 @@ private struct FeedPageContent: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
                 .truncationMode(.tail)
+                .background(alignment: .center) {
+                    if measureDateLineCenter {
+                        GeometryReader { proxy in
+                            Color.clear.preference(key: LaptopCaptionDateLineCenterKey.self, value: proxy.frame(in: .global).midY)
+                        }
+                    }
+                }
             Text(meta.detailText)                    // "4K · 1:12 · 428 MB"
                 .font(.system(size: 14))
                 .monospacedDigit()
@@ -3195,7 +3326,7 @@ private struct FeedPageContent: View {
     private func captionZone(trailingClearance: CGFloat, hidden: Bool, bandHeight: CGFloat) -> some View {
         let liftsForScrubber = duoLayout.pose != .regularPhone && bandHeight < 50
         let bottomPadding: CGFloat = duoLayout.pose == .closed ? 20 : (liftsForScrubber ? 20 + 28 : 20)
-        return captionTexts
+        return captionTexts()
             .feedShadow()
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.leading, 16)
@@ -3268,7 +3399,7 @@ private struct FeedPageContent: View {
         let leading: CGFloat = 24
         let width = max(0, stageMinX - 40 - leading)
         let rect = CGRect(x: leading, y: 0, width: width, height: max(0, containerSize.height - 30))
-        return captionTexts
+        return captionTexts()
             .feedShadow()
             .frame(width: rect.width, alignment: .leading)
             .opacity(isScrubbing ? 0 : 1)
@@ -3315,7 +3446,7 @@ private struct FeedPageContent: View {
             let captionHeight: CGFloat = 40
             let top = duoRightGridBottomY.map { $0 + 16 } ?? max(0, containerSize.height - 30 - captionHeight)
             let rect = CGRect(x: leading, y: top, width: width, height: captionHeight)
-            captionTexts
+            captionTexts()
                 .feedShadow()
                 .frame(width: rect.width, alignment: .leading)
                 .opacity(isScrubbing ? 0 : 1)
@@ -3340,13 +3471,28 @@ private struct FeedPageContent: View {
     /// never has to be hand-measured. Renders nothing when
     /// `DuoLayout.laptopCaptionBottomY` is `nil` (no active division
     /// this frame).
+    ///
+    /// Owner re-adapt (round 4): "put the filters in the top right of
+    /// the bottom section, across and aligned from the date and
+    /// time." This row now has a second occupant — the Mute/Filter/
+    /// Bin group (`FeedView.laptopDeckControls`) — so it can no
+    /// longer claim the row's whole width. `trailing` stops short of
+    /// the group's own real left edge (`laptopControlGroupLeadingX`,
+    /// a live measurement — see that property's own comment), with
+    /// `DuoLayout.pagePad` clear between them, or falls back to the
+    /// old near-full-width edge for the one frame before the group
+    /// has ever reported this launch. The date line's own `lineLimit
+    /// (1)`/`minimumScaleFactor` (`captionTexts`) already does the
+    /// actual truncating when it loses this race — "the group wins
+    /// its space and the caption truncates," the owner's own call.
     @ViewBuilder
     private func duoLaptopCaption(containerSize: CGSize, safeAreaBottom: CGFloat) -> some View {
         if let bottomY = duoLayout.laptopCaptionBottomY(containerSize: containerSize, safeAreaBottom: safeAreaBottom) {
             let leading: CGFloat = 24
-            let width = max(0, containerSize.width - leading - 16)
+            let trailing = laptopControlGroupLeadingX.map { $0 - DuoLayout.pagePad } ?? (containerSize.width - 16)
+            let width = max(0, trailing - leading)
             let rect = CGRect(x: leading, y: 0, width: width, height: bottomY)
-            captionTexts
+            captionTexts(measureDateLineCenter: isActive)
                 .feedShadow()
                 .frame(width: rect.width, alignment: .leading)
                 .opacity(isScrubbing ? 0 : 1)
