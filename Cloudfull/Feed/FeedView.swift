@@ -11,6 +11,7 @@ import Foundation
 import UIKit
 import Photos
 import CoreLocation
+import os
 
 /// FeedView is a vertical pager. It shows one video per screen, from a
 /// persistent, shuffled deck.
@@ -808,6 +809,30 @@ struct FeedView: View {
         .onChange(of: shrinkJobsSignature) { _, _ in
             handleShrinkJobsChanged()
         }
+        #if DEBUG
+        // Owner bug (closed pose ignores all touches): logs every
+        // touch's own location, under `-cloudfull-log-touches`, at
+        // the ROOT of this view — the outermost `GeometryReader` the
+        // whole of `body` sits inside — so a live capture can show
+        // whether a touch reaches this app's own view hierarchy AT
+        // ALL in the closed pose, ruling out a Device Hub/simulator
+        // input issue before chasing an app-side hit-testing
+        // regression. `simultaneousGesture` neither consumes the
+        // touch nor changes hit-testing on its own; it only reports
+        // whatever already reaches this view. Read with the same
+        // `xcrun simctl spawn <UDID> log stream --predicate
+        // 'subsystem == "com.cloudfull.app" and category == "Touch"'`
+        // pattern every other `-cloudfull-log-` flag already uses.
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { value in
+                    guard DiagnosticsGate.isOn("-cloudfull-log-touches") else { return }
+                    let message = "touch_\(Int(value.location.x)),\(Int(value.location.y))"
+                    Self.touchLog.notice("\(message, privacy: .public)")
+                    DiagnosticsLog.shared.log("Touch", message)
+                }
+        )
+        #endif
         #if DEBUG
         // Keys this `.task(id:)` off the newest completed job's own id
         // and state, not off `jobs` itself. `shrinkService.jobs`
@@ -2075,6 +2100,10 @@ struct FeedView: View {
     /// one source of truth instead of two bare launch-argument checks
     /// that could drift.
     private static var showsDuoGuides: Bool { DuoGuides.isOn }
+
+    /// `body`'s own root touch logger (`-cloudfull-log-touches`) —
+    /// see that `simultaneousGesture`'s own comment.
+    private static let touchLog = Logger(subsystem: "com.cloudfull.app", category: "Touch")
 
     /// Geometry sources this file's own Duo math is built from, drawn
     /// directly instead of trusted: `.occlusion` (red), `.division`
