@@ -1775,13 +1775,30 @@ struct FeedView: View {
         .tint(.white)
         // Owner re-adapt (Opus wireframe compare): `.controlSize(.small)`
         // draws this glass circle at about 32pt — under Apple's own
-        // 44×44pt minimum tap target. The frame grows the hit area
-        // alone; the visual circle (sized by its own content above)
-        // stays the same small glass glyph, centred inside it. One
-        // definition, every pose that mounts `muteButton` — topChrome,
-        // pose5TopRow, chromeColumn, laptopDeckControls — picks this up
-        // without its own fix.
-        .frame(minWidth: 44, minHeight: 44)
+        // 44×44pt minimum tap target. One definition, every pose that
+        // mounts `muteButton` — topChrome, pose5TopRow, chromeColumn,
+        // laptopDeckControls — picks this up without its own fix.
+        //
+        // Owner re-adapt (18 Pro regression check, round-4 pass): the
+        // comment above claimed `.frame(minWidth: 44, minHeight: 44)`
+        // "grows the hit area alone" — not true. `minWidth`/`minHeight`
+        // are a real layout constraint: they grow this view's own
+        // REPORTED size too, which shifted `topChrome`'s own HStack
+        // (regular iPhone/tent) ~5pt — the regular iPhone must look
+        // pixel-identical to pre-Duo, and did not. The standard
+        // "padding, then `.contentShape`, then the same padding
+        // negated" trick below instead grows the TAPPABLE area without
+        // growing what the parent measures: the inner `.padding(6)`
+        // expands the region `.contentShape` then captures, and the
+        // matching `.padding(-6)` reports this view's own size back to
+        // its parent exactly as before — 2×6 = 12pt added each
+        // dimension, landing a 32pt circle at 44pt tappable, the same
+        // floor the old `minWidth`/`minHeight` gave a bare circle,
+        // while a badge/count still grows the control past 44 on its
+        // own, unclipped, same as before.
+        .padding(6)
+        .contentShape(Rectangle())
+        .padding(-6)
         // Identifier gated directly on `hidesGlobalChrome`, the same
         // condition that actually hides this row — the same pattern
         // every other top-chrome control uses.
@@ -1941,11 +1958,18 @@ struct FeedView: View {
         // disagree about the threshold or the intensity.
         .binShake(count: trashService.count)
         // Owner re-adapt (Opus wireframe compare): see `muteButton`'s
-        // identical frame for why — the icon-only (empty bin) case
-        // drew at about 32pt wide, under the 44pt minimum. `minWidth`,
-        // not a fixed width: a queued count or byte figure still grows
-        // the capsule past 44pt on its own, unclipped.
-        .frame(minWidth: 44, minHeight: 44)
+        // identical comment for why — the icon-only (empty bin) case
+        // drew at about 32pt wide, under the 44pt minimum.
+        //
+        // Owner re-adapt (18 Pro regression check, round-4 pass): see
+        // `muteButton`'s identical comment — `.frame(minWidth:
+        // minHeight:)` grew this view's own LAYOUT size too, shifting
+        // `topChrome`'s own row. Same padding/contentShape/negated-
+        // padding trick: a queued count or byte figure still grows the
+        // capsule past 44pt on its own, unclipped, same as before.
+        .padding(6)
+        .contentShape(Rectangle())
+        .padding(-6)
         // See `FilterMenuView`'s identical `hidesGlobalChrome`-gated
         // identifier pattern.
         .accessibilityIdentifier(hidesGlobalChrome ? "" : "bin_open")

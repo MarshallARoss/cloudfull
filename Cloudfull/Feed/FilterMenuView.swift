@@ -69,11 +69,19 @@ struct FilterMenuView: View {
         .controlSize(.small)
         .tint(.white)
         // Owner re-adapt (Opus wireframe compare, Duo pose 6): see
-        // `FeedView.muteButton`'s identical frame — `.controlSize(.small)`
+        // `FeedView.muteButton`'s identical comment — `.controlSize(.small)`
         // draws the icon-only case at about 32pt, under Apple's own
-        // 44×44pt minimum tap target. `minWidth`, not a fixed width: the
-        // filter-count badge still grows the pill past 44pt on its own.
-        .frame(minWidth: 44, minHeight: 44)
+        // 44×44pt minimum tap target.
+        //
+        // Owner re-adapt (18 Pro regression check, round-4 pass): see
+        // `FeedView.muteButton`'s identical comment — `.frame(minWidth:
+        // minHeight:)` grew this view's own LAYOUT size too, shifting
+        // `FeedView.topChrome`'s own row on a regular iPhone. Same
+        // padding/contentShape/negated-padding trick: the filter-count
+        // badge still grows the pill past 44pt on its own, unclipped.
+        .padding(6)
+        .contentShape(Rectangle())
+        .padding(-6)
         // Sections must not reorder when the menu opens upward. Tests and
         // people find items by their position on screen.
         .menuOrder(.fixed)
