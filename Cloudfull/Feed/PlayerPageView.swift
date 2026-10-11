@@ -280,6 +280,21 @@ struct PlayerPageView: View {
             && fullscreenAllowed && !dismissedThisSpell && !isScrubbing
     }
 
+    /// Owner correction (Opus wireframe compare, pose 1H): FILL is the
+    /// Duo's own 1H only — "wide video FILLS the screen, as today" is
+    /// a statement about the Duo's closed-sideways pose, not about
+    /// `isFullscreen` generally. A regular iPhone's screen is not the
+    /// same shape as the video it plays (19.5:9 vs. 16:9, commonly),
+    /// so FILL would crop there in a way the owner never asked for;
+    /// the goal is that an iPhone 18 Pro looks exactly as it did
+    /// before this pose-5 round. `duoLayout.pose == .closed` is what
+    /// `isFullscreen` alone cannot tell apart — see that property's
+    /// own comment on why it reads identically for a regular iPhone
+    /// and the Duo's outer display.
+    private var fillsScreenInFullscreen: Bool {
+        isFullscreen && duoLayout.pose == .closed
+    }
+
     /// Whether THIS page would permit the window to rotate into
     /// landscape right now — term 3 of Decision A's `allowsLandscape`
     /// rule (`design/duo/duo_audit_apple_checklist.md` §3): "(active
@@ -1255,24 +1270,25 @@ struct PlayerPageView: View {
             // detaches while the new one attaches on another thread.
             //
             // Owner re-adapt (Opus wireframe compare, pose 1H): "wide
-            // video FILLS the screen, as today" — `fillsScreen` passes
-            // `isFullscreen` straight through, so this crops edge to
-            // edge instead of letterboxing whenever the rotation hack
-            // is on, on a regular iPhone exactly as it already did on
-            // the Duo's own closed-sideways case. `PlayerLayerView`
-            // itself stays one stable instance across the flip (see
-            // the comment just above); only its own `videoGravity`
-            // updates reactively — see that type's own `updateUIView`.
-            PlayerLayerView(player: holder.player, onReadyForDisplay: { isReadyForDisplay = $0 }, attach: playerLayerMounted && !scrollGate.isScrolling, fillsScreen: isFullscreen)
+            // video FILLS the screen, as today" — the Duo's own 1H
+            // only, via `fillsScreenInFullscreen` (see that property's
+            // own comment on why `isFullscreen` alone is not enough).
+            // This crops edge to edge instead of letterboxing there;
+            // a regular iPhone's own fullscreen keeps today's FIT.
+            // `PlayerLayerView` itself stays one stable instance
+            // across the flip (see the comment just above); only its
+            // own `videoGravity` updates reactively — see that type's
+            // own `updateUIView`.
+            PlayerLayerView(player: holder.player, onReadyForDisplay: { isReadyForDisplay = $0 }, attach: playerLayerMounted && !scrollGate.isScrolling, fillsScreen: fillsScreenInFullscreen)
 
             // Sits directly above `PlayerLayerView`, so it covers the
             // layer's own black while nothing has decoded yet. It fades
             // out the instant `isReadyForDisplay` reports a real frame is
             // on screen.
             // `contentMode` matches `PlayerLayerView`'s own gravity —
-            // `.fill` in fullscreen, `.fit` otherwise — so the poster
-            // never crops (or fails to crop) relative to the video it
-            // stands in for.
+            // `.fill` in the Duo's own 1H, `.fit` otherwise — so the
+            // poster never crops (or fails to crop) relative to the
+            // video it stands in for.
             //
             // `poster`, written by `deliverPoster()`, drives every
             // re-render. The cache fallback exists for exactly one frame,
@@ -1294,7 +1310,7 @@ struct PlayerPageView: View {
                    !isReadyForDisplay {
                     Image(uiImage: displayPoster)
                         .resizable()
-                        .aspectRatio(contentMode: isFullscreen ? .fill : .fit)
+                        .aspectRatio(contentMode: fillsScreenInFullscreen ? .fill : .fit)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .clipped()
                         .transition(.opacity)
@@ -2756,17 +2772,17 @@ private struct PlayerLayerView: UIViewRepresentable {
     /// window. Passed as a plain input, so SwiftUI re-runs `updateUIView`
     /// when it flips. False disconnects the layer from the player.
     let attach: Bool
-    /// `PlayerPageView.isFullscreen`, passed straight through — Opus
-    /// wireframe compare, pose 1H: "wide video FILLS the screen, as
-    /// today." `.resizeAspectFill` crops edge to edge instead of
-    /// letterboxing whenever the rotation hack is on, the same whether
-    /// that is a regular iPhone turned landscape or the Duo's own
-    /// closed-sideways case — `isFullscreen` already reads identically
-    /// for both (see that property's own comment). Read again, live,
-    /// in `updateUIView` below: this stable `PlayerLayerContainerView`
-    /// instance persists across the fullscreen flip on purpose (see
-    /// `stageContent`'s own comment on why), so the gravity has to
-    /// update in place rather than at creation only.
+    /// `PlayerPageView.fillsScreenInFullscreen`, passed straight
+    /// through — Opus wireframe compare, pose 1H: "wide video FILLS
+    /// the screen, as today." `.resizeAspectFill` crops edge to edge
+    /// instead of letterboxing, but the Duo's own 1H only — owner
+    /// correction: a regular iPhone's own fullscreen keeps today's
+    /// FIT, since its screen is not the video's own shape and FILL
+    /// would crop there. Read again, live, in `updateUIView` below:
+    /// this stable `PlayerLayerContainerView` instance persists across
+    /// the fullscreen flip on purpose (see `stageContent`'s own
+    /// comment on why), so the gravity has to update in place rather
+    /// than at creation only.
     let fillsScreen: Bool
 
     func makeUIView(context: Context) -> PlayerLayerContainerView {
