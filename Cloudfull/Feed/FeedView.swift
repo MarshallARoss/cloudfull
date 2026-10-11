@@ -1419,8 +1419,11 @@ struct FeedView: View {
     /// between two rail buttons" (`DUO_POSES.md`).
     ///
     /// `binButton`'s own queued-count badge rides inside its capsule
-    /// in the row layout; a narrow `chromeColumnWidth` (80pt) column
-    /// has no room for that, so it repeats as its own line under Bin
+    /// in the row layout; the narrow chrome column (`DuoLayout
+    /// .chromeColumnRect`, round-4 re-adapt: computed live from the
+    /// rail's own real position rather than a fixed 80pt, so it has
+    /// gotten narrower still) has no room for that, so it repeats as
+    /// its own line under Bin
     /// instead — the table's "counter one line 4pt under Bin." The
     /// `22`pt offset below is a hand-picked stand-in for "Bin's own
     /// half-height + 4pt + the counter's own half-height": no

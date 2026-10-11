@@ -7,6 +7,7 @@
 //
 
 import SwiftUI
+import UIKit
 
 /// Which of the iPhone Duo's physical poses this frame is in — see
 /// `design/DUO_POSES.md` for the pictures and names this mirrors.
@@ -471,12 +472,15 @@ struct DuoLayout {
 
     /// Pose 3's wide-video stage box (build 3): "FIT video aspect in
     /// `[16, W − bar − 80 − 16] × [0, H − captionBand]`, centred" —
-    /// the wireframe's own words for excluding BOTH the rail/bar
-    /// column and the new chrome column (`chromeColumnWidth`, the
-    /// Mute/Filter/Bin column `zigzagCenters` places buttons in),
-    /// `pagePad` clear on each side, with `captionBand` reserved at
-    /// the bottom for the caption now sitting under the video instead
-    /// of on it (see the per-pose table's pose-3-wide-video row).
+    /// the wireframe's own words at the time for excluding BOTH the
+    /// rail/bar column and the new chrome column (`chromeColumnWidth`,
+    /// the Mute/Filter/Bin column `zigzagCenters` places buttons in;
+    /// the literal `80` is round-3's own number — `chromeColumnWidth`
+    /// is computed live since round 4, `chromeColumnRect`'s own
+    /// comment), `pagePad` clear on each side, with `captionBand`
+    /// reserved at the bottom for the caption now sitting under the
+    /// video instead of on it (see the per-pose table's
+    /// pose-3-wide-video row).
     ///
     /// Pose 3's TALL-video case (the default `aspectRatio`, handled by
     /// `stageRect`'s own fallthrough to `availableRect`) needs none of
@@ -493,7 +497,7 @@ struct DuoLayout {
         let barWidth = column?.width ?? 0
         let edge = column?.edge ?? .trailing
         let pad = Self.pagePad
-        let excluded = barWidth + Self.chromeColumnWidth
+        let excluded = barWidth + chromeColumnWidth(containerSize: containerSize, safeAreaTop: safeAreaTop)
         let availableWidth = max(0, containerSize.width - excluded - pad * 2)
         let minX: CGFloat
         switch edge {
@@ -533,10 +537,6 @@ struct DuoLayout {
     // now reads from `.occlusion` instead of a fixed number (F6, §5 of
     // the audit).
 
-    /// Width of the Mute/Filter/Bin column pose 3/4/4W put beside the
-    /// rail/bar column — `chromeColumnRect`'s own width, and
-    /// `zigzagCenters`'s own x.
-    static let chromeColumnWidth: CGFloat = 80
     /// Height reserved at a wide video's own bottom edge for its
     /// caption, pose 3's wide-video case only (`openWideWideVideoRect`).
     static let captionBand: CGFloat = 100
@@ -849,19 +849,124 @@ struct DuoLayout {
     // independently of it, so the two columns can never drift apart
     // or overlap. `FeedView.chromeColumn` is the one caller.
 
-    /// This frame's chrome column, or `nil` when `railColumn` found no
-    /// rail/bar column to sit beside (a regular iPhone, or any pose
-    /// without one). Full height, like `railColumnRect` — this is the
-    /// column's own hit area and background, not the stage's.
-    func chromeColumnRect(containerSize: CGSize, safeAreaTop: CGFloat) -> CGRect? {
-        guard let column = railColumn(containerSize: containerSize, safeAreaTop: safeAreaTop) else { return nil }
+    /// Half of the rail's own real visual width this frame — the
+    /// WIDER of the 40pt glyph circle (`Rail.hit`) and the rail's own
+    /// widest label, actually measured at `Rail.labelFont`'s point
+    /// size/weight (10pt semibold), the same pattern
+    /// `ChinTabItemContentView.intrinsicContentSize` already uses for
+    /// its own words instead of guessing a text's width.
+    /// "Delete"/"Shrink" print about 32pt wide at this size — under
+    /// `Rail.hit` today, so the glyph circle is what actually bounds
+    /// the rail's own pixels, but a longer localized label or a
+    /// larger Dynamic Type size is still covered, not silently
+    /// unmeasured.
+    private static let railVisualHalfWidth: CGFloat = {
+        let font = UIFont.systemFont(ofSize: 10, weight: .semibold)
+        let labels = ["Keep", "Share", "Album", "Shrink", "Delete"]
+        let widestLabel = labels.map { ($0 as NSString).size(withAttributes: [.font: font]).width }.max() ?? 0
+        return max(Rail.hit, widestLabel) / 2
+    }()
+
+    /// The smallest gap the chrome column is ever allowed to close to
+    /// the rail's own real pixels — the owner's own floor (pose pass,
+    /// round 4: "move those 3 buttons closer to the rail … keeping
+    /// 8pt clear").
+    private static let minChromeRailClearance: CGFloat = 8
+
+    /// The rail's own real visual edge this frame, closest to the
+    /// chrome column — `ringCenteredColumnX` (the SAME x
+    /// `actionRailColumn` actually renders the rail at, not a second
+    /// guess at it) pulled in by `railVisualHalfWidth`. Clamped to
+    /// `railColumnRect`'s own edge — the one truly fixed, real bound
+    /// here (the system bar's actual reserved width) — so a measured
+    /// label can never place this past the column it is meant to
+    /// describe. `nil` when no rail column applies.
+    private func railVisualEdge(containerSize: CGSize, safeAreaTop: CGFloat) -> (edge: HorizontalEdge, x: CGFloat)? {
+        guard let column = railColumn(containerSize: containerSize, safeAreaTop: safeAreaTop),
+              let columnRect = railColumnRect(containerSize: containerSize, safeAreaTop: safeAreaTop),
+              let centerX = ringCenteredColumnX(containerSize: containerSize, safeAreaTop: safeAreaTop)
+        else { return nil }
         switch column.edge {
         case .trailing:
-            return CGRect(x: containerSize.width - column.width - Self.chromeColumnWidth, y: 0,
-                          width: Self.chromeColumnWidth, height: containerSize.height)
+            return (.trailing, max(columnRect.minX, centerX - Self.railVisualHalfWidth))
         case .leading:
-            return CGRect(x: column.width, y: 0, width: Self.chromeColumnWidth, height: containerSize.height)
+            return (.leading, min(columnRect.maxX, centerX + Self.railVisualHalfWidth))
         }
+    }
+
+    /// This frame's chrome column, or `nil` when `railColumn` found no
+    /// rail/bar column to sit beside (a regular iPhone, or any pose
+    /// without one). Full height, like `railColumnRect` — this is a
+    /// geometry source for `zigzagCenters`'s own `x` and the stage's
+    /// own exclusion width (`chromeColumnWidth` below), not a
+    /// rendered box; nothing draws its background.
+    ///
+    /// Owner re-adapt (pose pass, round 4): "for 3 move those 3
+    /// buttons closer to the rail." The round-3 build centred the
+    /// group in a fixed `chromeColumnWidth = 80` box, independent of
+    /// the rail's own real position. The approved round-4 wireframe
+    /// (`design/DUO_VIDEO_WIREFRAMES_gen.py`'s own `right_columns()`)
+    /// instead sits the group close to the rail's own real pixels —
+    /// "roughly half" the old box's own gap to them, the owner's own
+    /// words — so this derives that position from two REAL signals,
+    /// `railColumnRect`'s own leading edge and `railVisualEdge`'s own
+    /// measured rail extent, rather than a second frozen pixel
+    /// number. The round-3 box put the group's own centre at exactly
+    /// `railColumnRect.minX − Rail.hit` — that box's own arithmetic
+    /// (`80` wide, immediately leading of the rail column, the group
+    /// centred inside it), not a new guess — so `oldGap` below is
+    /// exactly the gap THAT box left to the rail's real pixels, read
+    /// live instead of copied from one sim screenshot. The new gap
+    /// (`newGap`) is floored at `minChromeRailClearance` so it can
+    /// never cross the rail's own labels, and the column's own width
+    /// is floored at `Rail.hit` so it is never narrower than the
+    /// circles it holds. Verified against the wireframe at this window's own
+    /// measured 951×669 (assuming the wireframe's own 84pt bar and no
+    /// `.occlusion` override — `ringCenteredColumnX`'s own fallback,
+    /// the one case this comment's own arithmetic can be checked by
+    /// hand against): this lands at `x 847`, within 1pt of the
+    /// generator's own `x 846`, from live geometry alone, not by
+    /// copying the number (`design/duo/duo_build_spec.md`'s own
+    /// build-3 row has the prior `x 827` this replaces).
+    func chromeColumnRect(containerSize: CGSize, safeAreaTop: CGFloat) -> CGRect? {
+        guard let railRect = railColumnRect(containerSize: containerSize, safeAreaTop: safeAreaTop),
+              let visual = railVisualEdge(containerSize: containerSize, safeAreaTop: safeAreaTop)
+        else { return nil }
+        switch visual.edge {
+        case .trailing:
+            let oldCenterX = railRect.minX - Rail.hit
+            let oldGap = visual.x - oldCenterX - Rail.hit / 2
+            let newGap = max(Self.minChromeRailClearance, oldGap / 2)
+            // The `min` is a hard safety bound, not part of "half the
+            // gap": however wide a future bar/occlusion reading makes
+            // `visual.x`, the button's own right edge can never cross
+            // past `railRect.minX` into the rail's own structural
+            // column.
+            let centerX = min(railRect.minX - Rail.hit / 2, visual.x - newGap - Rail.hit / 2)
+            let width = max(Rail.hit, (railRect.minX - centerX) * 2)
+            return CGRect(x: railRect.minX - width, y: 0, width: width, height: containerSize.height)
+        case .leading:
+            // Not a configuration pose 3/4/4W has ever measured (the
+            // bar is always trailing there, `rightPage`'s own
+            // comment) — mirrored for the same reason
+            // `availableRect`/`railColumn` handle both edges
+            // generically.
+            let oldCenterX = railRect.maxX + Rail.hit
+            let oldGap = oldCenterX - Rail.hit / 2 - visual.x
+            let newGap = max(Self.minChromeRailClearance, oldGap / 2)
+            let centerX = max(railRect.maxX + Rail.hit / 2, visual.x + newGap + Rail.hit / 2)
+            let width = max(Rail.hit, (centerX - railRect.maxX) * 2)
+            return CGRect(x: railRect.maxX, y: 0, width: width, height: containerSize.height)
+        }
+    }
+
+    /// This frame's chrome column width alone — `chromeColumnRect`'s
+    /// own width, for callers (`openWideWideVideoRect`, `rightPage`)
+    /// that only need the stage's own exclusion amount. `0` when
+    /// `chromeColumnRect` found nothing. Re-adapted round 4: no
+    /// longer a fixed `80` — see `chromeColumnRect`'s own comment.
+    func chromeColumnWidth(containerSize: CGSize, safeAreaTop: CGFloat) -> CGFloat {
+        chromeColumnRect(containerSize: containerSize, safeAreaTop: safeAreaTop)?.width ?? 0
     }
 
     /// Three points, x = the chrome column's own centre, Filter
@@ -896,11 +1001,13 @@ struct DuoLayout {
 
     /// The book pose's right page (pose 4/4W only; `nil` otherwise, or
     /// with no active division to anchor against): "`x ∈
-    /// [division.maxX, W − bar − 80]`, full height" — the fold's own
-    /// trailing edge to the leading edge of whichever column
-    /// (rail/bar, then chrome) sits on the window's own far side.
-    /// `DuoRightPage` (build 12) mounts here; nothing reads this
-    /// rect before then.
+    /// [division.maxX, W − bar − chromeColumnWidth]`, full height" —
+    /// the fold's own trailing edge to the leading edge of whichever
+    /// column (rail/bar, then chrome) sits on the window's own far
+    /// side. `chromeColumnWidth` is no longer the fixed `80` the
+    /// build-3 wording above first measured — see
+    /// `chromeColumnRect`'s own comment (round 4). `DuoRightPage`
+    /// (build 12) mounts here; nothing reads this rect before then.
     func rightPage(containerSize: CGSize, safeAreaTop: CGFloat) -> CGRect? {
         guard pose == .book, let division else { return nil }
         let column = railColumn(containerSize: containerSize, safeAreaTop: safeAreaTop)
@@ -908,7 +1015,8 @@ struct DuoLayout {
         switch column?.edge ?? .trailing {
         case .trailing:
             let minX = division.maxX
-            let maxX = max(minX, containerSize.width - barWidth - Self.chromeColumnWidth)
+            let maxX = max(minX, containerSize.width - barWidth
+                - chromeColumnWidth(containerSize: containerSize, safeAreaTop: safeAreaTop))
             return CGRect(x: minX, y: 0, width: maxX - minX, height: containerSize.height)
         case .leading:
             // Not a configuration this pose has ever measured (the
