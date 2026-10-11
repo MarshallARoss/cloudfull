@@ -8,15 +8,14 @@
 
 import SwiftUI
 
-// The three chin-nav destinations. Raw values form the DEBUG
-// `mode_<rawValue>` probe suffix and the accessibility identifier suffix
-// on the three expanded chin-nav tabs. Do not rename a case without
-// checking every `mode_` and `chin_nav_` site.
+// The three tab destinations. Raw values form the DEBUG `mode_<rawValue>`
+// probe suffix. Do not rename a case without checking every `mode_` site.
 //
-// `LiquidSegmentedControl<Selection: Hashable>`
-// (`ChinTabSegmentedControl.swift`) generalizes the chin nav's segmented
-// control over any selection type. `AppMode` conforms to `Hashable` so it
-// can be that control's selection type.
+// Owner re-adapt: these used to also be the chin nav's own segmented-
+// control values (`ChinTabSegmentedControl.swift`, now deleted) and the
+// `chin_nav_<rawValue>` accessibility identifier suffix. `RootView`'s
+// own `TabView` now switches on this enum directly as each `Tab`'s own
+// `value:`.
 enum AppMode: String, CaseIterable, Sendable, Hashable {
     case videos, photos, settings
 }
@@ -65,6 +64,23 @@ final class AppModeStore: ObservableObject {
         self.mode = mode
     }
 
+    /// Writes `mode`, then fires `Usage.shared.modeSwitch(to:via:)` for
+    /// `via` when `mode` actually names a trackable `Usage.Mode`
+    /// (`.settings` does not). The three call sites that already knew
+    /// their own `via` before this type existed —
+    /// `QuickActions.open(_:)`, the two "done for today" page links —
+    /// keep calling `Usage.shared.modeSwitch` directly themselves and
+    /// pass no `via` here, so this never double-counts their own
+    /// switch. `RootView`'s own `TabView` selection binding is this
+    /// method's one caller that DOES pass `via` — see that binding's
+    /// own comment.
+    func select(_ mode: AppMode, via: Usage.ModeSwitchVia) {
+        if let usageMode = Usage.Mode(rawValue: mode.rawValue), usageMode != Usage.currentMode {
+            Usage.shared.modeSwitch(to: usageMode, via: via)
+        }
+        select(mode)
+    }
+
     /// Jumps to the user's default tab regardless of the live mode.
     /// `handleNotificationTap()` calls this because a notification names
     /// no mode of its own. Without it, a tap that lands while the app is
@@ -75,13 +91,29 @@ final class AppModeStore: ObservableObject {
     }
 }
 
-/// The root mode switch. `PermissionGateView.authorizedView` mounts this
-/// view. A plain `switch` on `AppModeStore.shared.mode` unmounts the
-/// mode that is not current. This is deliberate: it stops video
-/// playback on leaving Videos. Each mode keeps its position because
-/// `DeckViewModel` and `PhotoDeck` outlive this view. `FeedView`
-/// survives the access-downgrade remount path (`performStart` →
-/// `reconcileAfterRemount`) the same way.
+/// The root tab switch. `PermissionGateView.authorizedView` mounts this
+/// view.
+///
+/// Owner re-adapt, "every iPhone": this used to be a plain `switch` on
+/// `AppModeStore.shared.mode` that UNMOUNTED the mode that was not
+/// current — deliberately, since that was what stopped video playback
+/// on leaving Videos. It is now a system `TabView`, replacing the old
+/// chin nav (`ChinNavigation.swift`, now deleted) with Apple's own tab
+/// bar: on the Duo's closed display and the inner display in landscape
+/// (toolbar vertical edge on), it lands in the vertical bar column,
+/// the same spot the Duo Home Screen's own Search button sits; on pose
+/// 5 (vertical bar off) and a regular iPhone, it is the standard
+/// floating bottom bar. Apple's own default placement throughout — no
+/// custom positioning here.
+///
+/// `TabView` keeps all three tabs mounted at once, so the OLD
+/// "unmounting stops playback" guarantee is gone. `FeedView` now stops
+/// its own playback by mode instead — see `FeedView.isFeedSuspended`'s
+/// own `modeStore.mode != .videos` term — and `PhotoFeedView` now
+/// starts/stops its own background downloads the same way (see
+/// `PhotoDeck.suspendBackgroundWork`'s own call site there). Each
+/// mode's own view model (`DeckViewModel`/`PhotoDeck`) already outlived
+/// this view before this change; nothing about that changes.
 struct RootView: View {
     @ObservedObject private var modeStore = AppModeStore.shared
     @ObservedObject private var reminder = DailyReminder.shared
@@ -95,15 +127,36 @@ struct RootView: View {
         self.shrink = shrink
     }
 
+    /// `TabView`'s own selection binding. `get` always reads the one
+    /// source of truth (`AppModeStore.shared.mode`), so an external
+    /// mode change — `QuickActions`, a notification tap, a "done for
+    /// today" page's own link — updates which tab is shown without
+    /// this `set` ever running: SwiftUI calls a `Binding`'s `set` only
+    /// when something assigns to the BINDING itself, never when the
+    /// underlying source it reads changes on its own. `set` therefore
+    /// fires only when the system tab bar itself changes the selection
+    /// — a direct tap — exactly `ChinNavigation.selectAnimated`'s own
+    /// "chin" analytics meaning, now carried by `AppModeStore
+    /// .select(_:via:)` instead of a parallel call here.
+    private var modeBinding: Binding<AppMode> {
+        Binding(
+            get: { modeStore.mode },
+            set: { modeStore.select($0, via: .chin) }
+        )
+    }
+
     var body: some View {
         ZStack {
-            switch modeStore.mode {
-            case .videos:
-                FeedView(viewModel: deck, trashService: trash, shrinkService: shrink)
-            case .photos:
-                PhotoFeedView(trashService: trash)
-            case .settings:
-                SettingsView()
+            TabView(selection: modeBinding) {
+                Tab("Videos", systemImage: "video", value: AppMode.videos) {
+                    FeedView(viewModel: deck, trashService: trash, shrinkService: shrink)
+                }
+                Tab("Photos", systemImage: "photo.on.rectangle", value: AppMode.photos) {
+                    PhotoFeedView(trashService: trash)
+                }
+                Tab("Settings", systemImage: "gearshape", value: AppMode.settings) {
+                    SettingsView()
+                }
             }
             // The one-time reminder ask sits above whichever mode is
             // active, so both modes show the same card.
