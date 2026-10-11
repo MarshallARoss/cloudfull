@@ -805,7 +805,18 @@ struct PlayerPageView: View {
                                     isActive: isActive,
                                     reduceMotion: reduceMotion,
                                     onStripDrag: handleScrubChanged,
-                                    onStripEnded: endScrub
+                                    onStripEnded: endScrub,
+                                    // Owner re-adapt (pose pass, pose
+                                    // 1V): "the line's slightly above
+                                    // the bottom — it should be on the
+                                    // bezel." Pose 1V only — see
+                                    // `ScrubberView.pinsToBottomEdge`'s
+                                    // own comment for why this is safe
+                                    // only where this view's own frame
+                                    // bottom already IS the true screen
+                                    // edge, with nothing below it to
+                                    // extend into.
+                                    pinsToBottomEdge: duoLayout.pose == .closed
                                 )
                             }
                         }

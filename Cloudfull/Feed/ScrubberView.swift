@@ -50,6 +50,25 @@ struct ScrubberView: View {
     /// ending the scrub and the actual seek.
     let onStripDrag: (Double) -> Void
     let onStripEnded: () -> Void
+    /// Owner re-adapt (pose pass, pose 1V): "the line's slightly above
+    /// the bottom — it should be on the bezel." Pins the drawn line
+    /// (and, while scrubbing, the knob and the time readout) flush to
+    /// this view's own BOTTOM edge instead of resting `trackBoxHeight`
+    /// above it, same as `seamOffset`'s own "the seam" behaviour does
+    /// at the OTHER edge. The touch target itself does not shrink —
+    /// still the full 28pt `track` frame — it just extends upward
+    /// from the line instead of (as `seamOffset` does) being measured
+    /// down from a shifted top.
+    ///
+    /// Default `false` everywhere this view already has a call site:
+    /// only `PlayerPageView` passes `true`, only for pose 1V, where
+    /// this view's own frame bottom already IS the true screen edge
+    /// (the stage already fills the whole window height there) with
+    /// nothing below it to extend into — unlike the regular-iPhone/
+    /// seam case, where `seamOffset` deliberately shifts this view's
+    /// whole frame BELOW the stage, into a real black band that
+    /// exists to receive it.
+    var pinsToBottomEdge: Bool = false
 
     private var displayedFraction: Double {
         isScrubbing ? scrubFraction : progress
@@ -85,7 +104,7 @@ struct ScrubberView: View {
     }
 
     var body: some View {
-        ZStack(alignment: .top) {
+        ZStack(alignment: pinsToBottomEdge ? .bottom : .top) {
             track
             if isScrubbing {
                 Text(timeText)
@@ -97,8 +116,14 @@ struct ScrubberView: View {
                     .feedGlass(in: Capsule())
                     .transition(reduceMotion ? .identity : .opacity)
                     // Below `track`, inside the band — never above it,
-                    // into video pixels.
-                    .offset(y: Self.readoutTopOffset)
+                    // into video pixels. `pinsToBottomEdge` mirrors this
+                    // to the OTHER side: `track` itself sits at this
+                    // view's own bottom edge there (no band below it to
+                    // read into), so the readout instead clears the
+                    // knob going UP, into the video, the same gap
+                    // (`readoutTopOffset`) the seam case already uses
+                    // going down.
+                    .offset(y: pinsToBottomEdge ? -Self.readoutTopOffset : Self.readoutTopOffset)
                     // Hide from VoiceOver. The track's `.accessibilityValue`
                     // speaks the same time. This view is a sibling of
                     // `track`, so `track`'s `.accessibilityElement()` does
@@ -107,7 +132,7 @@ struct ScrubberView: View {
                     .accessibilityIdentifier(isActive ? "scrubber_time" : "")
             }
         }
-        .frame(maxWidth: .infinity, alignment: .top)
+        .frame(maxWidth: .infinity, alignment: pinsToBottomEdge ? .bottom : .top)
         .offset(y: seamOffset)
         // Use the same animation as `track`. With Reduce Motion on, both
         // use no animation.
@@ -130,11 +155,16 @@ struct ScrubberView: View {
     private var track: some View {
         GeometryReader { proxy in
             let width = max(proxy.size.width, 1)
-            // `.topLeading`: horizontal leading, so the fill grows from
-            // the left. Vertical top, so the 2pt idle line and the 6pt
-            // active track share one top edge, the seam. Neither grows
-            // from a shared centerline.
-            ZStack(alignment: .topLeading) {
+            // `.topLeading` (or, `pinsToBottomEdge`, `.bottomLeading`):
+            // horizontal leading either way, so the fill grows from the
+            // left. Vertical top (normally) so the 2pt idle line and
+            // the 6pt active track share one top edge, the seam;
+            // vertical bottom when pinned, so they instead share one
+            // BOTTOM edge, the bezel — "the line is at the bottom
+            // edge," the owner's own words (pose pass, pose 1V).
+            // Neither grows from a shared centerline, in either case.
+            let edgeAlignment: Alignment = pinsToBottomEdge ? .bottomLeading : .topLeading
+            ZStack(alignment: edgeAlignment) {
                 Capsule()
                     .fill(Color.white.opacity(0.18))
                     .frame(height: isScrubbing ? 6 : 2)
@@ -146,16 +176,20 @@ struct ScrubberView: View {
                         .fill(Color.white)
                         .frame(width: 14, height: 14)
                         .offset(x: width * displayedFraction - 7)
-                        // Top-aligned with the track above, not centered
-                        // on it. Centering a 14pt knob on a 6pt track
-                        // anchored at the seam would push 4pt of the knob
-                        // above the seam, into video.
+                        // Edge-aligned with the track, not centered on
+                        // it, in either direction: centering a 14pt
+                        // knob on a 6pt track anchored at the seam
+                        // would push 4pt of the knob past that edge —
+                        // above it, into video, in the normal case; or
+                        // below it, past the bezel, when pinned. Edge-
+                        // aligning always keeps the extra 8pt on the
+                        // video side.
                         // Hidden from VoiceOver, matching `scrubber_time`.
                         .accessibilityHidden(true)
                         .accessibilityIdentifier(isActive ? "scrubber_knob" : "")
                 }
             }
-            .frame(maxHeight: .infinity, alignment: .top)
+            .frame(maxHeight: .infinity, alignment: pinsToBottomEdge ? .bottom : .top)
             .frame(height: 28)
             .contentShape(Rectangle())
             // Direct entry: `minimumDistance: 0` means touching the strip

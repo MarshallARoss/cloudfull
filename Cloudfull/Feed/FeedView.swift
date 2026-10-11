@@ -2647,9 +2647,21 @@ private struct FeedPageContent: View {
     /// of its today's flat 20pt — a real behaviour change on a device
     /// this branch must leave untouched. The gate stays for that
     /// reason; only the "(Duo only)" framing was ever imprecise.
+    ///
+    /// Owner re-adapt (pose pass, pose 1V): "the line's slightly above
+    /// the bottom — it should be on the bezel... [caption] lower it
+    /// the same amount, keep its gap." Pose 1V's own `ScrubberView`
+    /// now pins its line flush to the true bottom edge
+    /// (`PlayerPageView`'s own `pinsToBottomEdge`), not `trackBoxHeight`
+    /// above it, so the `+ 28` term — which existed only to clear that
+    /// 28pt box's own height — no longer applies there: a plain 20pt
+    /// gap from the page's own bottom edge already measures "20pt
+    /// above the line" directly, once the line IS the bottom edge.
+    /// Pose 5 is untouched — its own scrubber still rests at the top
+    /// of its 28pt box, so it keeps the `20 + 28` sum unchanged.
     private func captionZone(trailingClearance: CGFloat, hidden: Bool, bandHeight: CGFloat) -> some View {
         let liftsForScrubber = duoLayout.pose != .regularPhone && bandHeight < 50
-        let bottomPadding: CGFloat = liftsForScrubber ? 20 + 28 : 20
+        let bottomPadding: CGFloat = duoLayout.pose == .closed ? 20 : (liftsForScrubber ? 20 + 28 : 20)
         return captionTexts
             .feedShadow()
             .frame(maxWidth: .infinity, alignment: .leading)
