@@ -819,28 +819,33 @@ struct DuoLayout {
         }
     }
 
-    /// Three points, x = the chrome column's own centre, each level
-    /// with a gap between two of the rail's five buttons — "each
-    /// button is level with a gap between two rail buttons"
-    /// (`DUO_POSES.md`'s own wording for the pose-3 wireframe).
-    /// `[]` when `chromeColumnRect`/`railVerticalExtent` found nothing
-    /// to anchor against.
+    /// Three points, x = the chrome column's own centre, Filter
+    /// centred on the rail's own vertical centre, Mute and Bin pulled
+    /// in close to it — a tight group, not level with the rail's own
+    /// (much wider) button gaps.
     ///
-    /// `pitch` is `Rail.itemHeight + Rail.spacing` (76 — the spec's
-    /// own annotation). Point `j` (0...2) sits at
-    /// `railTop + Rail.hit/2 + (j + 0.5) · pitch`: the rail's own
-    /// first button centres at `railTop + Rail.hit/2`, so adding a
-    /// half-pitch lands exactly on the gap after it, and each further
-    /// whole pitch moves down one more gap. Only 3 of the rail's 4
-    /// gaps are used — Mute, Filter, and Bin, not a fourth button.
+    /// Owner re-adapt (pose pass, poses 3/4): the previous version
+    /// placed each button level with a gap between two of the rail's
+    /// five buttons (`pitch = Rail.itemHeight + Rail.spacing`, 76pt) —
+    /// "each button is level with a gap between two rail buttons"
+    /// (`DUO_POSES.md`'s own original wording for the pose-3
+    /// wireframe). The owner's own look at the sim asked for a tight
+    /// group instead: Filter on the rail's own vertical centre
+    /// (`railTop + Rail.columnHeight / 2`), Mute and Bin one `pitch`
+    /// above/below it, `pitch = Rail.hit + 12` (52pt) — "about one
+    /// button height + ~12pt," using `Rail.hit` as the one existing
+    /// constant that already means "a round control's own size" in
+    /// this file, not the taller labelled-rail-item unit `pitch` used
+    /// before. `[]` when `chromeColumnRect`/`railVerticalExtent` found
+    /// nothing to anchor against.
     func zigzagCenters(containerSize: CGSize, safeAreaTop: CGFloat) -> [CGPoint] {
         guard let columnRect = chromeColumnRect(containerSize: containerSize, safeAreaTop: safeAreaTop),
               let extent = railVerticalExtent(containerSize: containerSize, safeAreaTop: safeAreaTop)
         else { return [] }
-        let pitch = Rail.itemHeight + Rail.spacing
-        return (0..<3).map { j in
-            let y = extent.top + Rail.hit / 2 + (CGFloat(j) + 0.5) * pitch
-            return CGPoint(x: columnRect.midX, y: y)
+        let pitch = Rail.hit + 12
+        let filterY = extent.top + Rail.columnHeight / 2
+        return [filterY - pitch, filterY, filterY + pitch].map { y in
+            CGPoint(x: columnRect.midX, y: y)
         }
     }
 
