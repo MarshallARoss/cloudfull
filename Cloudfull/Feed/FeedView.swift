@@ -169,6 +169,14 @@ struct FeedView: View {
     /// `.onPreferenceChange` next to `duoRightGridBottomY`'s own,
     /// rendered by `duoGuidesOverlay`.
     @State private var duoGuideMarks: [DuoGuideMark] = []
+    /// Owner (pose pass): the legend's own dark backing covered real
+    /// content (pose 3's caption, then pose 5's own Mute/Filter —
+    /// `pose5TopRow` sits top-LEADING there, the same corner every
+    /// other pose left clear). No fixed corner is free in every pose,
+    /// so the legend now starts collapsed to a small toggle instead
+    /// of guessing a new corner that the NEXT pose fix could collide
+    /// with too. See `duoGuideLegend`'s own comment.
+    @State private var duoGuideLegendExpanded = false
     #endif
 
     /// This uses `.shared`, the same pattern `AssetKeyResolver` and
@@ -2256,41 +2264,60 @@ struct FeedView: View {
         .allowsHitTesting(false)
     }
 
-    /// A small legend box — colours, the current pose, and the
-    /// window size (e.g. "pose openTall 669x951"), the owner's own
-    /// spec. Top-leading, not bottom-leading: the owner reported the
-    /// legend sitting on top of pose 3's own caption at the bottom.
-    /// Every caption variant in this file anchors bottom or
-    /// bottom-leading (`captionZone`/`duoOpenWideCaption`/
-    /// `duoBookCaption`/`duoLaptopCaption`), and the rail/chin/top row
-    /// all sit on the TRAILING edge or at the very bottom, so
-    /// top-leading is the one corner no real pose puts content in.
+    /// A small legend — colours, the current pose, and the window
+    /// size (e.g. "pose openTall 669x951"), the owner's own spec.
+    ///
+    /// Owner (pose pass, round 2): top-leading still wasn't free —
+    /// pose 5's own `pose5TopRow` sits top-LEADING there (Mute/Filter
+    /// near `stageRect.minX`), the same corner top-leading moved TO
+    /// after pose 3's caption bumped it off bottom-leading. No fixed
+    /// corner is free in every pose today, and the round-4 agents are
+    /// changing the laptop/column layouts as this is written, so a
+    /// third hardcoded guess could just as easily collide with
+    /// whatever they land on. Collapsible instead: starts as a small
+    /// tap target at top-CENTRE (clear of every pose's own leading or
+    /// trailing content in every capture so far), expands in place on
+    /// tap, never drawn without a deliberate tap asking for it.
+    @ViewBuilder
     private func duoGuideLegend(duoLayout: DuoLayout, containerSize: CGSize) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text("pose \(duoLayout.pose.rawValue) \(Int(containerSize.width))×\(Int(containerSize.height))")
-                .font(.system(size: 9, weight: .bold, design: .monospaced))
+        if duoGuideLegendExpanded {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("pose \(duoLayout.pose.rawValue) \(Int(containerSize.width))×\(Int(containerSize.height)) (tap to hide)")
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .foregroundStyle(.white)
+                    .padding(.bottom, 2)
+                duoGuideLegendRow(.red, "occlusion")
+                duoGuideLegendRow(.blue, "division")
+                duoGuideLegendRow(.green, "bar")
+                duoGuideLegendRow(.orange, "railColumn")
+                duoGuideLegendRow(.yellow, "ringX")
+                duoGuideLegendRow(.teal, "top row")
+                duoGuideLegendRow(.purple, "stage")
+                duoGuideLegendRow(.pink, "caption / grid")
+                duoGuideLegendRow(.mint, "chin")
+                duoGuideLegendRow(.cyan, "cloud ring")
+                duoGuideLegendRow(.indigo, "rail item")
+                duoGuideLegendRow(.gray, "deck / prev-next")
+                duoGuideLegendRow(.white, "safe area")
+            }
+            .padding(6)
+            .background(Color.black.opacity(0.85))
+            .cornerRadius(4)
+            .fixedSize()
+            .position(x: containerSize.width / 2, y: 110)
+            .onTapGesture { duoGuideLegendExpanded = false }
+        } else {
+            Text("legend")
+                .font(.system(size: 8, weight: .bold, design: .monospaced))
                 .foregroundStyle(.white)
-                .padding(.bottom, 2)
-            duoGuideLegendRow(.red, "occlusion")
-            duoGuideLegendRow(.blue, "division")
-            duoGuideLegendRow(.green, "bar")
-            duoGuideLegendRow(.orange, "railColumn")
-            duoGuideLegendRow(.yellow, "ringX")
-            duoGuideLegendRow(.teal, "top row")
-            duoGuideLegendRow(.purple, "stage")
-            duoGuideLegendRow(.pink, "caption / grid")
-            duoGuideLegendRow(.mint, "chin")
-            duoGuideLegendRow(.cyan, "cloud ring")
-            duoGuideLegendRow(.indigo, "rail item")
-            duoGuideLegendRow(.gray, "deck / prev-next")
-            duoGuideLegendRow(.white, "safe area")
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .background(Color.black.opacity(0.85))
+                .cornerRadius(4)
+                .fixedSize()
+                .position(x: containerSize.width / 2, y: 12)
+                .onTapGesture { duoGuideLegendExpanded = true }
         }
-        .padding(6)
-        .background(Color.black.opacity(0.75))
-        .cornerRadius(4)
-        .fixedSize()
-        .position(x: 85, y: 130)
-        .allowsHitTesting(false)
     }
 
     private func duoGuideLegendRow(_ color: Color, _ name: String) -> some View {
