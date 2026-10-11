@@ -148,6 +148,13 @@ struct FeedView: View {
     /// any one `FeedView`. `DeckViewModel.start()` reads the same
     /// instance at launch.
     @ObservedObject private var optionsStore = FeedOptionsStore.shared
+    /// Owner re-adapt, "every iPhone": `RootView`'s own `TabView` keeps
+    /// every tab mounted, so `FeedView` no longer gets destroyed the
+    /// moment the user leaves Videos — the OLD guarantee that stopped
+    /// playback on a mode switch. Read here instead, so
+    /// `isFeedSuspended` can pause in place the same way it already
+    /// does for the bin/shrink sheets. See that property's own comment.
+    @ObservedObject private var modeStore = AppModeStore.shared
     /// The pager id of the end-of-date page. Not a deck entry, so every
     /// `deck.firstIndex(where:)` lookup on it finds nothing.
     private static let doneForTodayPageID = "done_today_page"
@@ -178,13 +185,21 @@ struct FeedView: View {
         _shareCoordinator = StateObject(wrappedValue: ShareCoordinator())
     }
 
-    /// True while the bin or the shrink sheet is open. Each can play a
-    /// video of its own. Every feed page pauses in place through
-    /// `PlayerHolder.setSuspended` and resumes when the sheet closes. The
-    /// share sheet and the album picker play no video, so the feed keeps
-    /// playing under them.
+    /// True while the bin or the shrink sheet is open, OR Videos is not
+    /// the active tab. Each pauses playback in place through
+    /// `PlayerHolder.setSuspended` and resumes when the sheet closes or
+    /// the tab is selected again. The share sheet and the album picker
+    /// play no video, so the feed keeps playing under them.
+    ///
+    /// The `modeStore.mode != .videos` term is owner re-adapt, "every
+    /// iPhone": `RootView`'s own system `TabView` keeps `FeedView`
+    /// mounted on every other tab now, where the OLD `switch`-based
+    /// `RootView` used to destroy it outright the moment the user left
+    /// Videos — which is what actually stopped playback and audio
+    /// before. Without this term, a video left playing on another tab
+    /// would keep its audio running (and keep decoding) indefinitely.
     private var isFeedSuspended: Bool {
-        showTrash || shrinkTarget != nil
+        showTrash || shrinkTarget != nil || modeStore.mode != .videos
     }
 
     /// True unless the bin, the shrink sheet, the album picker, or the
@@ -207,8 +222,9 @@ struct FeedView: View {
 
     /// True while fullscreen mode (a regular iPhone or a closed Duo
     /// really rotated into landscape, R4) hides the GLOBAL chrome — the
-    /// top mute/filter/bin row (`overlayControls`) and the chin
-    /// (`ChinNavigation`).
+    /// top mute/filter/bin row (`overlayControls`) and the Bin pill —
+    /// and, via the `.toolbar(_, for: .tabBar)` call in `body`, the
+    /// system tab bar `RootView`'s `TabView` now owns.
     ///
     /// Build 1 fix, step 2: this used to also hide for `isLandscapeFit`
     /// (a real-rotation horizontal video, open Duo only — the old
@@ -239,67 +255,6 @@ struct FeedView: View {
     /// .supportedInterfaceOrientations(for:)` actually reads.
     private var allowsLandscape: Bool {
         pageAllowsLandscape || hingeStatus == .partial
-    }
-
-    /// Pose 5's own chin position: beside the rail's own last item in
-    /// the open-tall column (bar off), `Rail.spacing` below it — the
-    /// same gap the rail's own five buttons use between each other —
-    /// x-centred on that same column. `nil` wherever the column does
-    /// not apply (every other pose, and every regular iPhone), which
-    /// leaves `ChinNavigation`'s own ordinary bottom-trailing anchor
-    /// as the only one in play there; see `ChinNavigation.railAlignedCenter`'s
-    /// own comment for why this is `nil` everywhere else, and why it
-    /// is read only while collapsed.
-    ///
-    /// The owner's own review of this pose asked for it directly:
-    /// "[the chin] should at least be bigger and align with the other
-    /// rail items" — same x-centre as the rail, below its last item,
-    /// with the rail's own spacing.
-    ///
-    /// Build 8b: pose 6 (laptop) reuses this same `ChinNavigation
-    /// .railAlignedCenter` mechanism for its own collapsed chin, at
-    /// `DuoLayout.laptopRailRow`'s own `chinCenter` — "chin collapsed
-    /// centre (600, v 236) via `railAlignedCenter`" (`design/duo/duo_build_spec.md`
-    /// §2.6). The mechanism itself ("position the collapsed switcher at
-    /// a point, else the ordinary bottom-trailing anchor") is already
-    /// pose-agnostic; only the point differs, so this branches first
-    /// rather than growing a second parameter on `ChinNavigation`.
-    ///
-    /// Owner re-adapt (pose pass): pose 1V (`.closed`) joins pose 5
-    /// here too — "the rail (and the chin, and anything else in the
-    /// column) [should align] to the ring's centre x." `x` now comes
-    /// from `DuoLayout.ringCenteredColumnX`, not the column rect's own
-    /// naive `midX` — see that function's own comment for why, and
-    /// `actionRailColumn`'s identical switch for the rail itself.
-    /// Deliberately still scoped to `.openTall`/`.closed`, not every
-    /// closed-bar pose: pose 3/4/4W's own chin is untouched this
-    /// round, unverified against this change.
-    private func railAlignedChinCenter(duoLayout: DuoLayout, safeAreaTop: CGFloat, safeAreaBottom: CGFloat, containerSize: CGSize) -> CGPoint? {
-        if duoLayout.pose == .laptop {
-            return duoLayout.laptopRailRow(containerSize: containerSize, safeAreaBottom: safeAreaBottom)?.chinCenter
-        }
-        guard duoLayout.pose == .openTall || duoLayout.pose == .closed,
-              let centerX = duoLayout.ringCenteredColumnX(containerSize: containerSize, safeAreaTop: safeAreaTop),
-              let extent = duoLayout.railVerticalExtent(containerSize: containerSize, safeAreaTop: safeAreaTop)
-        else { return nil }
-        let centerY = extent.bottom + Rail.spacing + Rail.hit / 2
-        return CGPoint(x: centerX, y: centerY)
-    }
-
-    /// Step 7's own anchor (`design/duo/duo_build_spec.md` §3c): the
-    /// column tabs' own top edge ("Delete bottom + 40") and horizontal
-    /// centre (the rail column's own `midX`). Explicitly gated on
-    /// `.openTall` — pose 5 only, per §3c's own words ("pose 5, Videos
-    /// host only") — unlike `railAlignedChinCenter` just above, whose
-    /// own `!isClosedBar` gate is pose-generic; `ChinNavigation.body`
-    /// still checks `columnTabsTop`/`columnX` first, so the two can
-    /// never disagree even though both are computed.
-    private func columnTabsAnchor(duoLayout: DuoLayout, safeAreaTop: CGFloat, containerSize: CGSize) -> (top: CGFloat, x: CGFloat)? {
-        guard duoLayout.pose == .openTall,
-              let columnRect = duoLayout.railColumnRect(containerSize: containerSize, safeAreaTop: safeAreaTop)
-        else { return nil }
-        let top = duoLayout.railBottom(safeAreaTop: safeAreaTop, containerSize: containerSize) + 40
-        return (top, columnRect.midX)
     }
 
     /// `DuoLayout.current`, behind the `#available` check its own
@@ -359,13 +314,7 @@ struct FeedView: View {
             // shorter safe-area height) and pose 5's own top row/rail
             // anchors landing off-screen. Every call below that reads
             // `duoLayout`'s own `occlusion`/`division`-derived geometry
-            // must use `windowSize`, never `rootProxy.size` — except
-            // `ChinNavigation`'s own `railBottom:` argument, deliberately
-            // left reading `rootProxy.size` below: that one also feeds
-            // `StageGeometry.bottomBand`'s fallback path for every
-            // regular-iPhone chin position, and changing its own
-            // containerSize would move the chin on a regular iPhone,
-            // which must stay byte-for-byte.
+            // must use `windowSize`, never `rootProxy.size`.
             let windowSize = CGSize(
                 width: rootProxy.size.width + fullscreenSafeArea.leading + fullscreenSafeArea.trailing,
                 height: rootProxy.size.height + fullscreenSafeArea.top + fullscreenSafeArea.bottom
@@ -383,10 +332,6 @@ struct FeedView: View {
             // `.animation(.default, value: duoLayout.pose)` below, not a
             // debounce, is what smooths a real transition's layout jump.
             let duoLayout = resolvedDuoLayout(rootProxy: rootProxy)
-            // Computed once here, not inline at the `ChinNavigation`
-            // call site, so its two fields (`.top`/`.x`) do not each
-            // force a second call to `columnTabsAnchor(duoLayout:safeAreaTop:containerSize:)`.
-            let chinColumnTabs = columnTabsAnchor(duoLayout: duoLayout, safeAreaTop: safeAreaTop, containerSize: windowSize)
             ZStack {
             // Zero-size; only ever updates `toolbarVerticalEdge` above.
             // See that property's own comment for why the read is
@@ -414,28 +359,9 @@ struct FeedView: View {
                 .opacity(hidesGlobalChrome ? 0 : 1)
                 .allowsHitTesting(!hidesGlobalChrome)
                 .accessibilityHidden(hidesGlobalChrome)
-            // Mounted once here, in the global overlay, never inside
-            // `FeedPageContent`. `FeedPageContent` is instantiated once
-            // per mounted page and would produce up to three
-            // `chin_nav_button` elements.
-            //
-            // `railBottom` is 0 (its default) on every other host
-            // (`SettingsView`, `PhotoFeedView`), which keeps the chin's
-            // plain fixed anchor there with no dependence on this
-            // view's own geometry at all. Only here, in Videos mode,
-            // is there a real rail for the chin to ever need to clear.
-            ChinNavigation(bottomBand: StageGeometry.bottomBand(safeAreaTop: safeAreaTop,
-                                                               containerSize: rootProxy.size),
-                           railBottom: duoLayout.railBottom(safeAreaTop: safeAreaTop, containerSize: rootProxy.size),
-                           railAlignedCenter: railAlignedChinCenter(duoLayout: duoLayout, safeAreaTop: safeAreaTop, safeAreaBottom: fullscreenSafeArea.bottom, containerSize: windowSize),
-                           columnTabsTop: chinColumnTabs?.top,
-                           columnX: chinColumnTabs?.x)
-                .opacity(hidesGlobalChrome ? 0 : 1)
-                .allowsHitTesting(!hidesGlobalChrome)
-                .accessibilityHidden(hidesGlobalChrome)
             // Step 12: the book pose's (4/4W) right page — mounted once
             // here, never inside `FeedPageContent`, for the same reason
-            // `ChinNavigation` is — see `DuoRightPage`'s own header
+            // `overlayControls` is — see `DuoRightPage`'s own header
             // comment. `currentAssetID` comes from the pager's own
             // cursor (`currentPageID`), not `viewModel.currentIndex`:
             // the two can disagree for a frame during a prune/reanchor,
@@ -456,9 +382,8 @@ struct FeedView: View {
                 // here, this view's own `.position()` would still be
                 // read inside `rootProxy`'s own safe-area-shrunk local
                 // space — the same mismatch bug, just on this one
-                // mount — the same fix `ChinNavigation`'s own body
-                // already applies to itself, and the pager applies to
-                // the whole `ScrollView`.
+                // mount — the same fix the pager applies to the whole
+                // `ScrollView`.
                 .ignoresSafeArea()
                 .opacity(hidesGlobalChrome ? 0 : 1)
                 .allowsHitTesting(!hidesGlobalChrome)
@@ -502,11 +427,13 @@ struct FeedView: View {
             backfillProbe
             // `poolCountProbe`, `filteredPoolCountProbe`, and
             // `MainStallProbeView` are mounted by `GateProbes`
-            // (Cloudfull/Storage/DebugProbes.swift), not here. `RootView`
-            // unmounts `FeedView` outright while the mode is `.photos`.
-            // `pool_total_`, `pool_filtered_`, and `main_stalls_` need to
-            // keep reading independent of which mode is on screen.
-            // `trash_rows_` lives there for the same reason.
+            // (Cloudfull/Storage/DebugProbes.swift), not here. `RootView`'s
+            // `TabView` keeps `FeedView` mounted on every tab now (see
+            // `isFeedSuspended`) rather than unmounting it outright while
+            // the mode is `.photos`. `pool_total_`, `pool_filtered_`, and
+            // `main_stalls_` need to keep reading independent of which
+            // mode is on screen. `trash_rows_` lives there for the same
+            // reason.
             #endif
             }
             .frame(width: rootProxy.size.width, height: rootProxy.size.height)
@@ -519,12 +446,22 @@ struct FeedView: View {
         }
         // Hides the status bar and home indicator while `hidesGlobalChrome`
         // (`isFullscreen`) is on, the same chrome-hide condition
-        // `overlayControls`/`ChinNavigation` already use. This is safe
-        // for the stage geometry. The pager and `overlayControls` both
-        // already `.ignoresSafeArea()`, so `proxy.size` — the only
-        // input to the stage math — does not move when the inset does.
+        // `overlayControls` already uses. This is safe for the stage
+        // geometry. The pager and `overlayControls` both already
+        // `.ignoresSafeArea()`, so `proxy.size` — the only input to the
+        // stage math — does not move when the inset does.
         .statusBarHidden(hidesGlobalChrome)
         .persistentSystemOverlays(hidesGlobalChrome ? .hidden : .automatic)
+        // Owner re-adapt, "every iPhone": the system tab bar replacing
+        // `ChinNavigation` is `RootView`'s own `TabView`, one level above
+        // this view, so hiding it from here needs the preference-key
+        // route (`.toolbar(_, for: .tabBar)`) rather than a local view
+        // property — SwiftUI carries this value up to the enclosing
+        // `TabView` itself. Hides for the same `hidesGlobalChrome`
+        // condition as the status bar and home indicator just above, so
+        // 1H fullscreen hides all three together, the same as the old
+        // chin's own hide-on-fullscreen behavior.
+        .toolbar(hidesGlobalChrome ? .hidden : .automatic, for: .tabBar)
         // R4: the one write site for `RotationPolicy.shared` — see
         // `allowsLandscape`'s own comment. `initial: true` syncs the
         // scene's mask the moment this view first appears, not only on
@@ -1176,7 +1113,7 @@ struct FeedView: View {
                     chromeColumn(duoLayout: duoLayout, safeAreaTop: realTopInset, containerSize: fullWindow)
                 }
                 if usesPose5TopRow {
-                    pose5TopRow(duoLayout: duoLayout, safeAreaTop: realTopInset, containerSize: fullWindow)
+                    pose5TopRow(duoLayout: duoLayout, safeAreaTop: realTopInset, safeAreaBottom: realBottomInset, containerSize: fullWindow)
                 }
                 if usesLaptopDeck {
                     laptopDeckControls(duoLayout: duoLayout, safeAreaBottom: realBottomInset, containerSize: fullWindow)
@@ -1343,9 +1280,16 @@ struct FeedView: View {
     /// already gives Mute from `stage.minX` — so the row can never
     /// read past the video it sits on, in either pose; `statusBlock`
     /// still decides only the row's own `y`.
-    private func pose5TopRow(duoLayout: DuoLayout, safeAreaTop: CGFloat, containerSize: CGSize) -> some View {
+    ///
+    /// Owner re-adapt, "every iPhone": `safeAreaBottom` passes straight
+    /// through to `stageRect`, so `leading`/`trailing` narrow with it
+    /// on pose 5 (bar off, floating system tab bar) the same way the
+    /// video itself does — see `DuoLayout.availableRect`'s own comment.
+    /// A no-op on pose 1V (`.closed`, bar on): the real inset measures
+    /// ~0 there, since Apple puts the tab bar in the column instead.
+    private func pose5TopRow(duoLayout: DuoLayout, safeAreaTop: CGFloat, safeAreaBottom: CGFloat, containerSize: CGSize) -> some View {
         let statusBlock = duoLayout.statusBlock(containerSize: containerSize, safeAreaTop: safeAreaTop)
-        let stageRect = duoLayout.stageRect(containerSize: containerSize, safeAreaTop: safeAreaTop)
+        let stageRect = duoLayout.stageRect(containerSize: containerSize, safeAreaTop: safeAreaTop, safeAreaBottom: safeAreaBottom)
         let leading = stageRect.minX + 16
         let trailing = stageRect.maxX - 16
         let width = max(0, trailing - leading)
@@ -2397,7 +2341,14 @@ private struct FeedPageContent: View {
         // `.ignoresSafeArea()`. So `proxy.size` is the same container
         // size that view feeds `StageGeometry`.
         GeometryReader { proxy in
-            let bottomBand = StageGeometry.bottomBand(safeAreaTop: safeAreaTop, containerSize: proxy.size)
+            // Owner re-adapt, "every iPhone": `+ safeAreaBottom` is the
+            // real system-tab-bar exclusion (see `DuoLayout.availableRect`'s
+            // own comment) — `actionRail`'s only call site below is
+            // reached exactly when there is no rail column (regular
+            // iPhone or tent), which is exactly when the tab bar floats
+            // at the bottom instead of living in a column, so this term
+            // is always correct to add here, with no pose gate needed.
+            let bottomBand = StageGeometry.bottomBand(safeAreaTop: safeAreaTop, containerSize: proxy.size) + safeAreaBottom
             // Build 5: the REAL band below the stage, from the real
             // stage height (`duoLayout.stageRect`'s own `.height`),
             // not `bottomBand`'s width-derived assumption above —
@@ -2410,7 +2361,7 @@ private struct FeedPageContent: View {
             // (`PlayerPageView.bottomSpace` the same size) needs the
             // caption lifted clear of it — see that function's own
             // comment.
-            let realStageHeight = duoLayout.stageRect(containerSize: proxy.size, safeAreaTop: safeAreaTop).height
+            let realStageHeight = duoLayout.stageRect(containerSize: proxy.size, safeAreaTop: safeAreaTop, safeAreaBottom: safeAreaBottom).height
             // Owner re-adapt (pose pass, 1V): matches
             // `PlayerPageView`'s identical `.closed` term on its own
             // `ScrubberView.bandHeight` — the scrubber line is forced
@@ -2661,7 +2612,19 @@ private struct FeedPageContent: View {
     /// of its 28pt box, so it keeps the `20 + 28` sum unchanged.
     private func captionZone(trailingClearance: CGFloat, hidden: Bool, bandHeight: CGFloat) -> some View {
         let liftsForScrubber = duoLayout.pose != .regularPhone && bandHeight < 50
-        let bottomPadding: CGFloat = duoLayout.pose == .closed ? 20 : (liftsForScrubber ? 20 + 28 : 20)
+        // Owner re-adapt, "every iPhone": this padding is flow-based,
+        // measured from this page's own full-window bottom edge, not
+        // from the stage — unlike `ScrubberView`/`stageRect`, shrinking
+        // the stage does not move this anchor on its own. `safeAreaBottom`
+        // (real, 0 wherever the system tab bar sits in the rail/bar
+        // column instead) is added directly here for exactly that
+        // reason. Pose 1V (`.closed`) is excluded: its own `20` is
+        // tuned to sit just above the scrubber line now pinned to the
+        // true bezel (see this function's own comment above), and the
+        // tab bar lives in that pose's bar column, not at the bottom,
+        // so there is nothing of this term's own to add there.
+        let safeAreaBottomTerm = duoLayout.pose == .closed ? 0 : safeAreaBottom
+        let bottomPadding: CGFloat = (duoLayout.pose == .closed ? 20 : (liftsForScrubber ? 20 + 28 : 20)) + safeAreaBottomTerm
         return captionTexts
             .feedShadow()
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -2730,7 +2693,7 @@ private struct FeedPageContent: View {
     /// OWN bottom-leading corner at `(24, H − 30)` regardless of its
     /// rendered height, with no need to measure that height first.
     private func duoOpenWideCaption(containerSize: CGSize, safeAreaTop: CGFloat) -> some View {
-        let stageMinX = duoLayout.stageRect(containerSize: containerSize, safeAreaTop: safeAreaTop).minX
+        let stageMinX = duoLayout.stageRect(containerSize: containerSize, safeAreaTop: safeAreaTop, safeAreaBottom: safeAreaBottom).minX
         let leading: CGFloat = 24
         let width = max(0, stageMinX - 40 - leading)
         let rect = CGRect(x: leading, y: 0, width: width, height: max(0, containerSize.height - 30))
@@ -2824,27 +2787,20 @@ private struct FeedPageContent: View {
     /// at that row's own points — per-page, like every other pose's
     /// rail, since it describes the current item, not the screen (see
     /// `FeedView.laptopDeckControls`'s own comment on which pieces of
-    /// §2.6 are global instead). The vertical hairline at
-    /// `hairlineX`/`hairlineY` is this row's own divider, between
-    /// Delete and the chin, clamped to `Rail.itemHeight` tall — owner
-    /// re-adapt: "a SHORT divider only as tall as the rail row," not
-    /// the whole deck (the first build's own bug, spanning
-    /// `bottom.height` and cutting through the Next pill below it).
+    /// §2.6 are global instead). Owner re-adapt, "every iPhone": this
+    /// row's own sixth slot, reserved for the chin, and the divider
+    /// between it and Delete, are gone along with `ChinNavigation` —
+    /// five slots now, evenly distributed, same as `laptopRailRow`
+    /// itself.
     @ViewBuilder
     private func laptopHorizontalRail(containerSize: CGSize, safeAreaBottom: CGFloat) -> some View {
-        if let row = duoLayout.laptopRailRow(containerSize: containerSize, safeAreaBottom: safeAreaBottom),
-           row.centers.count == 5 {
-            Rectangle()
-                .fill(Color.white.opacity(0.2))
-                .frame(width: 1, height: Rail.itemHeight)
-                .position(x: row.hairlineX, y: row.hairlineY)
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
-            likeButton(rail).position(row.centers[0])
-            shareButton.position(row.centers[1])
-            albumButton.position(row.centers[2])
-            shrinkButton(rail).position(row.centers[3])
-            deleteButton(rail).position(row.centers[4])
+        if let centers = duoLayout.laptopRailRow(containerSize: containerSize, safeAreaBottom: safeAreaBottom),
+           centers.count == 5 {
+            likeButton(rail).position(centers[0])
+            shareButton.position(centers[1])
+            albumButton.position(centers[2])
+            shrinkButton(rail).position(centers[3])
+            deleteButton(rail).position(centers[4])
         }
     }
 
