@@ -239,8 +239,8 @@ struct PhotoPostView: View {
     //
     // For a Live post, the Share button expands into a capsule that
     // holds a `LiquidSegmentedControl<ShareKind>`
-    // (`ChinTabSegmentedControl.swift`), the same way `ChinNavigation`
-    // expands.
+    // (`LiquidSegmentedControl.swift`), the same way the old chin nav's
+    // own switcher used to expand.
     //
     // `sharePickerShellOpacity`, `sharePickerWordsOpacity`, and
     // `shareLabelOpacity` mirror `ChinNavigation`'s `wordsOpacity`/
@@ -1611,9 +1611,10 @@ struct PhotoPostView: View {
 
     /// Layer 2: the real `LiquidSegmentedControl<ShareKind>`, drawn on top
     /// of the glass, never inside it, following
-    /// `ChinTabSegmentedControl.swift`'s own layering rule. Always
-    /// mounted, like `ChinNavigation.content`, so its opacity animates
-    /// instead of the view appearing at once. It is always sized and
+    /// `LiquidSegmentedControl.swift`'s own layering rule. Always
+    /// mounted, so its opacity animates instead of the view appearing at
+    /// once — the old chin nav's own `content` followed the same rule.
+    /// It is always sized and
     /// positioned to the expanded rect, since it has nothing useful to
     /// show at the button's own tiny collapsed size and is invisible
     /// there anyway.

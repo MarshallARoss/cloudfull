@@ -1,5 +1,5 @@
 //
-//  ChinTabSegmentedControl.swift
+//  LiquidSegmentedControl.swift
 //  Cloudfull
 //
 //  Copyright (C) 2026 Marshall Ross.
@@ -27,20 +27,31 @@ import UIKit
 // `TabItemContentView.swift` and `FabBarRepresentable.swift`.
 //
 // On iOS 26, `UISegmentedControl` draws a draggable Liquid Glass
-// selection lens. This file puts that control inside the app's chin
-// capsule, instead of recreating the lens's look in SwiftUI.
+// selection lens. This file puts that control inside the app's own
+// glass capsules, instead of recreating the lens's look in SwiftUI.
 //
-// Differences from FabBar: three fixed tabs, no floating action button,
-// and no rebuild path. For the accessibility popover, the content views
-// hide themselves when unarchived, so the popover shows the native
-// segment titles.
+// Owner re-adapt, "every iPhone": this file used to also carry
+// `ChinTabSegmentedControl`, the three-mode (Videos/Photos/Settings)
+// specialization `ChinNavigation` mounted (`chin_nav_videos`,
+// `chin_nav_photos`, `chin_nav_settings`). Apple's system tab bar
+// (`RootView`'s own `TabView`) replaces that control outright — see
+// `ChinNavigation.swift`, now deleted. `LiquidSegmentedControl` itself
+// is a second, independent use of the same `UISegmentedControl`
+// technique: the photo Share picker (`PhotoPostView.sharePickerContent`)
+// mounts it over `ShareKind`, unrelated to tab switching, so it moved
+// here rather than being deleted with the chin.
+//
+// Differences from FabBar: fixed segment count, no floating action
+// button, and no rebuild path. For the accessibility popover, the
+// content views hide themselves when unarchived, so the popover shows
+// the native segment titles.
 
 // MARK: - Item content view
 
-/// One tab's glyph over its word, drawn at the current graphics-context scale
-/// rather than composed from subviews. `draw(_:)` rendering keeps the words
-/// crisp inside the glass. The lens would resample a rasterized `UIImageView`
-/// every frame, which would blur the words.
+/// One segment's glyph over its word, drawn at the current graphics-context
+/// scale rather than composed from subviews. `draw(_:)` rendering keeps the
+/// words crisp inside the glass. The lens would resample a rasterized
+/// `UIImageView` every frame, which would blur the words.
 ///
 /// `NSCoding` support matters for one case: at accessibility content sizes,
 /// the system archives a segment's content into a popover. The unarchived
@@ -55,7 +66,7 @@ final class ChinTabItemContentView: UIView {
     /// capsule.
     private static let titleFont = UIFont.systemFont(ofSize: 11, weight: .semibold)
     private static let glyphPointSize: CGFloat = 17
-    /// Fixed height reserved for the glyph. All three words sit on one
+    /// Fixed height reserved for the glyph. All segments sit on one
     /// baseline, regardless of each symbol's own bounding box.
     private static let glyphAreaHeight: CGFloat = 22
 
@@ -143,10 +154,11 @@ final class ChinSegmentedControl: UISegmentedControl {
 
     /// One accessibility identifier per segment, applied to the internal
     /// `UISegment` views in `layoutSubviews`. These are the frozen
-    /// `chin_nav_videos`, `chin_nav_photos`, and `chin_nav_settings`
-    /// handles that XCUITest taps. The segment view is the real, hittable
-    /// accessibility element for a segment, so the identifier goes there,
-    /// not on a decorative overlay.
+    /// identifiers each caller's own `Item.identifier` hands in — the
+    /// `chin_nav_*` set before the tab switcher, `photo_share_*` for the
+    /// Share picker today — that XCUITest taps. The segment view is the
+    /// real, hittable accessibility element for a segment, so the
+    /// identifier goes there, not on a decorative overlay.
     var segmentIdentifiers: [String] = []
 
     /// The selected item's color, and the color every other item uses.
@@ -547,11 +559,10 @@ private final class DisplayLinkProxy: NSObject {
 // MARK: - SwiftUI wrapper (generic)
 
 /// A `UISegmentedControl`-backed Liquid Glass switcher, generalized over any
-/// `Hashable` selection. `ChinTabSegmentedControl` below is the three-mode
-/// specialization `ChinNavigation` mounts. The photo Share picker
-/// (`PhotoPostView.sharePickerContent`) mounts a second instance over
-/// `ShareKind`. Both get the system's draggable lens, using the same
-/// mechanics described in the provenance note at the top of this file.
+/// `Hashable` selection. Today the photo Share picker
+/// (`PhotoPostView.sharePickerContent`) is the one caller, mounting it over
+/// `ShareKind`, using the mechanics described in the provenance note at the
+/// top of this file.
 ///
 /// A change to `selection` moves the lens and does not call `onSelect`,
 /// because a programmatic write to `selectedSegmentIndex` never sends
@@ -559,7 +570,7 @@ private final class DisplayLinkProxy: NSObject {
 /// (`UISegmentedControl.noSegment`). The Share picker uses `nil` to keep
 /// the lens hidden until the first touch. `onSelect` fires only on
 /// touch-up over a different segment. `onReselect` fires on touch-up
-/// over the segment that was already selected. Both callers treat
+/// over the segment that was already selected. The Share picker treats
 /// `onReselect` as a pick that collapses the capsule.
 struct LiquidSegmentedControl<Selection: Hashable>: UIViewRepresentable {
     /// One segment's value, title, SF Symbol name, and frozen accessibility
@@ -654,27 +665,5 @@ struct LiquidSegmentedControl<Selection: Hashable>: UIViewRepresentable {
             guard parent.items.indices.contains(index) else { return }
             parent.onReselect(parent.items[index].value)
         }
-    }
-}
-
-/// The three chin-nav destinations. This named type keeps the item list
-/// and the `chin_nav_*` identifiers in one place for `ChinNavigation`,
-/// rather than spelling out `LiquidSegmentedControl<AppMode>` at every
-/// call site.
-struct ChinTabSegmentedControl: View {
-    let selection: AppMode
-    let onSelect: (AppMode) -> Void
-    let onReselect: (AppMode) -> Void
-
-    /// Title, glyph and frozen accessibility identifier per tab, in
-    /// `AppMode.allCases` order.
-    private static let items: [LiquidSegmentedControl<AppMode>.Item] = [
-        .init(value: .videos, title: "Videos", symbolName: "video", identifier: "chin_nav_videos"),
-        .init(value: .photos, title: "Photos", symbolName: "photo.on.rectangle", identifier: "chin_nav_photos"),
-        .init(value: .settings, title: "Settings", symbolName: "gearshape", identifier: "chin_nav_settings"),
-    ]
-
-    var body: some View {
-        LiquidSegmentedControl(items: Self.items, selection: selection, onSelect: onSelect, onReselect: onReselect)
     }
 }
