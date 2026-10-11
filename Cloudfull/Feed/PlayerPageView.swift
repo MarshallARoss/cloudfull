@@ -1549,11 +1549,16 @@ struct PlayerPageView: View {
             // Mounted only for the duration of the landscape period,
             // matching `ScrubberView`'s own conditional mounting.
             if isFullscreen {
+                // Owner correction (Opus wireframe compare, pose 1H):
+                // "all controls hide" there — see `FullscreenPlayerChrome
+                // .showsHairline`'s own comment. A regular iPhone's own
+                // fullscreen keeps the hairline, unchanged.
                 FullscreenPlayerChrome(
                     revealed: $chromeRevealed,
                     revealNonce: chromeRevealNonce,
                     progress: holder.progress,
                     isMuted: isMuted,
+                    showsHairline: duoLayout.pose != .closed,
                     onDismiss: { dismissedThisSpell = true },
                     onToggleMute: toggleMute
                 )

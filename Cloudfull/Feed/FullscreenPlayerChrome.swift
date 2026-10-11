@@ -38,6 +38,14 @@ struct FullscreenPlayerChrome: View {
     /// read-only hairline.
     let progress: Double
     let isMuted: Bool
+    /// Owner correction (Opus wireframe compare, pose 1H): the Duo's
+    /// own 1H wireframe reads "all controls hide" — nothing but the
+    /// video and the iCloud ring, not even this read-only hairline
+    /// (see `hairline`'s own comment for why it is normally
+    /// unconditional). `false` only for `duoLayout.pose == .closed`;
+    /// a regular iPhone's own fullscreen keeps the hairline exactly
+    /// as it already had it.
+    let showsHairline: Bool
     let onDismiss: () -> Void
     let onToggleMute: () -> Void
 
@@ -56,7 +64,9 @@ struct FullscreenPlayerChrome: View {
                 controls
                     .transition(.opacity)
             }
-            hairline
+            if showsHairline {
+                hairline
+            }
 
             // `fullscreen_overlay` lives on its own leaf, not on this `ZStack`
             // directly. A bare `.accessibilityIdentifier` on a group applies to
