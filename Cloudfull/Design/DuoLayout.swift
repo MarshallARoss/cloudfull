@@ -473,14 +473,14 @@ struct DuoLayout {
     /// Pose 3's wide-video stage box (build 3): "FIT video aspect in
     /// `[16, W − bar − 80 − 16] × [0, H − captionBand]`, centred" —
     /// the wireframe's own words at the time for excluding BOTH the
-    /// rail/bar column and the new chrome column (`chromeColumnWidth`,
-    /// the Mute/Filter/Bin column `zigzagCenters` places buttons in;
-    /// the literal `80` is round-3's own number — `chromeColumnWidth`
-    /// is computed live since round 4, `chromeColumnRect`'s own
-    /// comment), `pagePad` clear on each side, with `captionBand`
-    /// reserved at the bottom for the caption now sitting under the
-    /// video instead of on it (see the per-pose table's
-    /// pose-3-wide-video row).
+    /// rail/bar column and the chrome column's own OLD 80pt line
+    /// (`chromeColumnStageExclusion` — round-4 review, BLOCKER: round
+    /// 4 moved the Mute/Filter/Bin buttons closer to the rail, but
+    /// the wireframe keeps the stage at this original edge; see that
+    /// function's own comment), `pagePad` clear on each side, with
+    /// `captionBand` reserved at the bottom for the caption now
+    /// sitting under the video instead of on it (see the per-pose
+    /// table's pose-3-wide-video row).
     ///
     /// Pose 3's TALL-video case (the default `aspectRatio`, handled by
     /// `stageRect`'s own fallthrough to `availableRect`) needs none of
@@ -497,7 +497,7 @@ struct DuoLayout {
         let barWidth = column?.width ?? 0
         let edge = column?.edge ?? .trailing
         let pad = Self.pagePad
-        let excluded = barWidth + chromeColumnWidth(containerSize: containerSize, safeAreaTop: safeAreaTop)
+        let excluded = barWidth + chromeColumnStageExclusion(containerSize: containerSize, safeAreaTop: safeAreaTop)
         let availableWidth = max(0, containerSize.width - excluded - pad * 2)
         let minX: CGFloat
         switch edge {
@@ -851,15 +851,28 @@ struct DuoLayout {
 
     /// Half of the rail's own real visual width this frame — the
     /// WIDER of the 40pt glyph circle (`Rail.hit`) and the rail's own
-    /// widest label, actually measured at `Rail.labelFont`'s point
-    /// size/weight (10pt semibold), the same pattern
-    /// `ChinTabItemContentView.intrinsicContentSize` already uses for
-    /// its own words instead of guessing a text's width.
-    /// "Delete"/"Shrink" print about 32pt wide at this size — under
-    /// `Rail.hit` today, so the glyph circle is what actually bounds
-    /// the rail's own pixels, but a longer localized label or a
-    /// larger Dynamic Type size is still covered, not silently
-    /// unmeasured.
+    /// widest label, actually measured against a `UIFont` built to
+    /// match `Rail.labelFont`'s own point size/weight (10pt
+    /// semibold), the same pattern `ChinTabItemContentView
+    /// .intrinsicContentSize` already uses for its own words instead
+    /// of guessing a text's width. "Delete"/"Shrink" print about 32pt
+    /// wide at this size — under `Rail.hit` today, so the glyph
+    /// circle is what actually bounds the rail's own pixels in
+    /// English at the system's default text size.
+    ///
+    /// Owner re-adapt (round-4 review): the comment here used to claim
+    /// a longer localized label or a larger Dynamic Type size was
+    /// "still covered, not silently unmeasured" — not true. `labels`
+    /// below is a hand-copied, ENGLISH-only snapshot of the rail's own
+    /// five words (`likeButton`/`shareButton`/`albumButton`/
+    /// `shrinkButton`/`deleteButton`'s own label text, not read from
+    /// them), and `font` is a fixed 10pt `UIFont` literal — `UIFont`
+    /// and `Rail.labelFont`'s own SwiftUI `Font` are different types
+    /// with no shared constant between them, so this duplicates that
+    /// `10` by hand rather than reading it. Neither tracks a real
+    /// localization or a real Dynamic Type setting. This is accepted,
+    /// same as any other "measured, no API" constant in this file —
+    /// but accepted as a flagged gap, not as real coverage.
     private static let railVisualHalfWidth: CGFloat = {
         let font = UIFont.systemFont(ofSize: 10, weight: .semibold)
         let labels = ["Keep", "Share", "Album", "Shrink", "Delete"]
@@ -876,21 +889,35 @@ struct DuoLayout {
     /// The rail's own real visual edge this frame, closest to the
     /// chrome column — `ringCenteredColumnX` (the SAME x
     /// `actionRailColumn` actually renders the rail at, not a second
-    /// guess at it) pulled in by `railVisualHalfWidth`. Clamped to
-    /// `railColumnRect`'s own edge — the one truly fixed, real bound
-    /// here (the system bar's actual reserved width) — so a measured
-    /// label can never place this past the column it is meant to
-    /// describe. `nil` when no rail column applies.
+    /// guess at it) pulled in by `railVisualHalfWidth`. `nil` when no
+    /// rail column applies.
+    ///
+    /// Owner re-adapt (round-4 review): no longer clamped to
+    /// `railColumnRect`'s own edge. That clamp meant "the rail's
+    /// real pixels can never be reported past the structural column's
+    /// own bound" — true only while the rail sits inside that bound
+    /// in the first place. A left-shifted rail (`ringCenteredColumnX`
+    /// genuinely further leading than `railColumnRect.minX` — the
+    /// kind of reading the pose-5 ring-x rounds this file has already
+    /// seen) would have its real left extent silently UNDERSTATED by
+    /// the clamp, so `chromeColumnRect` — which trusts this value to
+    /// mean "how far left the rail's own pixels actually reach" —
+    /// could place the buttons past that real, further-left edge and
+    /// overlap it. The measured edge alone is always the honest
+    /// answer; `chromeColumnRect`'s own `min(railRect.minX − Rail.hit
+    /// / 2, …)` clamp (its own comment) already keeps the BUTTON'S
+    /// own position from crossing the structural column — the
+    /// non-overlap guarantee this clamp duplicated, less accurately.
     private func railVisualEdge(containerSize: CGSize, safeAreaTop: CGFloat) -> (edge: HorizontalEdge, x: CGFloat)? {
         guard let column = railColumn(containerSize: containerSize, safeAreaTop: safeAreaTop),
-              let columnRect = railColumnRect(containerSize: containerSize, safeAreaTop: safeAreaTop),
+              railColumnRect(containerSize: containerSize, safeAreaTop: safeAreaTop) != nil,
               let centerX = ringCenteredColumnX(containerSize: containerSize, safeAreaTop: safeAreaTop)
         else { return nil }
         switch column.edge {
         case .trailing:
-            return (.trailing, max(columnRect.minX, centerX - Self.railVisualHalfWidth))
+            return (.trailing, centerX - Self.railVisualHalfWidth)
         case .leading:
-            return (.leading, min(columnRect.maxX, centerX + Self.railVisualHalfWidth))
+            return (.leading, centerX + Self.railVisualHalfWidth)
         }
     }
 
@@ -928,6 +955,14 @@ struct DuoLayout {
     /// generator's own `x 846`, from live geometry alone, not by
     /// copying the number (`design/duo/duo_build_spec.md`'s own
     /// build-3 row has the prior `x 827` this replaces).
+    ///
+    /// Owner re-adapt (round-4 review): at THIS verified size, `x 847`
+    /// is the `min(railRect.minX − Rail.hit / 2, …)` clamp's own
+    /// value, not the "half the gap" formula — the clamp is BINDING
+    /// here, not merely the rare safety bound its own inline comment
+    /// frames it as. So the half-gap term itself (`visual.x − newGap
+    /// − Rail.hit / 2`) is larger than `railRect.minX − 20` at this
+    /// size, and `min` picks the clamp instead.
     func chromeColumnRect(containerSize: CGSize, safeAreaTop: CGFloat) -> CGRect? {
         guard let railRect = railColumnRect(containerSize: containerSize, safeAreaTop: safeAreaTop),
               let visual = railVisualEdge(containerSize: containerSize, safeAreaTop: safeAreaTop)
@@ -961,12 +996,45 @@ struct DuoLayout {
     }
 
     /// This frame's chrome column width alone — `chromeColumnRect`'s
-    /// own width, for callers (`openWideWideVideoRect`, `rightPage`)
-    /// that only need the stage's own exclusion amount. `0` when
-    /// `chromeColumnRect` found nothing. Re-adapted round 4: no
-    /// longer a fixed `80` — see `chromeColumnRect`'s own comment.
+    /// own width. `0` when `chromeColumnRect` found nothing.
+    ///
+    /// Owner re-adapt (round-4 review, BLOCKER): `openWideWideVideoRect`
+    /// and `rightPage` used to read THIS for their own stage/right-page
+    /// exclusion too — correct through round 3, when the button box
+    /// and the stage's own exclusion were the same fixed `80`, but
+    /// wrong once round 4 shrank the button box's own rendered width
+    /// to sit closer to the rail: the stage and the right page then
+    /// widened into space the wireframe still reserves (the pose-3
+    /// wide-video stage's own right edge 771 → 811, the book's own
+    /// right page 827 → 787 with its tiles growing 84 → ~97-104pt, at
+    /// this window's own measured size) — "move those 3 buttons
+    /// closer to the rail," never "give the stage more room." Those
+    /// two callers now read `chromeColumnStageExclusion` instead,
+    /// which stays at the OLD fixed line regardless of where the
+    /// buttons actually sit. This function itself is for the button
+    /// box's own real width — `zigzagCenters`'s own `x`, and anything
+    /// else that needs to know where the buttons themselves actually
+    /// are.
     func chromeColumnWidth(containerSize: CGSize, safeAreaTop: CGFloat) -> CGFloat {
         chromeColumnRect(containerSize: containerSize, safeAreaTop: safeAreaTop)?.width ?? 0
+    }
+
+    /// The stage/right-page's own exclusion width for the chrome
+    /// column — separate from `chromeColumnWidth` since round 4 (see
+    /// that function's own comment for why reusing it widened both
+    /// callers past what the wireframe asks for). `2 * Rail.hit` is
+    /// the arithmetic the OLD fixed `chromeColumnWidth = 80` box
+    /// always was: an 80pt box, immediately leading of the rail
+    /// column, the group centred inside it — `railRect.minX − 2 *
+    /// Rail.hit` is that box's own leading edge, the "old line" the
+    /// stage and the right page still hold to. Written as `2 *
+    /// Rail.hit`, not the bare literal `80`, so a future change to
+    /// `Rail.hit` keeps this consistent with it. `0` under the same
+    /// condition `chromeColumnWidth` is `0` — no chrome column this
+    /// frame, nothing to exclude.
+    func chromeColumnStageExclusion(containerSize: CGSize, safeAreaTop: CGFloat) -> CGFloat {
+        guard chromeColumnRect(containerSize: containerSize, safeAreaTop: safeAreaTop) != nil else { return 0 }
+        return 2 * Rail.hit
     }
 
     /// Three points, x = the chrome column's own centre, Filter
@@ -1001,13 +1069,16 @@ struct DuoLayout {
 
     /// The book pose's right page (pose 4/4W only; `nil` otherwise, or
     /// with no active division to anchor against): "`x ∈
-    /// [division.maxX, W − bar − chromeColumnWidth]`, full height" —
-    /// the fold's own trailing edge to the leading edge of whichever
-    /// column (rail/bar, then chrome) sits on the window's own far
-    /// side. `chromeColumnWidth` is no longer the fixed `80` the
-    /// build-3 wording above first measured — see
-    /// `chromeColumnRect`'s own comment (round 4). `DuoRightPage`
-    /// (build 12) mounts here; nothing reads this rect before then.
+    /// [division.maxX, W − bar − 80]`, full height" — the fold's own
+    /// trailing edge to the leading edge of whichever column (rail/
+    /// bar, then chrome) sits on the window's own far side. Reads
+    /// `chromeColumnStageExclusion`, not `chromeColumnWidth` — see
+    /// that function's own comment (round-4 review, BLOCKER): the
+    /// wireframe keeps this page at its OLD edge even though round 4
+    /// moved the Mute/Filter/Bin buttons closer to the rail.
+    /// `DuoRightPage` (build 12) mounts here, and reads this rect on
+    /// every reload for its own grid/tile sizing — not unread, as an
+    /// earlier version of this comment said.
     func rightPage(containerSize: CGSize, safeAreaTop: CGFloat) -> CGRect? {
         guard pose == .book, let division else { return nil }
         let column = railColumn(containerSize: containerSize, safeAreaTop: safeAreaTop)
@@ -1016,7 +1087,7 @@ struct DuoLayout {
         case .trailing:
             let minX = division.maxX
             let maxX = max(minX, containerSize.width - barWidth
-                - chromeColumnWidth(containerSize: containerSize, safeAreaTop: safeAreaTop))
+                - chromeColumnStageExclusion(containerSize: containerSize, safeAreaTop: safeAreaTop))
             return CGRect(x: minX, y: 0, width: maxX - minX, height: containerSize.height)
         case .leading:
             // Not a configuration this pose has ever measured (the
@@ -1104,8 +1175,8 @@ struct DuoLayout {
     // read for itself — `FeedView.laptopCaptionDateLineCenterY` reads
     // it live, the same `GeometryReader`/`PreferenceKey` technique
     // `duoRightGridBottomY` already uses (see that property's own
-    // comment); `laptopControlGroupGeometry` below hands back only the
-    // X axis and a same-launch fallback Y. The deck drops from four
+    // comment); `laptopControlGroupTrailingX` below hands back only the
+    // X axis. The deck drops from four
     // bands to three: band 0 now carries the group too, so `laptopZigzagRow`
     // (its own now-empty row) is gone, and the rail/chin and
     // Previous/Next rows each shift up one band index.
@@ -1149,7 +1220,7 @@ struct DuoLayout {
     /// Band 0's own bottom edge — `FeedPageContent.duoLaptopCaption`'s
     /// own bottom-aligned text box ends here, under the scrubber,
     /// still inside the deck's first third (now shared with the
-    /// Mute/Filter/Bin group — see `laptopControlGroupGeometry`).
+    /// Mute/Filter/Bin group — see `laptopControlGroupTrailingX`).
     func laptopCaptionBottomY(containerSize: CGSize, safeAreaBottom: CGFloat) -> CGFloat? {
         guard let bottom = laptopBottomRect(containerSize: containerSize, safeAreaBottom: safeAreaBottom) else { return nil }
         return Self.laptopBand(bottom, 0).maxY
@@ -1174,16 +1245,19 @@ struct DuoLayout {
     /// (`FeedView.laptopCaptionDateLineCenterY`, measured the same
     /// `GeometryReader`/`PreferenceKey` way `duoRightGridBottomY`
     /// already is) this pure-geometry type cannot read for itself.
-    /// `fallbackY` is this function's own best guess for the one
-    /// frame before that measurement has ever landed this launch —
-    /// proportioned the same way `laptopScrubberRect`'s own
-    /// `band.height * 0.25` is: flagged for the owner's own look at
-    /// the sim, same as every other "measured, no API" constant in
-    /// this file.
-    func laptopControlGroupGeometry(containerSize: CGSize, safeAreaBottom: CGFloat) -> (trailingX: CGFloat, fallbackY: CGFloat)? {
+    ///
+    /// Owner re-adapt (round-4 review, BLOCKER + follow-up): this used
+    /// to also hand back a guessed `fallbackY` (`band.height * 0.62`)
+    /// for the one frame before a real measurement landed. Guessing a
+    /// Y a pure-geometry type has no way to actually know was the
+    /// wrong fix for a one-frame problem — `FeedView.laptopDeckControls`
+    /// now hides the group with `.opacity(0)` until
+    /// `laptopCaptionDateLineCenterY` reports its first real value,
+    /// instead of drawing at a guessed spot for one frame and then
+    /// jumping.
+    func laptopControlGroupTrailingX(containerSize: CGSize, safeAreaBottom: CGFloat) -> CGFloat? {
         guard let bottom = laptopBottomRect(containerSize: containerSize, safeAreaBottom: safeAreaBottom) else { return nil }
-        let band = Self.laptopBand(bottom, 0)
-        return (trailingX: band.maxX - Self.pagePad, fallbackY: band.minY + band.height * 0.62)
+        return Self.laptopBand(bottom, 0).maxX - Self.pagePad
     }
 
     /// The horizontal action rail, centred in band 1: the same five
