@@ -746,18 +746,24 @@ struct DuoLayout {
     /// through Keep up as a whole." Centring alone is not safe there,
     /// though: the ring sits ABOVE the bar column in this pose, with no
     /// SDK API for its own extent, so this clamps the centred top down
-    /// to `closedStatusBottom(containerSize:safeAreaTop:) + 16`pt
+    /// to `closedStatusBottom(containerSize:safeAreaTop:) + 26`pt
     /// whenever straight centring would rise above it — seeing the
     /// clamp bind at all, on a real closed Duo screen, is the one
     /// thing to check (see that function's own comment on why this
     /// specific signal undershot once before).
+    ///
+    /// Owner re-adapt (pose pass, 1V, second round): "Keep is crowding
+    /// the network ring" — the clamp's own gap was 16pt; raised by
+    /// 10pt to 26pt, lowering the whole rail (Keep through Delete, and
+    /// the chin below it where the chin's own anchor tracks the
+    /// rail's bottom) clear of the ring.
     func railVerticalExtent(containerSize: CGSize, safeAreaTop: CGFloat) -> (top: CGFloat, bottom: CGFloat)? {
         guard railColumnRect(containerSize: containerSize, safeAreaTop: safeAreaTop) != nil else { return nil }
         let centeredTop = (containerSize.height - Rail.columnHeight) / 2
         guard isClosedBar else {
             return (centeredTop, centeredTop + Rail.columnHeight)
         }
-        let minTop = closedStatusBottom(containerSize: containerSize, safeAreaTop: safeAreaTop) + 16
+        let minTop = closedStatusBottom(containerSize: containerSize, safeAreaTop: safeAreaTop) + 26
         let top = max(minTop, centeredTop)
         return (top, top + Rail.columnHeight)
     }
