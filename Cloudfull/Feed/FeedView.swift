@@ -642,7 +642,22 @@ struct FeedView: View {
             // guides are never hidden behind real chrome — see
             // `duoGuidesOverlay`'s own comment.
             if Self.showsDuoGuides {
+                // Owner (round-4 pass): every mark drew ~82pt (laptop)
+                // or ~59pt (pose 5) too low — exactly `safeAreaTop` for
+                // each pose. This whole overlay positions in TRUE
+                // window space (`windowSize`, every DuoLayout rect, and
+                // every `.duoGuideMark`'s own `.global` reading), but
+                // without `.ignoresSafeArea()` here, its own
+                // `.position()` calls were read inside `rootProxy`'s
+                // safe-area-SHRUNK local space instead — `(0,0)` there
+                // sits `safeAreaTop` below true window `(0,0)`. The
+                // exact mismatch `DuoRightPage`'s own mount comment
+                // already documents, and `ChinNavigation`'s own body
+                // and the pager's own `ScrollView` already both apply
+                // this same fix to themselves — this mount was simply
+                // missing it.
                 duoGuidesOverlay(duoLayout: duoLayout, safeAreaTop: safeAreaTop, safeAreaInsets: fullscreenSafeArea, containerSize: windowSize)
+                    .ignoresSafeArea()
             }
             #endif
             }
@@ -2153,7 +2168,7 @@ struct FeedView: View {
             ForEach(0..<3, id: \.self) { index in
                 let band = CGRect(x: bottom.minX, y: bottom.minY + CGFloat(index) * bandHeight,
                                    width: bottom.width, height: bandHeight)
-                duoGuideRect(band, color: .gray, label: "\(names[index]) \(duoGuideFormat(band))")
+                duoGuideRect(band, color: .gray, label: "\(names[index]) \(duoGuideFormat(band))", labelAlignment: .topTrailing)
             }
         }
         // The Mute/Filter/Bin group's own real rendered box (round 4)
@@ -2197,8 +2212,14 @@ struct FeedView: View {
     /// every real caller already reads `occlusion`/`division`/
     /// `railColumnRect` in, with no translation of their own to get
     /// wrong.
-    private func duoGuideRect(_ rect: CGRect, color: Color, label: String) -> some View {
-        ZStack(alignment: .topLeading) {
+    ///
+    /// `labelAlignment` (round-4 review): the deck band labels
+    /// ("deck1 (scrubber/caption/group)", …) sat on top of the real
+    /// caption's own metadata line at the band's own top-leading
+    /// corner, the one spot that box always has real content at.
+    /// Defaults to `.topLeading`, unchanged for every other caller.
+    private func duoGuideRect(_ rect: CGRect, color: Color, label: String, labelAlignment: Alignment = .topLeading) -> some View {
+        ZStack(alignment: labelAlignment) {
             Rectangle()
                 .stroke(color, lineWidth: 1)
             // Owner re-adapt (pose pass): a small (icon-sized) box's
@@ -3358,6 +3379,17 @@ private struct FeedPageContent: View {
         let bottomPadding: CGFloat = duoLayout.pose == .closed ? 20 : (liftsForScrubber ? 20 + 28 : 20)
         return captionTexts()
             .feedShadow()
+            // Marked HERE, before `.frame(maxWidth: .infinity,
+            // alignment: .leading)` just below — marking after that
+            // frame reported the whole page (951×669 for pose 3, the
+            // SAME chin/cloud mistake: an unconstrained expanding
+            // frame with nothing downstream to size it back down).
+            // Seen live only for a neighbour page caught mid pose
+            // transition (this function does not even mount for the
+            // active page once `usesDuoCaption` picks a different
+            // caption), but the same structural bug regardless of
+            // when it shows.
+            .duoGuideMark("caption", color: .pink, active: isActive)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.leading, 16)
             .padding(.bottom, bottomPadding)
@@ -3395,7 +3427,6 @@ private struct FeedPageContent: View {
         .accessibilityHidden(hideForFullscreen || hidden)
         .accessibilityIdentifier(isActive && !hideForFullscreen && !hidden ? "feed_caption" : "")
         .accessibilityLabel(meta.placeText.map { "\($0). " + meta.voiceOverLabel } ?? meta.voiceOverLabel)
-        .duoGuideMark("caption", color: .pink, active: isActive)
     }
 
     // MARK: - Pose 3/4/4W caption (build 4)
