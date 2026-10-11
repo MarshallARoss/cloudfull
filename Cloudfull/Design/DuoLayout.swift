@@ -727,10 +727,31 @@ struct DuoLayout {
     /// own "rail x = ring x" broken by exactly that clamp. Bar-off
     /// now takes the same direct, tolerance-checked `occlusion` read
     /// bar-on already did, rather than trusting construction.
+    ///
+    /// Owner re-adapt (Opus round-3 compare, pose 5): `occlusion.midX`
+    /// alone was still ~11pt LEFT of the ring's own real centre there
+    /// — confirmed still wrong after the fix just above. Unlike 1V,
+    /// where `occlusion` reads as exactly the ring's own small square
+    /// (`399,29,37,37`, `midX` already the ring's own centre), pose
+    /// 5's own status region covers BOTH the time text and the ring
+    /// together — the owner's own guess, since there is no Apple API
+    /// that reports the ring's own extent apart from the whole region
+    /// it shares with that text — so `occlusion.midX` there is the
+    /// midpoint between the two, not the ring's own centre, which
+    /// sits further toward the region's own trailing edge.
+    /// `openTallRingOffset` is that gap, measured directly from the
+    /// owner's own screenshot (rail, using this function pre-fix,
+    /// measured 1501px of a 2×, 669pt-wide capture; the ring itself
+    /// measured 1524px — an 11.5pt gap, rounded to 11) — flagged, like
+    /// every "measured, no API" constant in this file, for the owner's
+    /// own look once the DEBUG guides can confirm it directly against
+    /// pose 5 on the sim. 1V is unchanged: its own `occlusion` already
+    /// reads as the ring alone, with nothing to add.
     func ringCenteredColumnX(containerSize: CGSize, safeAreaTop: CGFloat) -> CGFloat? {
         guard let columnRect = railColumnRect(containerSize: containerSize, safeAreaTop: safeAreaTop) else { return nil }
         if let occlusion, occlusion.midX >= columnRect.minX - 8, occlusion.midX <= columnRect.maxX + 8 {
-            return occlusion.midX
+            let openTallRingOffset: CGFloat = pose == .openTall ? 11 : 0
+            return occlusion.midX + openTallRingOffset
         }
         return columnRect.midX
     }
