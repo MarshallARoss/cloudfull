@@ -1416,6 +1416,28 @@ enum DuoGuides {
     #endif
 }
 
+/// `-cloudfull-duo-statusbar-test N` — the owner's own pose-5
+/// status-bar autostack experiment (round 4, pose pass): "What if we
+/// squish it with a view to the left of it? It might autostack."
+/// `N`'s own meaning is at each call site's own comment
+/// (`FeedView.body`'s N=2/N=3 branches; the N=1 overlay right next to
+/// `FeedView.duoGuidesOverlay`'s own mount). `nil` — every experiment
+/// off — when the flag is absent, or its own next argument does not
+/// parse as an `Int`. DEBUG only, like `DuoGuides`, and unrelated to
+/// it: this flag is its own thing, not folded into the guide overlay.
+enum DuoStatusBarTest {
+    #if DEBUG
+    static let value: Int? = {
+        let args = ProcessInfo.processInfo.arguments
+        guard let flagIndex = args.firstIndex(of: "-cloudfull-duo-statusbar-test"),
+              flagIndex + 1 < args.count else { return nil }
+        return Int(args[flagIndex + 1])
+    }()
+    #else
+    static let value: Int? = nil
+    #endif
+}
+
 #if DEBUG
 /// One labeled rect this DEBUG session wants outlined on screen —
 /// `.duoGuideMark`'s own payload. `id` is the element's own name
