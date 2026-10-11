@@ -58,13 +58,6 @@ struct PhotoFeedView: View {
     @StateObject private var shareCoordinator: ShareCoordinator
     @Environment(\.modelContext) private var modelContext
     @Environment(\.displayScale) private var displayScale
-    /// Owner re-adapt, "every iPhone": `RootView`'s own system `TabView`
-    /// keeps this view mounted on every tab now, so `.onAppear`/
-    /// `.onDisappear` no longer mark the Photos/not-Photos edge the way
-    /// the old destroy-and-rebuild `RootView` did. The `.onChange(of:
-    /// modeStore.mode, …)` below reads this directly instead — see that
-    /// handler's own comment.
-    @ObservedObject private var modeStore = AppModeStore.shared
 
     /// The settled current post. It drives `isCurrent` on every child,
     /// tier 2 metadata and `PlaceLookup`, seen-marking, and the metadata
@@ -310,6 +303,9 @@ struct PhotoFeedView: View {
                 .frame(width: duoLayout.availableRect(containerSize: rootProxy.size, safeAreaTop: safeAreaTop).width,
                        alignment: .leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                // Every mode mounts exactly one instance. `bottomBand: 0`
+                // because Photos has no 9:16 stage.
+                ChinNavigation(bottomBand: 0)
                 // Zero-size. Presents and dismisses the system share sheet
                 // imperatively. Mirrors `FeedView`'s identical host.
                 ActivityViewControllerHost(coordinator: shareCoordinator)
@@ -366,25 +362,12 @@ struct PhotoFeedView: View {
             guard measuredPostWidth > 0 else { return }
             PhotoImagePipeline.shared.configure(widthPoints: measuredPostWidth, scale: newScale)
         }
-        // Owner re-adapt, "every iPhone": Photos used to unmount the
-        // moment the chin nav left it, since the old `RootView` switched
-        // on the mode — the exact edge on which every photo download
-        // stopped, and later started again. `RootView`'s own `TabView`
-        // keeps this view mounted once it first appears, so that edge is
-        // gone; `modeStore.mode` is read directly instead, the same way
-        // `FeedView.isFeedSuspended` reads it for video. `initial: true`
-        // makes the very first evaluation — whichever mode this view's
-        // own `Tab` first appears under — suspend background work
-        // immediately when that mode is not `.photos`, rather than only
-        // on the NEXT mode change.
-        .onChange(of: modeStore.mode, initial: true) { _, newMode in
-            if newMode == .photos {
-                deck.resumeBackgroundWork()
-            } else {
-                deck.suspendBackgroundWork()
-            }
-        }
+        // Photos unmounts the moment the chin nav leaves it, since
+        // `RootView` switches on the mode. This is the exact edge on
+        // which every photo download must stop, and later start again.
+        .onDisappear { deck.suspendBackgroundWork() }
         .task {
+            deck.resumeBackgroundWork()
             deck.start(modelContext: modelContext)
             KeepStore.shared.configure(modelContext: modelContext)
             trashService.start()
@@ -395,22 +378,17 @@ struct PhotoFeedView: View {
             currentPostID = deck.currentEntryID
             scrollAnchorID = deck.currentEntryID
             isLiveOn = liveDefaultOn
-            // Owner re-adapt, "every iPhone": this `.task` now runs once
-            // per process — `RootView`'s own `TabView` keeps this view
-            // mounted after it first appears, where the old chin nav's
-            // destroy-and-rebuild `RootView` ran it fresh on every
-            // return to Photos. The `ScrollView` itself now survives a
-            // mode switch the same way `PhotoDeck.shared` always has, so
-            // this restore matters only for the one remaining case where
-            // `deck.currentEntryID` can already be ahead of a freshly
-            // mounted `LazyVStack` — this view's own first appearance,
-            // e.g. a cold launch straight into Photos. `pageBecameCurrent`
-            // keeps `deck.currentEntryID` up to date; re-anchoring on it
-            // here reuses the pruning path's own `scrollTo(currentPostID,
-            // anchor: .top)`, see the `reanchorNonce` handler, rather
-            // than a second scroll mechanism. The yield lets the
-            // `LazyVStack` lay its rows out first; without it the proxy
-            // has nothing to scroll to yet.
+            // Restores the scroll position on return to Photos.
+            // `PhotoDeck` is a singleton, so the deck survives a chin-nav
+            // switch. This view does not survive the switch, and a
+            // freshly mounted `ScrollView` always starts at offset 0.
+            // `deck.currentEntryID` holds the post the user was actually
+            // on, kept by `pageBecameCurrent`, so re-anchoring on it
+            // restores the feed's position. This reuses the pruning
+            // path's own `scrollTo(currentPostID, anchor: .top)`, see the
+            // `reanchorNonce` handler, rather than a second scroll
+            // mechanism. The yield lets the `LazyVStack` lay its rows out
+            // first; without it the proxy has nothing to scroll to yet.
             if let restoreID = deck.currentEntryID,
                deck.entries.first?.id != restoreID {
                 await Task.yield()

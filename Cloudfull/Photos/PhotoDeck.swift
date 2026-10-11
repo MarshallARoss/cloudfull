@@ -490,12 +490,8 @@ final class PhotoDeck: ObservableObject {
 
     /// Stops every piece of photo background work: the image pipeline's
     /// caching and in-flight requests, and the metadata and place
-    /// prefetcher's tasks. Called from `PhotoFeedView`'s own
-    /// `.onChange(of: AppModeStore.shared.mode, …)`, that is, whenever
-    /// Photos stops being the live mode — `RootView`'s own `TabView`
-    /// keeps `PhotoFeedView` mounted on every other tab now, so this is
-    /// the one remaining Photos/not-Photos edge, not an appear/disappear
-    /// of the view itself.
+    /// prefetcher's tasks. Called from `PhotoFeedView.onDisappear`, that
+    /// is, whenever Photos stops being the visible mode.
     ///
     /// Without this call, Photos continues to download after the user
     /// leaves it, and uses bandwidth that Videos needs.
@@ -505,8 +501,7 @@ final class PhotoDeck: ObservableObject {
     }
 
     /// Restarts the background work Photos had running when it was last
-    /// visible. Called from the same `.onChange` handler, the moment
-    /// `AppModeStore.shared.mode` becomes `.photos`.
+    /// visible.
     func resumeBackgroundWork() {
         PhotoImagePipeline.shared.resume()
         triggerMetadataPrefetch()
