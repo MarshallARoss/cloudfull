@@ -1332,6 +1332,7 @@ struct FeedView: View {
             if !suppressDefaultRow {
                 muteButton
                 FilterMenuView(store: optionsStore, hidesChrome: hidesGlobalChrome)
+                    .duoGuideMark("top.filter", color: .teal)
             }
             if let job = activeShrinkJob, let text = shrinkActiveProgressText {
                 shrinkProgressCapsule(text, assetID: job.id)
@@ -1393,6 +1394,7 @@ struct FeedView: View {
                 muteButton
                     .position(centers[0])
                 FilterMenuView(store: optionsStore, hidesChrome: hidesGlobalChrome)
+                    .duoGuideMark("top.filter", color: .teal)
                     .position(centers[1])
                 binButton
                     .position(centers[2])
@@ -1466,6 +1468,7 @@ struct FeedView: View {
         return HStack(spacing: Rail.spacing) {
             muteButton
             FilterMenuView(store: optionsStore, hidesChrome: hidesGlobalChrome)
+                .duoGuideMark("top.filter", color: .teal)
             Spacer(minLength: 8)
             counterCapsule
             binButton
@@ -1495,6 +1498,7 @@ struct FeedView: View {
                 muteButton
                     .position(zigzag.mute)
                 FilterMenuView(store: optionsStore, hidesChrome: hidesGlobalChrome)
+                    .duoGuideMark("top.filter", color: .teal)
                     .position(zigzag.filter)
                 binButton
                     .position(zigzag.bin)
@@ -1643,6 +1647,16 @@ struct FeedView: View {
         .accessibilityIdentifier(hidesGlobalChrome ? "" : "feed_mute_toggle")
         .accessibilityLabel(muteProbeState ? "Sound off" : "Sound on")
         .accessibilityHint("Double tap to turn sound \(muteProbeState ? "on" : "off")")
+        // Owner re-adapt (pose pass): marked ONCE here, not at each of
+        // the 4 call sites above — this is the one shared `muteButton`
+        // every one of them mounts, so its own real frame is correct
+        // regardless of which row actually placed it this pose. The
+        // guide tool used to read `zigzagCenters` directly instead —
+        // `chromeColumn`'s OWN geometry source, wrong for every pose
+        // `pose5TopRow`/`topChrome`/`laptopDeckControls` serve instead
+        // (1V's own real row reported "mid-screen," the owner's
+        // report).
+        .duoGuideMark("top.mute", color: .teal)
     }
 
     // MARK: - Shrink progress capsule
@@ -1809,6 +1823,9 @@ struct FeedView: View {
         // invisible `space_counter` text above.
         .accessibilityLabel(trashService.count > 0 ? "Bin, \(trashService.count) queued" : "Bin")
         .accessibilityHint("Opens the list of videos queued for deletion")
+        // See `muteButton`'s identical comment: one shared view, one
+        // mark, correct for every one of its 4 call sites.
+        .duoGuideMark("top.bin", color: .teal)
     }
 
     /// The bin pill's own on-screen text: just the count when nothing is
@@ -2001,11 +2018,17 @@ struct FeedView: View {
                 .position(x: x, y: 40)
                 .allowsHitTesting(false)
         }
-        // The Mute/Filter/Bin row — global, mounted once by
-        // `chromeColumn`, not per-page — read straight off
-        // `zigzagCenters` rather than marked: no per-page state is
-        // involved, so there is no risk of a stale second copy.
-        duoGuideZigzag(duoLayout.zigzagCenters(containerSize: containerSize, safeAreaTop: safeAreaTop), prefix: "top")
+        // The Mute/Filter/Bin row — owner bug (pose pass, 1V): this
+        // used to read `zigzagCenters` directly, `chromeColumn`'s own
+        // geometry source (pose 3/4/4W only) — wrong for every other
+        // pose, which mounts the SAME `muteButton`/`FilterMenuView`/
+        // `binButton` through `topChrome`, `pose5TopRow`, or
+        // `laptopDeckControls` instead. 1V's own report: the guide
+        // boxes sat "mid-screen next to the rail" while the real row
+        // sits at the top. `top.mute`/`top.filter`/`top.bin` are now
+        // marked at the shared views themselves (`muteButton`'s own
+        // comment), so they read correctly regardless of which of the
+        // four layouts actually placed them this pose.
         // The right page's grid rect — pure `DuoLayout`, drawn
         // directly like `occlusion`/`division` above. Its date line
         // and the grid's own tiles still report through
@@ -2116,22 +2139,6 @@ struct FeedView: View {
             return CGRect(x: 0, y: 0, width: duoLayout.barWidth, height: containerSize.height)
         case .trailing:
             return CGRect(x: containerSize.width - duoLayout.barWidth, y: 0, width: duoLayout.barWidth, height: containerSize.height)
-        }
-    }
-
-    /// `zigzagCenters`'/`laptopZigzagRow`'s three points, each drawn
-    /// as a small `Rail.hit`-sized box named `"\(prefix).mute"` etc —
-    /// the same order `chromeColumn`/`laptopDeckControls` already
-    /// position Mute, Filter, Bin in.
-    @ViewBuilder
-    private func duoGuideZigzag(_ centers: [CGPoint], prefix: String) -> some View {
-        if centers.count == 3 {
-            let names = ["mute", "filter", "bin"]
-            ForEach(0..<3, id: \.self) { index in
-                let rect = CGRect(x: centers[index].x - Rail.hit / 2, y: centers[index].y - Rail.hit / 2,
-                                   width: Rail.hit, height: Rail.hit)
-                duoGuideRect(rect, color: .teal, label: "\(prefix).\(names[index]) \(duoGuideFormat(rect))")
-            }
         }
     }
 
