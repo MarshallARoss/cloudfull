@@ -1251,8 +1251,25 @@ struct PlayerPageView: View {
     /// problem shows on a larger phone, which is why this needs a rule
     /// rather than a constant. The same condition can also occur on
     /// certain folding-phone screen sizes.
+    ///
+    /// Owner-reported bug (Opus wireframe compare, pose 5): the ring
+    /// overlapped the date/caption there. Root cause:
+    /// `StageGeometry.captionTopFromBottom` alone assumes the REGULAR,
+    /// un-lifted caption position (`FeedPageContent.captionZone`'s own
+    /// `bottomPadding: 20`); it never accounted for that same
+    /// function's `liftsForScrubber` case — `20 + 28` whenever the
+    /// band falls under `ScrubberView.minimumSeamBand` (50), to clear
+    /// the on-video scrubber hairline — which pose 5 (usually
+    /// height-bound, so usually a small band) hits far more often than
+    /// the phones this constant was originally tuned against. `extraLift`
+    /// mirrors `liftsForScrubber`'s own gate exactly, 1:1, rather than
+    /// a second, independent guess at when it applies: pose 1V
+    /// (`.closed`) is excluded the same way `captionZone` excludes it
+    /// (that pose's own caption never lifts, regardless of band), so
+    /// this is a no-op there, unchanged from before.
     private func loaderLift(bottomBand: CGFloat) -> CGFloat {
-        max(Rail.seamClearance, StageGeometry.captionTopFromBottom - bottomBand + 8)
+        let extraLift: CGFloat = (duoLayout.pose != .regularPhone && duoLayout.pose != .closed && bottomBand < 50) ? 28 : 0
+        return max(Rail.seamClearance, StageGeometry.captionTopFromBottom - bottomBand + 8 + extraLift)
     }
 
     /// Everything that lives inside the fixed 9:16 stage: the video layer,
