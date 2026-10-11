@@ -788,7 +788,19 @@ struct PlayerPageView: View {
                                     // wide video alike, regardless of how
                                     // much real black band this frame
                                     // happens to leave below the stage.
-                                    bandHeight: (duoLayout.pose == .openWide || duoLayout.pose == .book)
+                                    // Pose 1V (`.closed`) joins them
+                                    // (owner re-adapt, pose pass): on
+                                    // this pose's own measured geometry
+                                    // `bottomSpace` already computes to
+                                    // 0 (the stage is already
+                                    // height-bound, full container
+                                    // height), so this is a no-op there
+                                    // today — explicit rather than
+                                    // relying on that coincidence, so a
+                                    // differently-proportioned closed
+                                    // window still lands the line on
+                                    // the video's own edge.
+                                    bandHeight: (duoLayout.pose == .openWide || duoLayout.pose == .book || duoLayout.pose == .closed)
                                         ? 0 : bottomSpace,
                                     isActive: isActive,
                                     reduceMotion: reduceMotion,

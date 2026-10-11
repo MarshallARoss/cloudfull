@@ -264,16 +264,26 @@ struct FeedView: View {
     /// a point, else the ordinary bottom-trailing anchor") is already
     /// pose-agnostic; only the point differs, so this branches first
     /// rather than growing a second parameter on `ChinNavigation`.
+    ///
+    /// Owner re-adapt (pose pass): pose 1V (`.closed`) joins pose 5
+    /// here too — "the rail (and the chin, and anything else in the
+    /// column) [should align] to the ring's centre x." `x` now comes
+    /// from `DuoLayout.ringCenteredColumnX`, not the column rect's own
+    /// naive `midX` — see that function's own comment for why, and
+    /// `actionRailColumn`'s identical switch for the rail itself.
+    /// Deliberately still scoped to `.openTall`/`.closed`, not every
+    /// closed-bar pose: pose 3/4/4W's own chin is untouched this
+    /// round, unverified against this change.
     private func railAlignedChinCenter(duoLayout: DuoLayout, safeAreaTop: CGFloat, safeAreaBottom: CGFloat, containerSize: CGSize) -> CGPoint? {
         if duoLayout.pose == .laptop {
             return duoLayout.laptopRailRow(containerSize: containerSize, safeAreaBottom: safeAreaBottom)?.chinCenter
         }
-        guard !duoLayout.isClosedBar,
-              let columnRect = duoLayout.railColumnRect(containerSize: containerSize, safeAreaTop: safeAreaTop),
+        guard duoLayout.pose == .openTall || duoLayout.pose == .closed,
+              let centerX = duoLayout.ringCenteredColumnX(containerSize: containerSize, safeAreaTop: safeAreaTop),
               let extent = duoLayout.railVerticalExtent(containerSize: containerSize, safeAreaTop: safeAreaTop)
         else { return nil }
         let centerY = extent.bottom + Rail.spacing + Rail.hit / 2
-        return CGPoint(x: columnRect.midX, y: centerY)
+        return CGPoint(x: centerX, y: centerY)
     }
 
     /// Step 7's own anchor (`design/duo/duo_build_spec.md` §3c): the
@@ -1129,7 +1139,15 @@ struct FeedView: View {
             // Build 6: pose 5 (`.openTall`) moves the same three
             // controls into one row, y-centred on `DuoLayout
             // .statusBlock` — see `pose5TopRow`'s own comment.
-            let usesPose5TopRow = duoLayout.pose == .openTall
+            //
+            // Owner re-adapt (pose pass, 1V): "Mute/Filter/Bin at the
+            // very top ... like pose 5's top row now does" — pose 1V
+            // (`.closed`) reuses this exact mechanism now too, rather
+            // than a parallel one. The name stays `pose5TopRow`
+            // (avoiding a sprawling rename across this file); see that
+            // function's own comment for why its row-building logic
+            // already generalizes to both poses untouched.
+            let usesPose5TopRow = duoLayout.pose == .openTall || duoLayout.pose == .closed
             // Build 8b: pose 6 (laptop) mounts its own shared bottom
             // deck here — the Mute/Filter/Bin zigzag row and
             // Previous/Next are the two pieces of §2.6 genuinely
@@ -1196,9 +1214,11 @@ struct FeedView: View {
         // Filter, and Bin move into the bottom deck's own zigzag row
         // (`laptopDeckControls`); nothing interactive belongs above the
         // fold — the build-list's own check for this step, "Duo 6:
-        // nothing interactive above the fold."
+        // nothing interactive above the fold." Pose 1V (`.closed`)
+        // joins them in the owner's own pose-pass re-adapt — see
+        // `usesPose5TopRow`'s own comment just above.
         let suppressDefaultRow = duoLayout.pose == .openWide || duoLayout.pose == .book
-            || duoLayout.pose == .openTall || duoLayout.pose == .laptop
+            || duoLayout.pose == .openTall || duoLayout.pose == .laptop || duoLayout.pose == .closed
         // Four independent glass pills. Do not wrap these in a
         // `GlassEffectContainer`. XCUITest then resolves the far-right
         // `bin_open` button's frame relative to the container. Its
@@ -2381,7 +2401,15 @@ private struct FeedPageContent: View {
             // caption lifted clear of it — see that function's own
             // comment.
             let realStageHeight = duoLayout.stageRect(containerSize: proxy.size, safeAreaTop: safeAreaTop).height
-            let realBottomBand = StageGeometry.bottomBand(
+            // Owner re-adapt (pose pass, 1V): matches
+            // `PlayerPageView`'s identical `.closed` term on its own
+            // `ScrubberView.bandHeight` — the scrubber line is forced
+            // onto the video's own bottom edge for this pose now, so
+            // `captionZone`'s own `liftsForScrubber` check (below)
+            // must see the same `0`, not the generically-computed real
+            // band, to agree about whether the caption needs lifting
+            // clear of it.
+            let realBottomBand = duoLayout.pose == .closed ? 0 : StageGeometry.bottomBand(
                 safeAreaTop: safeAreaTop, stageHeight: realStageHeight, containerHeight: proxy.size.height
             )
             // `nil` on a regular iPhone, and on an open Duo too narrow
@@ -2851,13 +2879,14 @@ private struct FeedPageContent: View {
     /// buttons, the same `Rail.spacing`, placed inside the rail
     /// column instead of over the stage.
     ///
-    /// X-centred on the column — on the closed bar, the same centre
-    /// line the system's own time + connectivity ring uses; on the
-    /// open-tall column, `DuoLayout.railColumn`'s own open-branch
-    /// centres the column on the active `.occlusion` region's real
-    /// `midX` instead (F6), reading the ring's actual position rather
-    /// than a screenshot-measured constant, since no SDK API reports
-    /// it directly.
+    /// X-centred on `DuoLayout.ringCenteredColumnX` — on the closed
+    /// bar, the ring's own real `.occlusion` midX (owner re-adapt,
+    /// pose pass: the bar rect's own naive midpoint sat measurably off
+    /// the real ring — see that function's own comment for the
+    /// measured numbers); on the open-tall column,
+    /// `DuoLayout.railColumn`'s own open-branch already centres the
+    /// column on the same `.occlusion` midX by construction (F6), so
+    /// this reads the same value there too, just by a different route.
     ///
     /// Anchored top or bottom per `DuoLayout.railVerticalExtent`, not
     /// decided here: bar ON anchors from the bottom (the ring sits
@@ -2879,6 +2908,7 @@ private struct FeedPageContent: View {
     private func actionRailColumn(rect: CGRect, containerSize: CGSize) -> some View {
         let extent = duoLayout.railVerticalExtent(containerSize: containerSize, safeAreaTop: safeAreaTop)
         let top = extent?.top ?? 0
+        let centerX = duoLayout.ringCenteredColumnX(containerSize: containerSize, safeAreaTop: safeAreaTop) ?? rect.midX
         return VStack(spacing: Rail.spacing) {
             if isActive, let calloutMessage = shareCoordinator.calloutMessage {
                 railCallout(calloutMessage)
@@ -2892,7 +2922,7 @@ private struct FeedPageContent: View {
         .animation(.easeInOut(duration: 0.2), value: shareCoordinator.calloutMessage)
         .padding(.top, top)
         .frame(width: rect.width, height: rect.height, alignment: .top)
-        .position(x: rect.midX, y: rect.midY)
+        .position(x: centerX, y: rect.midY)
     }
 
     /// Adding to an album is also possible through the system share sheet

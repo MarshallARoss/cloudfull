@@ -696,6 +696,36 @@ struct DuoLayout {
         }
     }
 
+    /// The rail/chin column's own horizontal CENTRE this frame, for
+    /// positioning content inside it — `nil` when no column applies.
+    ///
+    /// Owner correction (pose pass, 1V): a screenshot crop showed the
+    /// system's own time + connectivity ring sitting measurably LEFT
+    /// of `railColumnRect`'s own `midX` — the bar's own safe-area
+    /// width is not perfectly centred on the ring it reserves room
+    /// for. Confirmed on the sim (`-cloudfull-log-rotation`, pose 1V,
+    /// 466×678 window): `occlusion` reads `399,29,37,37` (`midX`
+    /// 417.5pt) while the bar rect's own `midX` is 424pt — a 6.5pt
+    /// gap, the same direction and the same rough size the owner's
+    /// own crop showed. So for the CLOSED-bar case this reads the
+    /// active `.occlusion` region's own `midX` directly instead of the
+    /// bar rect's — the same authoritative signal `railColumn`'s OPEN
+    /// branch already centres its own computed column on (confirmed:
+    /// its own `railColumnRect.midX` already equals `occlusion.midX`
+    /// exactly, by construction, so this just returns that rect's own
+    /// `midX` unchanged there). Falls back to the bar rect's own
+    /// `midX` when there is no occlusion to read, or it reads well
+    /// outside the bar's own bounds (a stale/cross-display frame) —
+    /// never an invented offset.
+    func ringCenteredColumnX(containerSize: CGSize, safeAreaTop: CGFloat) -> CGFloat? {
+        guard let columnRect = railColumnRect(containerSize: containerSize, safeAreaTop: safeAreaTop) else { return nil }
+        guard isClosedBar else { return columnRect.midX }
+        if let occlusion, occlusion.midX >= columnRect.minX - 8, occlusion.midX <= columnRect.maxX + 8 {
+            return occlusion.midX
+        }
+        return columnRect.midX
+    }
+
     /// The rail's own top and bottom edge, in the page's own
     /// coordinate space (0 at the top), for whichever anchor this
     /// frame's column uses — or `nil` when no column applies.
@@ -837,7 +867,9 @@ struct DuoLayout {
     /// Pose 5's own top-chrome anchor (build 6): "the active
     /// `.occlusion` region whose `minX > W/2`" — the spike that
     /// measured this proved it is the time + connectivity ring block
-    /// on pose 5. Re-adapted (`design/duo/duo_audit_apple_checklist.md`
+    /// on pose 5. Pose 1V (`.closed`) reuses this same anchor now too
+    /// (owner re-adapt, pose pass) — `pose5TopRow` generalizes to both
+    /// poses unchanged; see that function's own comment. Re-adapted (`design/duo/duo_audit_apple_checklist.md`
     /// §5): the old fallback was a fixed, screenshot-measured 134×82
     /// box at the window's own top-trailing corner — a device size
     /// (F6's own category of finding, even though this particular
