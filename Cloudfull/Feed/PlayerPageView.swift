@@ -350,8 +350,21 @@ struct PlayerPageView: View {
     /// or aspect-fit when open. It stays in the normal 9:16-fit layout,
     /// which `duoLayout.stageRect`'s default aspect ratio already
     /// produces correctly — see that function's own comment.
+    ///
+    /// Owner re-adapt (Opus round-3 compare, pose 5): `.openTall`
+    /// joins `.openWide`/`.book` here too — a wide video there used to
+    /// stay in the fixed 9:16 box regardless of its own real shape,
+    /// which pillarboxed it well short of that box's own bottom edge;
+    /// the scrubber, pinned to the BOX's bottom (not the video's own
+    /// visible one), then read "~170pt below the video." `DuoLayout
+    /// .stageRect`'s own generic fallback path (`availableRect` +
+    /// `fitRect`) already FITs whatever `aspectRatio` it is given for
+    /// `.openTall` — the same path that pose's own TALL-video case
+    /// already uses at the 9:16 default — so this needs no new branch
+    /// there, only this property passing the video's own real shape
+    /// through on pose 5 too, same as pose 3 already does.
     private var useVideoAspect: Bool {
-        videoIsLandscape && (duoLayout.pose == .openWide || duoLayout.pose == .book)
+        videoIsLandscape && (duoLayout.pose == .openWide || duoLayout.pose == .book || duoLayout.pose == .openTall)
     }
 
     /// True at pose 3 (any video shape) and pose 4W (book with a
