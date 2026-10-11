@@ -322,7 +322,16 @@ struct FeedView: View {
               let columnRect = duoLayout.railColumnRect(containerSize: containerSize, safeAreaTop: safeAreaTop)
         else { return nil }
         let top = duoLayout.railBottom(safeAreaTop: safeAreaTop, containerSize: containerSize) + 40
-        return (top, columnRect.midX)
+        // Owner re-adapt (Opus wireframe compare, pose 5): was
+        // `columnRect.midX` directly — the same construction this
+        // column's own rail centring trusted, and broke under, before
+        // `ringCenteredColumnX` started reading `occlusion` directly
+        // for the bar-off case too. The tabs sit directly under the
+        // rail in this column; the two must share one x source or a
+        // fixed clamp case could pull them apart from each other, not
+        // just from the ring.
+        let x = duoLayout.ringCenteredColumnX(containerSize: containerSize, safeAreaTop: safeAreaTop) ?? columnRect.midX
+        return (top, x)
     }
 
     /// `DuoLayout.current`, behind the `#available` check its own

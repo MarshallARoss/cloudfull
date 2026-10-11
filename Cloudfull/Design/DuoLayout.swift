@@ -707,19 +707,28 @@ struct DuoLayout {
     /// 466×678 window): `occlusion` reads `399,29,37,37` (`midX`
     /// 417.5pt) while the bar rect's own `midX` is 424pt — a 6.5pt
     /// gap, the same direction and the same rough size the owner's
-    /// own crop showed. So for the CLOSED-bar case this reads the
-    /// active `.occlusion` region's own `midX` directly instead of the
-    /// bar rect's — the same authoritative signal `railColumn`'s OPEN
-    /// branch already centres its own computed column on (confirmed:
-    /// its own `railColumnRect.midX` already equals `occlusion.midX`
-    /// exactly, by construction, so this just returns that rect's own
-    /// `midX` unchanged there). Falls back to the bar rect's own
-    /// `midX` when there is no occlusion to read, or it reads well
-    /// outside the bar's own bounds (a stale/cross-display frame) —
-    /// never an invented offset.
+    /// own crop showed. So this reads the active `.occlusion`
+    /// region's own `midX` directly instead of the column rect's.
+    /// Falls back to the column rect's own `midX` when there is no
+    /// occlusion to read, or it reads well outside the column's own
+    /// bounds (a stale/cross-display frame) — never an invented
+    /// offset.
+    ///
+    /// Owner re-adapt (Opus wireframe compare, pose 5): this used to
+    /// trust `railColumn`'s own open branch to have already centred
+    /// its computed column on `occlusion.midX` by construction, and
+    /// return the bar-off case's `columnRect.midX` unchecked. That
+    /// construction holds only while `railColumn`'s own `max(Rail
+    /// .hit, …)` clamp does not bind; once the ring sits close enough
+    /// to the trailing edge that the raw computed width would fall
+    /// under `Rail.hit`, the clamp takes over and the column's own
+    /// centre stops tracking `occlusion.midX` at all — "rail x ≈ 8pt
+    /// left of the ring's own centre x" on the sim, the wireframe's
+    /// own "rail x = ring x" broken by exactly that clamp. Bar-off
+    /// now takes the same direct, tolerance-checked `occlusion` read
+    /// bar-on already did, rather than trusting construction.
     func ringCenteredColumnX(containerSize: CGSize, safeAreaTop: CGFloat) -> CGFloat? {
         guard let columnRect = railColumnRect(containerSize: containerSize, safeAreaTop: safeAreaTop) else { return nil }
-        guard isClosedBar else { return columnRect.midX }
         if let occlusion, occlusion.midX >= columnRect.minX - 8, occlusion.midX <= columnRect.maxX + 8 {
             return occlusion.midX
         }
