@@ -538,11 +538,18 @@ struct PlayerPageView: View {
             safeAreaTop: safeAreaTop,
             aspectRatio: (useVideoAspect || duoLayout.pose == .openTall) ? videoAspectRatio : 9.0 / 16.0
         )
+        // Owner re-adapt (ring-alignment bug, 3/4/4W): `ringCenteredColumnX`
+        // is what the rail/chin/guide all actually land on — printing
+        // it next to `occ-` makes the fix itself checkable from this
+        // one line (does `ringX-` move to the trailing-inset number
+        // once `occ-`'s own width crosses `wideOcclusionThreshold`)
+        // instead of a screenshot pixel-crop every time.
+        let ringX = duoLayout.ringCenteredColumnX(containerSize: windowSize, safeAreaTop: safeAreaTop)
         let message = "rotation_\(windowOrientationProbeName)_hSC-\(hSC)_vSC-\(vSC)_\(Int(windowSize.width))x\(Int(windowSize.height))"
             + "_pose-\(duoLayout.pose.rawValue)_div-\(rectProbe(duoLayout.division))_occ-\(rectProbe(duoLayout.occlusion))_\(hingeProbe)"
             + "_rawdiv-\(rectProbe(duoLayout.debugRawDivision))_insets-\(Int(insets.top)),\(Int(insets.leading)),\(Int(insets.bottom)),\(Int(insets.trailing))"
             + "_allowsLandscape-\(RotationPolicy.shared.allowsLandscape)_aspect-\(String(format: "%.3f", videoAspectRatio))_wide-\(videoIsLandscape)"
-            + "_stage-\(rectProbe(stage))"
+            + "_stage-\(rectProbe(stage))_ringX-\(ringX.map { String(format: "%.1f", $0) } ?? "nil")"
         Self.rotationLog.notice("\(message, privacy: .public)")
         DiagnosticsLog.shared.log("Rotation", message)
     }

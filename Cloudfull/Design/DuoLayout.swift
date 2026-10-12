@@ -910,15 +910,39 @@ struct DuoLayout {
     /// `occlusion`'s own trailing edge, not at its `midX` plus a
     /// small nudge. 1V is unchanged: its own `occlusion` already
     /// reads as the ring alone, with nothing to add.
+    ///
+    /// Owner re-adapt (ring-alignment bug, 3/4/4W): "rail x ≈ 909pt,
+    /// ring's own real centre ≈ 903pt" — this `pose == .openTall` gate
+    /// was the bug. 3/4/4W's own bar-on LANDSCAPE column reports
+    /// `occlusion` as the SAME kind of wide, multi-element box pose
+    /// 5's own region already is (confirmed this session,
+    /// `-cloudfull-log-rotation`'s own `occ-` field, pose 4/book:
+    /// `867,0,84,212`, 84pt wide — nothing like 1V's own tight
+    /// 37×37 camera crop) — not the camera-hole-sized box this
+    /// function used to assume every bar-on pose but 5 would have. So
+    /// the midpoint-vs-trailing-inset choice below now reads
+    /// `occlusion.width` itself, not `pose`: `909 (occlusion.midX)`
+    /// vs `867+84−47.7 = 903.3pt` for that exact reading — within
+    /// 0.3pt of the owner's own 903.0pt measurement, the SAME
+    /// `openTallRingInsetFromTrailingEdge` this file already trusted
+    /// for pose 5, now shared rather than duplicated. First tried
+    /// reading TWO separate `.occlusion` regions (one tight, one
+    /// wide) and picking the tight one, on the owner's own
+    /// hypothesis that `reservedRegions` reports both at once on this
+    /// pose — reverted: confirmed via the same log field that only
+    /// ONE region is ever active here, so there was never a second,
+    /// correct one to pick.
+    static let wideOcclusionThreshold: CGFloat = 60
+
     func ringCenteredColumnX(containerSize: CGSize, safeAreaTop: CGFloat) -> CGFloat? {
         guard let columnRect = railColumnRect(containerSize: containerSize, safeAreaTop: safeAreaTop) else { return nil }
-        if let occlusion, occlusion.midX >= columnRect.minX - 8, occlusion.midX <= columnRect.maxX + 8 {
-            if pose == .openTall {
-                return occlusion.maxX - Self.openTallRingInsetFromTrailingEdge
-            }
-            return occlusion.midX
+        guard let occlusion, occlusion.midX >= columnRect.minX - 8, occlusion.midX <= columnRect.maxX + 8 else {
+            return columnRect.midX
         }
-        return columnRect.midX
+        if occlusion.width >= Self.wideOcclusionThreshold {
+            return occlusion.maxX - Self.openTallRingInsetFromTrailingEdge
+        }
+        return occlusion.midX
     }
 
     /// The rail's own top and bottom edge, in the page's own
