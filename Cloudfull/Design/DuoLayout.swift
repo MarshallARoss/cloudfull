@@ -389,20 +389,25 @@ struct DuoLayout {
     /// `stageRect`'s own `.laptop` branch FITs into. `.book` — the left
     /// page, `[0, division.minX] × [0, H]`, the same box `stageRect`'s
     /// own `.book` tall-video branch FITs into; the right page (the
-    /// grid) is deliberately left out of this rect. Every other Duo
-    /// pose (1V, 3, 5) — `availableRect`, the structural box every one
-    /// of THEIR OWN stage branches FITs into before an aspect ratio
-    /// narrows it further (pose 3's own wide-video box additionally
-    /// excludes the chrome column and the caption band — `availableRect`
-    /// alone over-states that one pose's own area slightly; flagged
-    /// here rather than adding a second, pose-3-only box, since the
-    /// owner's own ask was for the fold-flush check specifically).
-    /// `.tent` falls to the same `availableRect` default — no rail
-    /// column there either, so it reduces to the full container.
-    /// `.regularPhone` returns `nil` — this tool is for Duo pose work
-    /// specifically, and a regular iPhone's own stage is never in
-    /// question here.
-    func debugStageArea(containerSize: CGSize, safeAreaTop: CGFloat) -> CGRect? {
+    /// grid) is deliberately left out of this rect. `.openWide` with
+    /// `isWideVideo` — `openWideWideVideoBox`, the SAME (tighter) box
+    /// `openWideWideVideoRect` FITs into for a wide video there, not
+    /// the wider `availableRect` fallback (owner: "tighten the debug
+    /// red area in pose 3 to the real stage box"). Every other case
+    /// (1V, 5, pose 3's own TALL-video case, `.tent`) — `availableRect`,
+    /// the structural box their own stage branches FIT into before an
+    /// aspect ratio narrows it further. `.regularPhone` returns `nil`
+    /// — this tool is for Duo pose work specifically, and a regular
+    /// iPhone's own stage is never in question here.
+    ///
+    /// `isWideVideo` only ever changes `.openWide`'s own answer — every
+    /// other case ignores it. Defaults to `false`: `FeedView
+    /// .pagerBackground`'s own shared, PAGER-level background has no
+    /// per-page video to ask about (its own doc comment), so it always
+    /// reads the wider, pose-3-tall-video-shaped fallback; only
+    /// `PlayerPageView`'s own PER-PAGE background, which does know
+    /// `useVideoAspect`, can pass the real answer.
+    func debugStageArea(containerSize: CGSize, safeAreaTop: CGFloat, isWideVideo: Bool = false) -> CGRect? {
         switch pose {
         case .laptop:
             guard let division else { return nil }
@@ -410,6 +415,8 @@ struct DuoLayout {
         case .book:
             guard let division else { return nil }
             return CGRect(x: 0, y: 0, width: max(0, division.minX), height: containerSize.height)
+        case .openWide where isWideVideo:
+            return openWideWideVideoBox(containerSize: containerSize, safeAreaTop: safeAreaTop)
         case .regularPhone:
             return nil
         default:
@@ -644,17 +651,27 @@ struct DuoLayout {
         )
     }
 
-    /// Pose 3's wide-video stage box (build 3): "FIT video aspect in
-    /// `[16, W − bar − 80 − 16] × [0, H − captionBand]`, centred" —
-    /// the wireframe's own words at the time for excluding BOTH the
-    /// rail/bar column and the chrome column's own OLD 80pt line
-    /// (`chromeColumnStageExclusion` — round-4 review, BLOCKER: round
-    /// 4 moved the Mute/Filter/Bin buttons closer to the rail, but
-    /// the wireframe keeps the stage at this original edge; see that
-    /// function's own comment), `pagePad` clear on each side, with
-    /// `captionBand` reserved at the bottom for the caption now
-    /// sitting under the video instead of on it (see the per-pose
-    /// table's pose-3-wide-video row).
+    /// Pose 3's wide-video stage box. Originally "FIT video aspect in
+    /// `[16, W − bar − 80 − 16] × [0, H − captionBand]`, centred" — the
+    /// wireframe's own words for excluding BOTH the rail/bar column
+    /// and the chrome column's own OLD 80pt line, `pagePad` clear on
+    /// each side.
+    ///
+    /// Owner re-adapt: "touch the left bezel," the same ask pose 5's
+    /// own wide video already got — `x` is now `0`, not `pagePad`, and
+    /// the right edge is `chromeColumnRect`'s own real VISUAL leading
+    /// edge minus `minChromeRailClearance`, not the OLD fixed
+    /// `chromeColumnStageExclusion` line (owner's own measurement: a
+    /// 16pt left margin plus ~50pt of empty space before the group's
+    /// own real edge, at `x 820`, that this read past). Mirrors pose
+    /// 5's own `stageRect` fix exactly: read the group's real pixels,
+    /// not the wider structural column it sits inside. `chromeColumnRect`
+    /// covers BOTH edges `railColumn` can report (`.trailing`, pose
+    /// 3/4/4W's own always-measured case; `.leading`, never measured —
+    /// see that function's own comment), so no separate edge switch is
+    /// needed here any more either. Height/caption-band rule
+    /// unchanged — `fitRect` still centres vertically in
+    /// `[0, H − captionBand]`.
     ///
     /// Pose 3's TALL-video case (the default `aspectRatio`, handled by
     /// `stageRect`'s own fallthrough to `availableRect`) needs none of
@@ -667,35 +684,48 @@ struct DuoLayout {
     /// proportions, `avail.width / (9/16)` is always well over
     /// `avail.height`, so height is always the binding side there.
     private func openWideWideVideoRect(containerSize: CGSize, safeAreaTop: CGFloat, aspectRatio: CGFloat) -> CGRect {
-        let column = railColumn(containerSize: containerSize, safeAreaTop: safeAreaTop)
-        let barWidth = column?.width ?? 0
-        let edge = column?.edge ?? .trailing
-        let pad = Self.pagePad
-        let excluded = barWidth + chromeColumnStageExclusion(containerSize: containerSize, safeAreaTop: safeAreaTop)
-        let availableWidth = max(0, containerSize.width - excluded - pad * 2)
-        let minX: CGFloat
-        switch edge {
-        case .trailing: minX = pad
-        case .leading: minX = excluded + pad
-        }
-        let box = CGRect(x: minX, y: 0, width: availableWidth,
-                          height: max(0, containerSize.height - Self.captionBand))
-        return fitRect(in: box, aspectRatio: aspectRatio)
+        fitRect(in: openWideWideVideoBox(containerSize: containerSize, safeAreaTop: safeAreaTop), aspectRatio: aspectRatio)
     }
 
-    /// Pose 4W's stage box (build 3): "width `division.minX − 32`, x
-    /// = 16, centred on H" — a WIDTH-first box, not a FIT-into-box
-    /// one like every other case in this file: the left page's own
-    /// width is fixed first (`division.minX`, `pagePad` clear on each
-    /// side of that span), then the height follows from `aspectRatio`
-    /// alone, centred vertically in the full window height. This
-    /// differs from `fitRect` deliberately — a FIT box here could
-    /// bind on height first for a near-square `division.minX`, which
-    /// would narrow the video below the wireframe's own fixed width.
+    /// `openWideWideVideoRect`'s own box, BEFORE `fitRect` narrows it
+    /// to the video's own real aspect — pulled out so `debugStageArea`
+    /// can draw this SAME box as its own red area for a wide video in
+    /// this pose, instead of the wider, un-tightened `availableRect`
+    /// fallback every other pose still uses (owner: "tighten the debug
+    /// red area in pose 3 to the real stage box").
+    private func openWideWideVideoBox(containerSize: CGSize, safeAreaTop: CGFloat) -> CGRect {
+        let column = railColumn(containerSize: containerSize, safeAreaTop: safeAreaTop)
+        let barWidth = column?.width ?? 0
+        let excluded = barWidth + chromeColumnStageExclusion(containerSize: containerSize, safeAreaTop: safeAreaTop)
+        // Defensive fallback only — `chromeColumnRect` is non-nil
+        // whenever `railColumn` is, and pose 3 always has one; this
+        // reduces to the OLD fixed-line edge if that ever changes.
+        let fallbackRightEdge = max(0, containerSize.width - excluded - Self.pagePad)
+        let rightEdge = chromeColumnRect(containerSize: containerSize, safeAreaTop: safeAreaTop)
+            .map { $0.minX - Self.minChromeRailClearance } ?? fallbackRightEdge
+        return CGRect(x: 0, y: 0, width: max(0, rightEdge),
+                       height: max(0, containerSize.height - Self.captionBand))
+    }
+
+    /// Pose 4W's stage box. Originally "width `division.minX − 32`, x
+    /// = 16, centred on H" — `pagePad` clear on each side of the left
+    /// page's own span.
+    ///
+    /// Owner re-adapt: the same "touch the left bezel" idea pose 3 and
+    /// 5 both already got, applied within this page's own bounds —
+    /// "0 → fold minX": `x` is `0`, `width` is `division.minX` itself,
+    /// no `pagePad` margin on either side any more. Still a WIDTH-first
+    /// box, not a FIT-into-box one like every other case in this file:
+    /// the left page's own width is fixed first, then the height
+    /// follows from `aspectRatio` alone, centred vertically in the
+    /// full window height. This differs from `fitRect` deliberately —
+    /// a FIT box here could bind on height first for a near-square
+    /// `division.minX`, which would narrow the video below the page's
+    /// own full width.
     private func bookWideVideoRect(division: CGRect, containerSize: CGSize, aspectRatio: CGFloat) -> CGRect {
-        let width = max(0, division.minX - Self.pagePad * 2)
+        let width = max(0, division.minX)
         let height = width / aspectRatio
-        return CGRect(x: Self.pagePad, y: (containerSize.height - height) / 2, width: width, height: height)
+        return CGRect(x: 0, y: (containerSize.height - height) / 2, width: width, height: height)
     }
 
     // MARK: - Pose-table constants (build 3)
@@ -1907,11 +1937,16 @@ struct DuoGuideColouredBackground: View {
     let duoLayout: DuoLayout
     let safeAreaTop: CGFloat
     let containerSize: CGSize
+    /// See `DuoLayout.debugStageArea`'s own `isWideVideo` doc —
+    /// `FeedView.pagerBackground`'s own pager-level call leaves this at
+    /// its default `false`; `PlayerPageView`'s own per-page call passes
+    /// its real `useVideoAspect`.
+    var isWideVideo: Bool = false
 
     var body: some View {
         ZStack {
             Color.blue.opacity(0.55)
-            if let stageArea = duoLayout.debugStageArea(containerSize: containerSize, safeAreaTop: safeAreaTop) {
+            if let stageArea = duoLayout.debugStageArea(containerSize: containerSize, safeAreaTop: safeAreaTop, isWideVideo: isWideVideo) {
                 Color.red.opacity(0.55)
                     .frame(width: stageArea.width, height: stageArea.height)
                     .position(x: stageArea.midX, y: stageArea.midY)

@@ -759,7 +759,7 @@ struct PlayerPageView: View {
                 // defined twice.
                 #if DEBUG
                 if DuoGuides.isOn {
-                    DuoGuideColouredBackground(duoLayout: duoLayout, safeAreaTop: safeAreaTop, containerSize: proxy.size)
+                    DuoGuideColouredBackground(duoLayout: duoLayout, safeAreaTop: safeAreaTop, containerSize: proxy.size, isWideVideo: useVideoAspect)
                 } else {
                     Color.black
                 }
@@ -1176,6 +1176,19 @@ struct PlayerPageView: View {
         // `-cloudfull-log-rotation` show occlusion growing/shrinking
         // around a Live Activity starting or ending.
         .onChange(of: duoLayout.occlusion) { _, _ in
+            logRotationPose()
+        }
+        // Owner re-adapt (pose 3, wide-video right-align): a page
+        // swipe to a different-shaped video changes `useVideoAspect`
+        // (and the `stageRect` it feeds) with no pose/hinge/occlusion
+        // change alongside it either — confirmed live this round, a
+        // "the log says stage y 72, the guides show y 122" report
+        // that turned out to be the log printing a STALE reading from
+        // before the swipe, not a real disagreement: the SAME line,
+        // re-triggered, matched the guide exactly. This is the fix —
+        // the log now stays live across a page swipe too, not just a
+        // pose/hinge/occlusion change.
+        .onChange(of: useVideoAspect) { _, _ in
             logRotationPose()
         }
         .onChange(of: isMuted) { _, newValue in
