@@ -375,6 +375,48 @@ struct DuoLayout {
         }
     }
 
+    /// DEBUG-guides only (`-cloudfull-duo-guides`): this frame's own
+    /// STRUCTURAL stage area — the box a video is FIT into, not the
+    /// aspect-dependent FITted rect itself (that always exactly equals
+    /// the video's own rect, by definition, and could never show a
+    /// gap). `FeedView`'s own `pagerBackground` and `PlayerPageView`'s
+    /// per-page background both colour this rect differently from
+    /// their own surroundings, so a video's real, opaque pixels covering
+    /// less of it than expected shows through as a gap — owner: "I
+    /// can't tell if the laptop video sits flush on the fold."
+    ///
+    /// `.laptop` — `[0, W] × [0, division.minY]`, the SAME box
+    /// `stageRect`'s own `.laptop` branch FITs into. `.book` — the left
+    /// page, `[0, division.minX] × [0, H]`, the same box `stageRect`'s
+    /// own `.book` tall-video branch FITs into; the right page (the
+    /// grid) is deliberately left out of this rect. Every other Duo
+    /// pose (1V, 3, 5) — `availableRect`, the structural box every one
+    /// of THEIR OWN stage branches FITs into before an aspect ratio
+    /// narrows it further (pose 3's own wide-video box additionally
+    /// excludes the chrome column and the caption band — `availableRect`
+    /// alone over-states that one pose's own area slightly; flagged
+    /// here rather than adding a second, pose-3-only box, since the
+    /// owner's own ask was for the fold-flush check specifically).
+    /// `.tent` falls to the same `availableRect` default — no rail
+    /// column there either, so it reduces to the full container.
+    /// `.regularPhone` returns `nil` — this tool is for Duo pose work
+    /// specifically, and a regular iPhone's own stage is never in
+    /// question here.
+    func debugStageArea(containerSize: CGSize, safeAreaTop: CGFloat) -> CGRect? {
+        switch pose {
+        case .laptop:
+            guard let division else { return nil }
+            return CGRect(x: 0, y: 0, width: containerSize.width, height: division.minY)
+        case .book:
+            guard let division else { return nil }
+            return CGRect(x: 0, y: 0, width: max(0, division.minX), height: containerSize.height)
+        case .regularPhone:
+            return nil
+        default:
+            return availableRect(containerSize: containerSize, safeAreaTop: safeAreaTop)
+        }
+    }
+
     /// The largest `aspectRatio` (width ÷ height) box that fits inside
     /// `availableRect(containerSize:safeAreaTop:)`, centred there.
     /// Defaults to 9:16 (`9.0 / 16.0`), the fixed portrait video stage
@@ -1831,6 +1873,34 @@ struct DuoGuideMarksKey: PreferenceKey {
     static var defaultValue: [DuoGuideMark] = []
     static func reduce(value: inout [DuoGuideMark], nextValue: () -> [DuoGuideMark]) {
         value.append(contentsOf: nextValue())
+    }
+}
+
+/// `-cloudfull-duo-guides` only — see `DuoLayout.debugStageArea`'s own
+/// comment for what red/blue mean and why. `FeedView.pagerBackground`
+/// and `PlayerPageView`'s own per-page background both mount this
+/// (replacing their own plain `Color.black`) so the SAME two colours
+/// show at both layers, one shared definition rather than two that
+/// could drift apart.
+struct DuoGuideColouredBackground: View {
+    let duoLayout: DuoLayout
+    let safeAreaTop: CGFloat
+    let containerSize: CGSize
+
+    var body: some View {
+        ZStack {
+            Color.blue.opacity(0.55)
+            if let stageArea = duoLayout.debugStageArea(containerSize: containerSize, safeAreaTop: safeAreaTop) {
+                Color.red.opacity(0.55)
+                    .frame(width: stageArea.width, height: stageArea.height)
+                    .position(x: stageArea.midX, y: stageArea.midY)
+            }
+            if let division = duoLayout.division {
+                Color(white: 0.4)
+                    .frame(width: division.width, height: division.height)
+                    .position(x: division.midX, y: division.midY)
+            }
+        }
     }
 }
 #endif

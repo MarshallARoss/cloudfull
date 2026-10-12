@@ -432,7 +432,7 @@ struct FeedView: View {
                     hingeDegrees = degrees
                 }
             }
-            content(safeAreaTop: safeAreaTop, fullscreenSafeArea: fullscreenSafeArea, duoLayout: duoLayout)
+            content(safeAreaTop: safeAreaTop, fullscreenSafeArea: fullscreenSafeArea, duoLayout: duoLayout, containerSize: windowSize)
             // The whole global chrome layer (mute, the shrink progress
             // capsule, the counters, the bin) hides while `isFullscreen`
             // (the rotation hack) is on — see `hidesGlobalChrome`'s own
@@ -759,7 +759,7 @@ struct FeedView: View {
     }
 
     @ViewBuilder
-    private func content(safeAreaTop: CGFloat, fullscreenSafeArea: EdgeInsets, duoLayout: DuoLayout) -> some View {
+    private func content(safeAreaTop: CGFloat, fullscreenSafeArea: EdgeInsets, duoLayout: DuoLayout, containerSize: CGSize) -> some View {
         if !viewModel.hasDealtFirstDeck {
             // The first deal waits on a background library enumeration.
             // An empty deck means "no videos" only once the app has
@@ -801,7 +801,7 @@ struct FeedView: View {
                 noMatchesState
             }
         } else {
-            pager(safeAreaTop: safeAreaTop, fullscreenSafeArea: fullscreenSafeArea, duoLayout: duoLayout)
+            pager(safeAreaTop: safeAreaTop, fullscreenSafeArea: fullscreenSafeArea, duoLayout: duoLayout, containerSize: containerSize)
         }
     }
 
@@ -812,7 +812,7 @@ struct FeedView: View {
     /// the same reason: this pager's own `.ignoresSafeArea()` would
     /// otherwise hide the bar column's safe-area inset, or the 1H ring's
     /// own fullscreen insets, from a reader placed any lower.
-    private func pager(safeAreaTop: CGFloat, fullscreenSafeArea: EdgeInsets, duoLayout: DuoLayout) -> some View {
+    private func pager(safeAreaTop: CGFloat, fullscreenSafeArea: EdgeInsets, duoLayout: DuoLayout, containerSize: CGSize) -> some View {
         ScrollViewReader { scrollProxy in
         ScrollView(.vertical) {
             LazyVStack(spacing: 0) {
@@ -1012,7 +1012,7 @@ struct FeedView: View {
         // — the pager's own disable has nothing to do with chrome.
         .scrollDisabled(isScrubbing || isFullscreen)
         .ignoresSafeArea()
-        .background(Color.black)
+        .background(pagerBackground(duoLayout: duoLayout, safeAreaTop: safeAreaTop, containerSize: containerSize))
         // `initial: true` registers the page the deck restores onto, or
         // the first page of a fresh deck, as current immediately. Without
         // it, that first slot's cursor and exhaustion bookkeeping never
@@ -2142,6 +2142,73 @@ struct FeedView: View {
     /// one source of truth instead of two bare launch-argument checks
     /// that could drift.
     private static var showsDuoGuides: Bool { DuoGuides.isOn }
+
+    /// `pager`'s own background — plain black outside
+    /// `-cloudfull-duo-guides`, unchanged. Owner: "I can't tell if the
+    /// laptop video sits flush on the fold." A video is opaque and
+    /// exactly fills whatever rect layout actually gave it — the only
+    /// way to SEE a gap between that rect and where it was supposed to
+    /// reach is to colour the destination differently from its
+    /// surroundings and let the video cover whatever it actually
+    /// reaches: any colour still showing through once it is on screen
+    /// IS the gap.
+    ///
+    /// `blue` is the whole window — "everything else behind controls."
+    /// `red` is this pose's own STRUCTURAL stage area — the box a video
+    /// is FIT into, not the aspect-dependent FITted rect itself (that
+    /// would always exactly equal the video's own rect, by definition,
+    /// and could never show a gap). `.laptop`/`.book` draw their own
+    /// `division` as a third, dim grey band on top of both, so the
+    /// fold's own edges stay visible against whichever colour is
+    /// under them.
+    ///
+    /// Pose by pose: `.laptop` — red is `[0, W] × [0, division.minY]`,
+    /// the SAME box `stageRect`'s own `.laptop` branch FITs into (see
+    /// that branch's own comment for why its bottom is `division.minY`
+    /// itself now, no separate gap) — the owner's own ask, stated
+    /// directly: "the upright half (window top → division.minY) RED,
+    /// the flat half (division.maxY → window bottom) BLUE." `.book`
+    /// (4/4W) — red is the left page, `[0, division.minX] × [0, H]`,
+    /// the same box `stageRect`'s own `.book` tall-video branch FITs
+    /// into; the right page (the grid) stays blue, unmarked, matching
+    /// the owner's own "left page red, right page blue." Every other
+    /// Duo pose (1V, 3, 5) — red is `availableRect`, the structural
+    /// box every one of THEIR OWN stage branches FITs into before an
+    /// aspect ratio narrows it (pose 3's own wide-video box additionally
+    /// excludes the chrome column and the caption band — `availableRect`
+    /// alone over-states that one pose's own red area slightly; flagged
+    /// here rather than adding a second, pose-3-only box, since the
+    /// owner's own ask was for the fold-flush check specifically).
+    /// `.tent` falls to the same `availableRect` default — no rail
+    /// column there either, so it reduces to the full container and red
+    /// sits exactly over blue, harmless, nothing to see either way.
+    /// `.regularPhone` draws no red at all (`nil`) — this tool is for
+    /// Duo pose work specifically, and a regular iPhone's own stage is
+    /// never in question here.
+    /// `stageArea`/`division` come from `DuoLayout.debugStageArea` — see
+    /// that method's own comment for the red rect's own pose-by-pose
+    /// definition and the `availableRect`/pose-3 caveat.
+    ///
+    /// This is the PAGER's own shared background, behind the whole
+    /// `ScrollView` — mostly covered in practice by each page's own
+    /// opaque background (`PlayerPageView`'s identical use of this same
+    /// pair, which is what actually shows through around a video in
+    /// normal use). Kept here too for whatever this layer alone ever
+    /// shows (between pages, before the first page lays out) so it
+    /// never reads plain black while guides are on.
+    @ViewBuilder
+    private func pagerBackground(duoLayout: DuoLayout, safeAreaTop: CGFloat, containerSize: CGSize) -> some View {
+        #if DEBUG
+        if Self.showsDuoGuides {
+            DuoGuideColouredBackground(duoLayout: duoLayout, safeAreaTop: safeAreaTop, containerSize: containerSize)
+                .ignoresSafeArea()
+        } else {
+            Color.black
+        }
+        #else
+        Color.black
+        #endif
+    }
 
     /// `body`'s own root touch logger (`-cloudfull-log-touches`) —
     /// see that `simultaneousGesture`'s own comment.

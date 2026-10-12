@@ -748,7 +748,25 @@ struct PlayerPageView: View {
             // covered is unchanged.
             let bottomSpace = max(0, proxy.size.height - topSpace - canvasHeight)
             ZStack {
+                // Owner: "I can't tell if the laptop video sits flush
+                // on the fold." This page's own background is what
+                // actually shows around the video in normal use (the
+                // pager's own SHARED background, `FeedView
+                // .pagerBackground`, sits behind every page and is
+                // mostly covered by this one) — see
+                // `DuoGuideColouredBackground`'s own comment for the
+                // red/blue meaning, shared between the two rather than
+                // defined twice.
+                #if DEBUG
+                if DuoGuides.isOn {
+                    DuoGuideColouredBackground(duoLayout: duoLayout, safeAreaTop: safeAreaTop, containerSize: proxy.size)
+                } else {
+                    Color.black
+                }
+                #else
                 Color.black
+                #endif
+                Color.clear
                     // The one place `windowIsLandscape` is written.
                     // `proxy.size` is this `GeometryReader`'s own
                     // measurement of the real window, so comparing its
