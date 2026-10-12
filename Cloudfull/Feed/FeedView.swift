@@ -167,6 +167,18 @@ struct FeedView: View {
     /// ever laid out this launch; `duoLaptopCaption` falls back to its
     /// own old near-full-width clearance for that one frame.
     @State private var laptopControlGroupLeadingX: CGFloat?
+    /// Pose 3/4/4W's own Bin capsule (`chromeColumnBinCapsule`) — its
+    /// real, just-laid-out height, in window space. Empty (`Rail.hit`,
+    /// the same plain-circle height Mute/Filter use) until the bin has
+    /// items and the capsule grows downward for the count/size lines;
+    /// `chromeColumn` reads this to shift the WHOLE group (Mute,
+    /// Filter, Bin) up by half the growth, keeping Filter on the
+    /// rail's own vertical centre only while the bin is empty and
+    /// clear of the rail labels/video edge once it is not. One global
+    /// `GeometryReader` (`chromeColumn` mounts once, not per page), so
+    /// no `reduce`-ambiguity guard is needed here either — same
+    /// reasoning as `laptopControlGroupLeadingX` just above.
+    @State private var chromeBinCapsuleHeight: CGFloat = Rail.hit
     /// Both read by `DuoLayout.classify` (Decision B,
     /// `design/duo/duo_audit_apple_checklist.md` §4): neither axis alone
     /// identifies a display — a 17 Pro resized large enough in iPhone
@@ -574,6 +586,10 @@ struct FeedView: View {
             // `laptopControlGroupLeadingX`'s own comments.
             .onPreferenceChange(LaptopCaptionDateLineCenterKey.self) { laptopCaptionDateLineCenterY = $0 }
             .onPreferenceChange(LaptopControlGroupLeadingXKey.self) { laptopControlGroupLeadingX = $0 }
+            // Same catch point, same reasoning, for pose 3/4/4W's own
+            // Bin capsule height — see `chromeBinCapsuleHeight`'s own
+            // comment.
+            .onPreferenceChange(ChromeBinCapsuleHeightKey.self) { chromeBinCapsuleHeight = $0 }
             #if DEBUG
             // Same catch point, same reasoning, for every
             // `.duoGuideMark` reporting view — see `DuoGuideMarksKey`'s
@@ -1386,46 +1402,37 @@ struct FeedView: View {
     /// centres that WIDER capsule on a fixed point with no `HStack`
     /// flow to push a neighbour out of the way the way `topChrome`/
     /// `pose5TopRow`/`laptopDeckControls` all have; its own right half
-    /// ran over the rail's Shrink icon. `showsInlineBadge: false`
-    /// keeps Bin a plain circle here instead, and this function draws
-    /// the one count/size label itself, UNDER that circle, small
-    /// (11pt, the wireframe's own "12 GB under Bin"), WIDTH-CLAMPED to
-    /// whichever is tighter: the column's own leading edge
-    /// (`chromeColumnRect.minX`, the column's own reserved space —
-    /// never further left, into the video) or `railVisualEdge`'s own
-    /// real x minus `DuoLayout.minChromeRailClearance` (the SAME
-    /// boundary `chromeColumnRect` itself already answers to, so the
-    /// label can never reach further than the button's own right edge
-    /// already does). `.minimumScaleFactor` shrinks it rather than
-    /// letting it overflow past either bound.
+    /// ran over the rail's Shrink icon. An interim fix (`104c599`)
+    /// kept Bin a plain circle here and drew the count/size as a
+    /// separate, clamped label underneath it.
+    ///
+    /// Owner re-adapt (round-5 wireframe, "Bin open" row): replaces
+    /// that interim fix with the approved design —
+    /// `chromeColumnBinCapsule` grows DOWNWARD into a tall capsule
+    /// instead (icon, count, size, stacked), so it never needs to run
+    /// sideways into the rail at all. Because only Bin grows, Mute and
+    /// Filter both shift UP by half of whatever `chromeBinCapsuleHeight`
+    /// grows past `Rail.hit` (`extraShift` below) — Bin's own
+    /// `.position()` stays on `centers[2]` UNCHANGED: positioning a
+    /// view at its own centre means a capsule that grows by
+    /// `extraHeight` total already extends `extraHeight / 2` below
+    /// that unmoved point on its own, with no separate offset needed
+    /// here. The net result reads as "the whole group shifts up by
+    /// half the extra height, and Bin alone also grows down from
+    /// there" — group ↔ rail labels/video-edge clearance, Bin ↔ the
+    /// chin below it — without the two fighting each other.
     private func chromeColumn(duoLayout: DuoLayout, safeAreaTop: CGFloat, safeAreaBottom: CGFloat, containerSize: CGSize) -> some View {
         let centers = duoLayout.zigzagCenters(containerSize: containerSize, safeAreaTop: safeAreaTop, safeAreaBottom: safeAreaBottom)
-        let columnRect = duoLayout.chromeColumnRect(containerSize: containerSize, safeAreaTop: safeAreaTop)
-        let railEdge = duoLayout.railVisualEdge(containerSize: containerSize, safeAreaTop: safeAreaTop)?.x
+        let extraShift = max(0, chromeBinCapsuleHeight - Rail.hit) / 2
         return Group {
             if centers.count == 3 {
                 muteButton
-                    .position(centers[0])
+                    .position(x: centers[0].x, y: centers[0].y - extraShift)
                 FilterMenuView(store: optionsStore, hidesChrome: hidesGlobalChrome)
                     .duoGuideMark("top.filter", color: .teal)
-                    .position(centers[1])
-                binButton(showsInlineBadge: false)
+                    .position(x: centers[1].x, y: centers[1].y - extraShift)
+                chromeColumnBinCapsule()
                     .position(centers[2])
-                if let binBadgeText, let columnRect {
-                    let binX = centers[2].x
-                    let maxLeadingHalf = binX - columnRect.minX
-                    let maxTrailingHalf = (railEdge ?? binX) - DuoLayout.minChromeRailClearance - binX
-                    let maxWidth = max(0, min(maxLeadingHalf, maxTrailingHalf) * 2)
-                    Text(binBadgeText)
-                        .font(.system(size: 11, weight: .medium))
-                        .monospacedDigit()
-                        .foregroundStyle(.white)
-                        .feedShadow()
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.6)
-                        .frame(maxWidth: maxWidth)
-                        .position(x: binX, y: centers[2].y + 22)
-                }
             }
         }
     }
@@ -1920,6 +1927,80 @@ struct FeedView: View {
         .duoGuideMark("top.bin", color: .teal)
     }
 
+    /// Pose 3/4/4W's own Bin button (round-5 wireframe, the "Bin open"
+    /// row): replaces `104c599`'s interim fix — a plain circle plus a
+    /// separate label drawn underneath it — with the approved design.
+    /// An empty bin is the same plain circle `binButton` draws, same
+    /// width as Mute/Filter. Once the bin has items, this grows
+    /// DOWNWARD into a tall capsule instead of widening sideways the
+    /// way `binButton`'s own inline badge does everywhere else: icon,
+    /// then the count, then the size, stacked — sideways would run the
+    /// capsule straight into the rail's own Shrink/Delete in this
+    /// narrow column, the exact collision `104c599` was built to dodge
+    /// in the first place (`chromeColumn`'s own history has the
+    /// detail). `chromeColumn` reads this view's own real rendered
+    /// height back through `ChromeBinCapsuleHeightKey` to shift the
+    /// whole Mute/Filter/Bin group up by half of whatever this grows
+    /// past `Rail.hit` — see that property's own comment.
+    ///
+    /// Width pinned to 32pt — `muteButton`'s own measured circle width
+    /// (`.controlSize(.small)`'s own glass-circle size for a bare
+    /// 20×20 glyph; see that button's own comment) — so the grown
+    /// capsule never reads wider than Mute/Filter beside it. The count
+    /// and size lines are clamped to that same width minus 2pt on each
+    /// side, with `.minimumScaleFactor` to shrink rather than clip a
+    /// wide byte figure ("1.2 GB") that does not fit at full size.
+    private func chromeColumnBinCapsule() -> some View {
+        let capsuleWidth: CGFloat = 32
+        return Button { Usage.shared.binOpened(); showTrash = true } label: {
+            VStack(spacing: 2) {
+                Image(systemName: "archivebox.fill")
+                    .font(.system(size: 15, weight: .medium))
+                if trashService.count > 0 {
+                    Text("\(trashService.count)")
+                        .font(.system(size: 13, weight: .semibold))
+                        .monospacedDigit()
+                        .contentTransition(.numericText())
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                        .frame(maxWidth: capsuleWidth - 4)
+                    if let binSizeText {
+                        Text(binSizeText)
+                            .font(.system(size: 9, weight: .medium))
+                            .monospacedDigit()
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.6)
+                            .frame(maxWidth: capsuleWidth - 4)
+                    }
+                }
+            }
+            .foregroundStyle(.white)
+            .frame(width: capsuleWidth)
+            .padding(.vertical, trashService.count > 0 ? 6 : 0)
+        }
+        .buttonStyle(.glass)
+        .buttonBorderShape(.capsule)
+        .controlSize(.small)
+        .tint(.white)
+        .binShake(count: trashService.count)
+        // Same padding/contentShape/negated-padding tap-target trick
+        // as `binButton`/`muteButton` — see either one's own comment.
+        .padding(6)
+        .contentShape(Rectangle())
+        .padding(-6)
+        .accessibilityIdentifier(hidesGlobalChrome ? "" : "bin_open")
+        // Same label/hint pair as `binButton` — see that view's own
+        // comment on why the byte figure never joins this string.
+        .accessibilityLabel(trashService.count > 0 ? "Bin, \(trashService.count) queued" : "Bin")
+        .accessibilityHint("Opens the list of videos queued for deletion")
+        .duoGuideMark("top.bin", color: .teal)
+        .background(
+            GeometryReader { proxy in
+                Color.clear.preference(key: ChromeBinCapsuleHeightKey.self, value: proxy.size.height)
+            }
+        )
+    }
+
     /// The bin pill's own on-screen text: just the count when nothing is
     /// pending, "1 · 14 MB" once there is. Uses the same `showPending`
     /// rule as `counterCapsule`. The byte figure disappears from the bin
@@ -1930,6 +2011,16 @@ struct FeedView: View {
         let showPending = trashService.pendingBytes > 0 && activeShrinkJob == nil
         guard showPending else { return "\(trashService.count)" }
         return "\(trashService.count) · \(Fmt.bytes(trashService.pendingBytes))"
+    }
+
+    /// `binBadgeText`'s own byte figure, split out on its own —
+    /// `chromeColumnBinCapsule` stacks count and size as two separate
+    /// lines instead of `binBadgeText`'s single "count · size" line.
+    /// Same `showPending` rule, so the two never disagree about
+    /// whether a figure is showing right now.
+    private var binSizeText: String? {
+        guard trashService.count > 0, trashService.pendingBytes > 0, activeShrinkJob == nil else { return nil }
+        return Fmt.bytes(trashService.pendingBytes)
     }
 
     #if DEBUG
@@ -2822,6 +2913,20 @@ struct LaptopControlGroupLeadingXKey: PreferenceKey {
     static let defaultValue: CGFloat? = nil
     static func reduce(value: inout CGFloat?, nextValue: () -> CGFloat?) {
         if let next = nextValue() { value = next }
+    }
+}
+
+/// `FeedView.chromeBinCapsuleHeight`'s own anchor — pose 3/4/4W's Bin
+/// capsule's real rendered height, reported by `chromeColumnBinCapsule`
+/// itself. That view mounts once, globally (inside `chromeColumn`,
+/// never per page), so — same as `LaptopControlGroupLeadingXKey` above
+/// — there is no second contributor this `reduce` ever needs to guard
+/// against. `max`, not "last write wins": a height can only ever grow
+/// from real content, never arrive smaller by mistake.
+struct ChromeBinCapsuleHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = Rail.hit
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
     }
 }
 
