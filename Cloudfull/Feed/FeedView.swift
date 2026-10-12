@@ -3311,7 +3311,19 @@ private struct FeedPageContent: View {
                         // stage, so the caption only needs to stay
                         // clear of that column, not of a rail that is
                         // no longer on the video.
-                        captionZone(trailingClearance: railColumnRect.width + 16, hidden: false, bandHeight: realBottomBand)
+                        //
+                        // Owner re-adapt (pose 5, right-align): a
+                        // height-bound video's own leading edge now
+                        // sits wherever `stageRect` right-aligned it
+                        // to, not always 0 — "caption leading =
+                        // stage.minX + 16." 1V reads the same
+                        // `railColumnRect` branch but never moves its
+                        // own video off the leading edge, so this is a
+                        // no-op there (`stageRect.minX` is already 0).
+                        let leadingClearance = duoLayout.pose == .openTall
+                            ? duoLayout.stageRect(containerSize: proxy.size, safeAreaTop: safeAreaTop).minX + 16
+                            : 16
+                        captionZone(leadingClearance: leadingClearance, trailingClearance: railColumnRect.width + 16, hidden: false, bandHeight: realBottomBand)
                     } else {
                         HStack(alignment: .bottom, spacing: 0) {
                             captionZone(trailingClearance: 16, hidden: false, bandHeight: realBottomBand)
@@ -3526,7 +3538,7 @@ private struct FeedPageContent: View {
     /// above the line" directly, once the line IS the bottom edge.
     /// Pose 5 is untouched — its own scrubber still rests at the top
     /// of its 28pt box, so it keeps the `20 + 28` sum unchanged.
-    private func captionZone(trailingClearance: CGFloat, hidden: Bool, bandHeight: CGFloat) -> some View {
+    private func captionZone(leadingClearance: CGFloat = 16, trailingClearance: CGFloat, hidden: Bool, bandHeight: CGFloat) -> some View {
         let liftsForScrubber = duoLayout.pose != .regularPhone && bandHeight < 50
         let bottomPadding: CGFloat = duoLayout.pose == .closed ? 20 : (liftsForScrubber ? 20 + 28 : 20)
         return captionTexts()
@@ -3543,7 +3555,7 @@ private struct FeedPageContent: View {
             // when it shows.
             .duoGuideMark("caption", color: .pink, active: isActive)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.leading, 16)
+            .padding(.leading, leadingClearance)
             .padding(.bottom, bottomPadding)
             .padding(.trailing, trailingClearance)
         // Keeps this block clear of the display's own rounded bottom

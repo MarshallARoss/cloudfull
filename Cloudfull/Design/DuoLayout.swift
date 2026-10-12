@@ -594,12 +594,33 @@ struct DuoLayout {
                                      width: max(0, containerSize.width - cappedColumnWidth - avail.minX),
                                      height: avail.height)
             let stageFitted = fitRect(in: stageAvail, aspectRatio: aspectRatio)
+            // Owner re-adapt: "the video moved back over to the left" —
+            // a height-bound (tall) video used to right-align against
+            // `stageAvail.maxX`, the rail COLUMN's own structural edge
+            // (the full status-block width), not where the rail's own
+            // real pixels start. Both branches now share ONE right
+            // edge — `railVisualEdge.x − minChromeRailClearance`, the
+            // SAME edge the width-bound case already used — so a tall
+            // video sits flush against the rail too, leftover gap on
+            // the LEFT. Reads `railVisualEdge`, never `stageAvail`, for
+            // exactly the same reason `cappedColumnWidth` above does
+            // not read live occlusion width either: `railVisualEdge`
+            // is pinned to `occlusion.maxX` (the display's own trailing
+            // edge, which a GROWING pill does not move) minus a static
+            // label half-width, so it cannot drift when a Live Activity
+            // grows the status block, unlike `stageAvail.maxX` itself.
+            // The owner's own accepted trade-off: a tall video's top
+            // row now reaches up far enough that its own top-right
+            // corner sits under the status cluster — system status
+            // draws over video, same as everywhere else in this file.
+            let visualRightEdge = railVisualEdge(containerSize: containerSize, safeAreaTop: safeAreaTop)
+                .map { $0.x - Self.minChromeRailClearance }
             if stageFitted.width < stageAvail.width {
-                return CGRect(x: stageAvail.maxX - stageFitted.width, y: stageFitted.minY, width: stageFitted.width, height: stageFitted.height)
+                let rightEdge = visualRightEdge ?? stageAvail.maxX
+                return CGRect(x: max(stageAvail.minX, rightEdge - stageFitted.width), y: stageFitted.minY, width: stageFitted.width, height: stageFitted.height)
             }
-            if let visual = railVisualEdge(containerSize: containerSize, safeAreaTop: safeAreaTop) {
-                let rightEdge = max(stageAvail.maxX, visual.x - Self.minChromeRailClearance)
-                let widerBox = CGRect(x: 0, y: stageAvail.minY, width: rightEdge, height: stageAvail.height)
+            if let rightEdge = visualRightEdge {
+                let widerBox = CGRect(x: 0, y: stageAvail.minY, width: max(stageAvail.maxX, rightEdge), height: stageAvail.height)
                 return fitRect(in: widerBox, aspectRatio: aspectRatio)
             }
             return stageFitted
