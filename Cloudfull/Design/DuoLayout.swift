@@ -105,6 +105,44 @@ struct DuoLayout {
     /// alongside `debugRawDivision` for the same log line.
     let debugSafeAreaInsets: EdgeInsets
 
+    /// Mirrored-layout round: true when every horizontal rule in this
+    /// file should read LEADING where it otherwise reads TRAILING —
+    /// Apple's own rule for an app whose vertical bar sits on the
+    /// leading edge (a Split View-left app; also 1V upside down), same
+    /// idea as the owner's own manual left-handed preference. Set once,
+    /// in `current(...)` below, from three sources, in order: the
+    /// DEBUG-only `-cloudfull-force-mirror` flag (`DuoForceMirror.isOn`,
+    /// for testing on the Duo sim with no real leading-bar
+    /// configuration to switch into); the SYSTEM's own
+    /// `toolbarVerticalEdge == .leading` (never overridden by the
+    /// setting below — the bar's own real side always wins when there
+    /// IS one); and, only when there is no bar at all
+    /// (`toolbarVerticalEdge == nil` — a regular iPhone, or the Duo's
+    /// own bar-off poses 5/6), the owner's manual
+    /// `leftHandedControls` setting (`SettingsView`'s own "Left-handed
+    /// controls" toggle, read live the same way every other `current(...)`
+    /// parameter already is — this struct itself stays a pure value
+    /// with no `UserDefaults`/`AppStorage` read of its own).
+    ///
+    /// Every function below that hardcodes a `.trailing`-only formula —
+    /// `railColumn`'s own open (pose 5) branch, `ringCenteredColumnX`'s
+    /// trailing-inset arithmetic, `statusBlock`'s trailing-half check,
+    /// `openWideWideVideoBox`'s left-bezel box — reads this field to
+    /// flip, rather than re-deriving "which edge" from `barEdge` a
+    /// second time; `barEdge`-generic functions that already switch on
+    /// `column.edge` (`availableRect`, `railColumnRect`, `railVisualEdge`,
+    /// `chromeColumnRect`, `rightPage`) need no change at all — flipping
+    /// the EDGE `railColumn` reports is what drives them.
+    ///
+    /// Not yet wired into the book/laptop PAGE-level questions
+    /// (`stageRect`'s own `.book`/`.laptop` branches, `bookWideVideoRect`,
+    /// `rightPage`'s own left/right-page choice, the laptop deck's own
+    /// x-axis row functions) — which page becomes "the stage" when
+    /// mirrored is a real open design question (does the fold itself
+    /// ever move, or only which side of it holds the video?), flagged
+    /// back to the team rather than guessed at here.
+    let isMirrored: Bool
+
     /// `barEdge != nil`. The spelling most call sites reach for when all
     /// they need is the yes/no, not which edge.
     var isClosedBar: Bool { barEdge != nil }
@@ -112,12 +150,17 @@ struct DuoLayout {
     /// The "no Duo furniture" value: every field at its plain default.
     /// A regular iPhone's `FeedView`/`PhotoFeedView` can hand this
     /// straight to a child that expects a `DuoLayout` without ever
-    /// calling `current(proxy:toolbarVerticalEdge:horizontalSizeClass:verticalSizeClass:hinge:hingeDegrees:)`.
+    /// calling `current(proxy:toolbarVerticalEdge:horizontalSizeClass:verticalSizeClass:hinge:hingeDegrees:leftHandedControls:)`.
     /// `pose` is `.regularPhone` here — the hard rule every new branch
-    /// gates on.
+    /// gates on. `isMirrored` is `false` — a regular iPhone with the
+    /// setting off (the default) must stay pixel-identical, and this
+    /// value is only ever handed out before `current(...)` has had a
+    /// chance to read the setting at all (the very first frame, on an
+    /// OS below iOS 27.1).
     static let none = DuoLayout(barEdge: nil, barWidth: 0, occlusion: nil, division: nil,
                                 pose: .regularPhone, hinge: nil, hingeDegrees: nil,
-                                debugRawDivision: nil, debugSafeAreaInsets: EdgeInsets())
+                                debugRawDivision: nil, debugSafeAreaInsets: EdgeInsets(),
+                                isMirrored: false)
 
     /// Reads this frame's Duo geometry from `proxy` and the
     /// already-resolved `toolbarVerticalEdge` environment value.
@@ -143,6 +186,13 @@ struct DuoLayout {
     /// Decision B) replaced it with the window's own shape
     /// (`proxy.size`), which `classify(...)` already has from
     /// `containerSize`. No layout in this app reads device orientation.
+    ///
+    /// `leftHandedControls` is the mirrored-layout round's own extra
+    /// input: `SettingsView`'s own "Left-handed controls" setting,
+    /// read live by the caller (`@AppStorage("settings.leftHandedControls")`,
+    /// the same "the caller reads it, this function only takes the
+    /// value" rule every other parameter here already follows) and
+    /// folded into `isMirrored` below.
     @available(iOS 27.1, *)
     static func current(
         proxy: GeometryProxy,
@@ -150,15 +200,41 @@ struct DuoLayout {
         horizontalSizeClass: UserInterfaceSizeClass?,
         verticalSizeClass: UserInterfaceSizeClass?,
         hinge: DuoHingeStatus?,
-        hingeDegrees: Double?
+        hingeDegrees: Double?,
+        leftHandedControls: Bool
     ) -> DuoLayout {
         let insets = proxy.safeAreaInsets
-        let width: CGFloat
+        let measuredWidth: CGFloat
         switch toolbarVerticalEdge {
-        case .leading: width = insets.leading
-        case .trailing: width = insets.trailing
-        case nil: width = 0
+        case .leading: measuredWidth = insets.leading
+        case .trailing: measuredWidth = insets.trailing
+        case nil: measuredWidth = 0
         }
+        // Known Apple bug, FB24906205 (broken-rule note): a LEADING
+        // bar's own safe-area inset is not always carried by the
+        // window — `insets.leading` can read `0` even while the bar is
+        // genuinely showing there. A zero-width column would overlap
+        // the real system bar instead of sitting beside it, so this
+        // falls back to `Self.fallbackBarWidth` — the TRAILING case's
+        // own measured width (84pt, every bar-on reading this file has
+        // ever taken), the one configuration actually confirmed — the
+        // moment a real leading-bar reading on real hardware shows a
+        // non-zero `insets.leading`, this fallback simply never
+        // triggers again. `-cloudfull-log-rotation` should flag
+        // whenever this branch fires (print a `barFallback` field) so a
+        // real device check does not need to go looking for it.
+        let width = (toolbarVerticalEdge == .leading && measuredWidth <= 0) ? Self.fallbackBarWidth : measuredWidth
+        // Mirrored-layout round: the bar's own real side always wins
+        // over the manual setting when there IS a bar — the setting
+        // only ever applies with no bar at all (`toolbarVerticalEdge
+        // == nil` — a regular iPhone, or the Duo's own bar-off poses 5
+        // and 6). `DuoForceMirror.isOn` (`-cloudfull-force-mirror`,
+        // DEBUG only) forces this `true` regardless of either signal,
+        // for testing every pose's own mirrored geometry on the Duo
+        // sim without a real leading-bar configuration to switch into.
+        let isMirrored = DuoForceMirror.isOn
+            || toolbarVerticalEdge == .leading
+            || (toolbarVerticalEdge == nil && leftHandedControls)
         // Round 2 (Opus diagnosis): `reservedRegions` reports each
         // frame relative to THIS view's own local origin — `proxy`'s
         // own (0, 0), which sits `insets.top`/`insets.leading` below
@@ -244,7 +320,8 @@ struct DuoLayout {
             hinge: hinge,
             hingeDegrees: hingeDegrees,
             debugRawDivision: debugRawDivision,
-            debugSafeAreaInsets: insets
+            debugSafeAreaInsets: insets,
+            isMirrored: isMirrored
         )
     }
 
@@ -597,9 +674,19 @@ struct DuoLayout {
             // position and size it already had before any pill grew,
             // however wide `occlusion` reports itself this frame.
             let cappedColumnWidth = max(Rail.hit, min(occlusion?.width ?? 0, Self.openTallNormalOcclusionWidth))
-            let stageAvail = CGRect(x: avail.minX, y: avail.minY,
-                                     width: max(0, containerSize.width - cappedColumnWidth - avail.minX),
-                                     height: avail.height)
+            // Mirrored-layout round: the capped column sits on the
+            // LEADING side instead, so the rebuilt `stageAvail` excludes
+            // it from the left, not the right — `avail.minX` is already
+            // 0 in that case (`availableRect`'s own leading branch moved
+            // the exclusion into `x`/`width` instead), so this reads
+            // `avail.maxX` (the window's own true right edge) as the
+            // far bound rather than re-deriving it from `avail.minX`.
+            let stageAvail = isMirrored
+                ? CGRect(x: cappedColumnWidth, y: avail.minY,
+                         width: max(0, avail.maxX - cappedColumnWidth), height: avail.height)
+                : CGRect(x: avail.minX, y: avail.minY,
+                         width: max(0, containerSize.width - cappedColumnWidth - avail.minX),
+                         height: avail.height)
             let stageFitted = fitRect(in: stageAvail, aspectRatio: aspectRatio)
             // Owner re-adapt: "the video moved back over to the left" —
             // a height-bound (tall) video used to right-align against
@@ -620,14 +707,27 @@ struct DuoLayout {
             // row now reaches up far enough that its own top-right
             // corner sits under the status cluster — system status
             // draws over video, same as everywhere else in this file.
-            let visualRightEdge = railVisualEdge(containerSize: containerSize, safeAreaTop: safeAreaTop)
-                .map { $0.x - Self.minChromeRailClearance }
+            // Mirrored-layout round: the rail's own near edge is now its
+            // LEADING visual edge (`railVisualEdge`'s own `.leading`
+            // case, already generic) pushed OUTWARD by the same
+            // clearance, and the video aligns flush against THAT edge
+            // instead — "pose 5 tall video LEFT-aligned to the rail."
+            let visualNearEdge = railVisualEdge(containerSize: containerSize, safeAreaTop: safeAreaTop)
+                .map { isMirrored ? $0.x + Self.minChromeRailClearance : $0.x - Self.minChromeRailClearance }
             if stageFitted.width < stageAvail.width {
-                let rightEdge = visualRightEdge ?? stageAvail.maxX
+                if isMirrored {
+                    let leftEdge = visualNearEdge ?? stageAvail.minX
+                    let x = min(leftEdge, stageAvail.maxX - stageFitted.width)
+                    return CGRect(x: x, y: stageFitted.minY, width: stageFitted.width, height: stageFitted.height)
+                }
+                let rightEdge = visualNearEdge ?? stageAvail.maxX
                 return CGRect(x: max(stageAvail.minX, rightEdge - stageFitted.width), y: stageFitted.minY, width: stageFitted.width, height: stageFitted.height)
             }
-            if let rightEdge = visualRightEdge {
-                let widerBox = CGRect(x: 0, y: stageAvail.minY, width: max(stageAvail.maxX, rightEdge), height: stageAvail.height)
+            if let nearEdge = visualNearEdge {
+                let widerBox = isMirrored
+                    ? CGRect(x: min(stageAvail.minX, nearEdge), y: stageAvail.minY,
+                             width: containerSize.width - min(stageAvail.minX, nearEdge), height: stageAvail.height)
+                    : CGRect(x: 0, y: stageAvail.minY, width: max(stageAvail.maxX, nearEdge), height: stageAvail.height)
                 return fitRect(in: widerBox, aspectRatio: aspectRatio)
             }
             return stageFitted
@@ -693,18 +793,33 @@ struct DuoLayout {
     /// this pose, instead of the wider, un-tightened `availableRect`
     /// fallback every other pose still uses (owner: "tighten the debug
     /// red area in pose 3 to the real stage box").
+    ///
+    /// Mirrored-layout round: "touch the left bezel" is really "touch
+    /// the bezel on the FAR side from the rail/chrome group" — when
+    /// mirrored, that is the TRAILING bezel instead, with the near
+    /// edge now read off `chromeColumnRect`'s own `maxX` (the group's
+    /// own leading-side edge, once `railColumn` puts it there) rather
+    /// than its `minX`.
     private func openWideWideVideoBox(containerSize: CGSize, safeAreaTop: CGFloat) -> CGRect {
         let column = railColumn(containerSize: containerSize, safeAreaTop: safeAreaTop)
         let barWidth = column?.width ?? 0
         let excluded = barWidth + chromeColumnStageExclusion(containerSize: containerSize, safeAreaTop: safeAreaTop)
+        let height = max(0, containerSize.height - Self.captionBand)
+        if isMirrored {
+            // Defensive fallback only — same reasoning as the
+            // trailing-case comment below, mirrored.
+            let fallbackLeftEdge = min(containerSize.width, excluded + Self.pagePad)
+            let leftEdge = chromeColumnRect(containerSize: containerSize, safeAreaTop: safeAreaTop)
+                .map { $0.maxX + Self.minChromeRailClearance } ?? fallbackLeftEdge
+            return CGRect(x: leftEdge, y: 0, width: max(0, containerSize.width - leftEdge), height: height)
+        }
         // Defensive fallback only — `chromeColumnRect` is non-nil
         // whenever `railColumn` is, and pose 3 always has one; this
         // reduces to the OLD fixed-line edge if that ever changes.
         let fallbackRightEdge = max(0, containerSize.width - excluded - Self.pagePad)
         let rightEdge = chromeColumnRect(containerSize: containerSize, safeAreaTop: safeAreaTop)
             .map { $0.minX - Self.minChromeRailClearance } ?? fallbackRightEdge
-        return CGRect(x: 0, y: 0, width: max(0, rightEdge),
-                       height: max(0, containerSize.height - Self.captionBand))
+        return CGRect(x: 0, y: 0, width: max(0, rightEdge), height: height)
     }
 
     /// Pose 4W's stage box. Originally "width `division.minX − 32`, x
@@ -782,6 +897,16 @@ struct DuoLayout {
     /// setting could measure a different normal width; this has not
     /// been checked against either.
     static let openTallNormalOcclusionWidth: CGFloat = 134
+
+    /// `current(...)`'s own FB24906205 fallback — see that function's
+    /// own comment. The TRAILING case's own measured bar width, read
+    /// off every bar-on pose this file has ever actually measured
+    /// (1V/3/4/4W); stands in for a LEADING bar's own safe-area inset
+    /// only on the frames that bug drops it to `0`. Flagged like every
+    /// other "measured, no API" constant in this file — unconfirmed
+    /// against a real leading-bar reading, since none exists yet to
+    /// measure.
+    static let fallbackBarWidth: CGFloat = 84
 
     // MARK: - Rail column (step 3; extended by steps 4, 5, and the pose fixes)
     //
@@ -942,9 +1067,25 @@ struct DuoLayout {
     /// above trusts the bar — "reuse that path" rather than adding a
     /// parallel gate pose 5 is the only one of the two bar-off cases
     /// that even reaches.
+    /// Mirrored-layout round: the RETURNED edge now reads `isMirrored`,
+    /// not `barEdge` alone, in both branches. Bar-on: while there IS a
+    /// real bar, `barEdge` and `isMirrored` already agree by
+    /// construction (`current(...)`'s own `isMirrored` formula never
+    /// overrides a real bar's own side) — EXCEPT under
+    /// `-cloudfull-force-mirror`, which forces `isMirrored` true to
+    /// test a leading rail against the sim's own real, still-trailing
+    /// bar (a deliberate DEBUG approximation: the column READS as
+    /// leading, at the real trailing bar's own measured width, with no
+    /// real leading-side furniture to actually anchor to on the sim —
+    /// fine for checking the REST of this file's own geometry, not a
+    /// claim that this matches a real leading-bar reading). Open (pose
+    /// 5): no bar to defer to at all, so `isMirrored` (the owner's own
+    /// `leftHandedControls` setting, this pose's only source for it —
+    /// see that property's own comment) decides outright.
     func railColumn(containerSize: CGSize, safeAreaTop: CGFloat) -> (edge: HorizontalEdge, width: CGFloat)? {
+        let edge: HorizontalEdge = isMirrored ? .leading : .trailing
         if let barEdge, barWidth > 0 {
-            return (barEdge, barWidth)
+            return (edge, barWidth)
         }
         guard pose == .openTall else { return nil }
         if let occlusion, occlusion.minX > containerSize.width / 2 {
@@ -952,9 +1093,9 @@ struct DuoLayout {
             // lands exactly on the ring's real position regardless of
             // how wide the window is — the same goal `openColumnWidth`
             // used to reach with a fixed, sim-measured number.
-            return (.trailing, max(Rail.hit, (containerSize.width - occlusion.midX) * 2))
+            return (edge, max(Rail.hit, (containerSize.width - occlusion.midX) * 2))
         }
-        return (.trailing, Rail.hit + Self.minStageMargin * 2)
+        return (edge, Rail.hit + Self.minStageMargin * 2)
     }
 
     /// The rail column's own rectangle this frame, full height — the
@@ -1059,13 +1200,29 @@ struct DuoLayout {
     /// correct one to pick.
     static let wideOcclusionThreshold: CGFloat = 60
 
+    /// Mirrored-layout round: a wide occlusion's own real ring centre
+    /// was always measured inset from its TRAILING edge
+    /// (`openTallRingInsetFromTrailingEdge`'s own comment) — unmeasured
+    /// on a real leading-side reading, since none has existed to
+    /// measure yet, but the construction that produced the trailing
+    /// number (time text then ring, reading toward the display's own
+    /// outer edge) mirrors exactly, so this reads the SAME inset from
+    /// the LEADING edge instead whenever mirrored. Does not change the
+    /// DEBUG `-cloudfull-force-mirror` case on 3/4/4W: the real
+    /// occlusion there stays on the TRAILING half regardless (the
+    /// camera does not move), well outside a now-LEADING `columnRect`'s
+    /// own range check below, so this naturally falls through to the
+    /// no-occlusion-detected answer (`columnRect.midX`) instead of
+    /// guessing at an inset against the wrong occlusion.
     func ringCenteredColumnX(containerSize: CGSize, safeAreaTop: CGFloat) -> CGFloat? {
         guard let columnRect = railColumnRect(containerSize: containerSize, safeAreaTop: safeAreaTop) else { return nil }
         guard let occlusion, occlusion.midX >= columnRect.minX - 8, occlusion.midX <= columnRect.maxX + 8 else {
             return columnRect.midX
         }
         if occlusion.width >= Self.wideOcclusionThreshold {
-            return occlusion.maxX - Self.openTallRingInsetFromTrailingEdge
+            return isMirrored
+                ? occlusion.minX + Self.openTallRingInsetFromTrailingEdge
+                : occlusion.maxX - Self.openTallRingInsetFromTrailingEdge
         }
         return occlusion.midX
     }
@@ -1532,7 +1689,22 @@ struct DuoLayout {
     /// prints the raw `occlusion` field on every pose/hinge change,
     /// which already shows whether this fell back — `occ-none`, or an
     /// `occ-` rect whose own `x` sits left of half the printed `W`.
+    ///
+    /// Mirrored-layout round: both the half-check and the fallback's
+    /// own edge flip with `isMirrored` — "the leading half," "the true
+    /// leading edge," instead of trailing. The DEBUG
+    /// `-cloudfull-force-mirror` case on 3/4/4W reads the same way
+    /// `ringCenteredColumnX` does: the real occlusion there never
+    /// leaves the trailing half, so the mirrored check correctly finds
+    /// nothing on the (now-checked) leading half and falls back to the
+    /// zero-width leading anchor instead of a wrong reading.
     func statusBlock(containerSize: CGSize, safeAreaTop: CGFloat) -> CGRect {
+        if isMirrored {
+            if let occlusion, occlusion.maxX < containerSize.width / 2 {
+                return occlusion
+            }
+            return CGRect(x: 0, y: 0, width: 0, height: safeAreaTop)
+        }
         if let occlusion, occlusion.minX > containerSize.width / 2 {
             return occlusion
         }
@@ -1916,6 +2088,24 @@ enum DuoGuides {
 enum DuoGuideColours {
     #if DEBUG
     static let isOn = ProcessInfo.processInfo.arguments.contains("-cloudfull-duo-guide-colours")
+    #else
+    static let isOn = false
+    #endif
+}
+
+/// True only behind `-cloudfull-force-mirror`, and only in a DEBUG
+/// build — same reasoning as `DuoGuides`/`DuoGuideColours` above.
+/// Mirrored-layout round: forces `DuoLayout.isMirrored` on for every
+/// frame, regardless of `toolbarVerticalEdge` or the owner's own
+/// `leftHandedControls` setting — see `DuoLayout.current(...)`'s own
+/// comment. Lets every pose's own mirrored geometry be checked on the
+/// Duo sim directly, with no real leading-bar (Split View-left)
+/// configuration to switch into. `false`, unconditionally, outside
+/// DEBUG, same guarantee as the other two flags — this must never
+/// silently mirror a shipped build's layout.
+enum DuoForceMirror {
+    #if DEBUG
+    static let isOn = ProcessInfo.processInfo.arguments.contains("-cloudfull-force-mirror")
     #else
     static let isOn = false
     #endif

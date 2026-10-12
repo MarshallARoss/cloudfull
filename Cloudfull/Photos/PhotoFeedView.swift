@@ -166,6 +166,10 @@ struct PhotoFeedView: View {
     /// bar (req 1 of the Duo plan). `PhotoTopBar` is the one piece that
     /// must stop clear of the bar's own time/connectivity ring.
     @State private var toolbarVerticalEdge: HorizontalEdge?
+    /// Mirrored-layout round: the owner's own "Left-handed controls"
+    /// setting. Mirrors `FeedView.leftHandedControls` exactly — see
+    /// that property's own comment.
+    @AppStorage("settings.leftHandedControls") private var leftHandedControls = false
     /// The window's own measured width, from `.onGeometryChange` below —
     /// R2 (`design/duo/duo_audit_apple_checklist.md` F5): `configure`
     /// used to run as a `let _ =` side effect inside `body` itself, on
@@ -231,7 +235,8 @@ struct PhotoFeedView: View {
                 horizontalSizeClass: horizontalSizeClass,
                 verticalSizeClass: verticalSizeClass,
                 hinge: nil,
-                hingeDegrees: nil
+                hingeDegrees: nil,
+                leftHandedControls: leftHandedControls
             )
         }
         return .none

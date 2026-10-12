@@ -23,6 +23,12 @@ struct SettingsView: View {
     /// "muted".
     @AppStorage("settings.openMuted") private var openMuted = false
     @AppStorage(KeepsAlbum.settingKey) private var keepsAlbum = true
+    /// Mirrored-layout round: the owner's own "Left-handed controls"
+    /// setting, shown in `layoutSection` below. Only takes effect with
+    /// no system bar at all — see `DuoLayout.isMirrored`'s own comment.
+    /// Default OFF: a regular iPhone's layout must stay pixel-identical
+    /// until the owner turns this on themselves.
+    @AppStorage("settings.leftHandedControls") private var leftHandedControls = false
     /// `.onAppear` sets this from the current Home Screen icon, so the
     /// row always shows the icon in use.
     @State private var appIcon: AppIconChoice = .blue
@@ -90,7 +96,8 @@ struct SettingsView: View {
                 horizontalSizeClass: horizontalSizeClass,
                 verticalSizeClass: verticalSizeClass,
                 hinge: nil,
-                hingeDegrees: nil
+                hingeDegrees: nil,
+                leftHandedControls: leftHandedControls
             )
         }
         return .none
@@ -131,6 +138,7 @@ struct SettingsView: View {
                         appHeaderSection
                         reminderSection
                         preferencesSection
+                        layoutSection(duoLayout: duoLayout)
                         storageSection
                         assistanceSection
                         tipJarSection
@@ -271,6 +279,29 @@ struct SettingsView: View {
             .onChange(of: appIcon) { _, choice in AppIconChoice.apply(choice) }
         } header: {
             Text("Preferences")
+        }
+    }
+
+    // Owner ask (iPhone Duo mirrored-layout round): a left-handed
+    // preference that moves the rail, the chin, and the stage's own
+    // alignment to the LEADING edge wherever `DuoLayout.isMirrored`
+    // reads it — see that property's own comment for the full rule.
+    // Shown on every iPhone, default OFF; the Duo gets its own footer
+    // explaining the one case this toggle does not control (a real
+    // system bar's own side always wins).
+    private func layoutSection(duoLayout: DuoLayout) -> some View {
+        Section {
+            Toggle("Left-handed controls", isOn: $leftHandedControls)
+                .accessibilityIdentifier("settings_left_handed_controls")
+                .onChange(of: leftHandedControls) { _, _ in Usage.shared.settingChanged("leftHandedControls") }
+        } header: {
+            Text("Layout")
+        } footer: {
+            if duoLayout.pose != .regularPhone {
+                Text("On an iPhone Duo, the system sets the bar's side when a vertical bar is showing. This setting applies only when there is no bar.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 

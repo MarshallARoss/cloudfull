@@ -91,6 +91,12 @@ struct FeedView: View {
     /// `if #available` branch in `body`, which writes into this plain,
     /// always-available property instead.
     @State private var toolbarVerticalEdge: HorizontalEdge?
+    /// Mirrored-layout round: the owner's own "Left-handed controls"
+    /// setting (`SettingsView`'s own toggle) — fed to `DuoLayout.current`
+    /// below, the same "the caller reads it live" rule every other
+    /// parameter there already follows. Only takes effect with no
+    /// system bar at all; see `DuoLayout.isMirrored`'s own comment.
+    @AppStorage("settings.leftHandedControls") private var leftHandedControls = false
     /// This frame's hinge reading, from `HingeReader` — `DuoLayout.swift`'s
     /// own mirror of `ToolbarVerticalEdgeReader`, mounted the same way,
     /// just below it. `nil` until the first `onHingeChange` delivery
@@ -347,7 +353,8 @@ struct FeedView: View {
                 horizontalSizeClass: horizontalSizeClass,
                 verticalSizeClass: verticalSizeClass,
                 hinge: hingeStatus,
-                hingeDegrees: hingeDegrees
+                hingeDegrees: hingeDegrees,
+                leftHandedControls: leftHandedControls
             )
         }
         return .none
