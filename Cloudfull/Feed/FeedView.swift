@@ -2199,7 +2199,7 @@ struct FeedView: View {
     @ViewBuilder
     private func pagerBackground(duoLayout: DuoLayout, safeAreaTop: CGFloat, containerSize: CGSize) -> some View {
         #if DEBUG
-        if Self.showsDuoGuides {
+        if Self.showsDuoGuides && DuoGuideColours.isOn {
             DuoGuideColouredBackground(duoLayout: duoLayout, safeAreaTop: safeAreaTop, containerSize: containerSize)
                 .ignoresSafeArea()
         } else {

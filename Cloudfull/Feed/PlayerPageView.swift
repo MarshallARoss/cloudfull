@@ -757,8 +757,15 @@ struct PlayerPageView: View {
                 // `DuoGuideColouredBackground`'s own comment for the
                 // red/blue meaning, shared between the two rather than
                 // defined twice.
+                // Owner re-adapt: "turn OFF the red/blue colour fill,
+                // keep all other guide lines" — `DuoGuides.isOn` alone
+                // (`-cloudfull-duo-guides`) goes back to plain black
+                // here; `DuoGuideColours.isOn`
+                // (`-cloudfull-duo-guide-colours`, its own separate
+                // flag, off by default) is the one this background
+                // itself now also requires.
                 #if DEBUG
-                if DuoGuides.isOn {
+                if DuoGuides.isOn && DuoGuideColours.isOn {
                     DuoGuideColouredBackground(duoLayout: duoLayout, safeAreaTop: safeAreaTop, containerSize: proxy.size, isWideVideo: useVideoAspect)
                 } else {
                     Color.black

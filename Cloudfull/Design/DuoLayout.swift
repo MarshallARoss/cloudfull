@@ -1902,6 +1902,25 @@ enum DuoGuides {
     #endif
 }
 
+/// True only behind `-cloudfull-duo-guide-colours`, and only in a
+/// DEBUG build — same reasoning as `DuoGuides` above, a separate flag
+/// rather than folding into it. Owner: "turn OFF the red/blue colour
+/// fill, keep all other guide lines" — `-cloudfull-duo-guides` alone
+/// now goes back to lines/labels only, plain black background, the
+/// same as before `DuoGuideColouredBackground` existed; this SECOND
+/// flag is what that background itself gates on, on top of
+/// `DuoGuides.isOn` (both must be on — this flag alone, without
+/// `-cloudfull-duo-guides`, is never read; see
+/// `FeedView.pagerBackground`'s own two-flag check). `false`,
+/// unconditionally, outside DEBUG, same guarantee as `DuoGuides`.
+enum DuoGuideColours {
+    #if DEBUG
+    static let isOn = ProcessInfo.processInfo.arguments.contains("-cloudfull-duo-guide-colours")
+    #else
+    static let isOn = false
+    #endif
+}
+
 #if DEBUG
 /// One labeled rect this DEBUG session wants outlined on screen —
 /// `.duoGuideMark`'s own payload. `id` is the element's own name
