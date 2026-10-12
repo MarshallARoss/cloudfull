@@ -499,14 +499,36 @@ struct DuoLayout {
         // width-bound box (vertically centred well clear of that top
         // row), not for one that reaches the top of the screen.
         if pose == .openTall {
-            if fitted.width < avail.width {
-                return CGRect(x: avail.maxX - fitted.width, y: fitted.minY, width: fitted.width, height: fitted.height)
+            // Owner re-adapt (Live Activity pass): `avail` above comes
+            // from `railColumn`'s own LIVE occlusion width — exactly
+            // as wide as whatever is currently grown, pill included.
+            // Fine for centring the rail/chrome column on the ring
+            // (unaffected here — "rail x stays," the owner's own
+            // words), wrong for the STAGE: a grown pill used to shrink
+            // `avail` enough that a plain 9:16 video's own fitted width
+            // stopped reading as narrower than `avail`'s, flipping it
+            // out of the height-bound branch just below and into the
+            // wide-video branch after it — moving and narrowing a
+            // video the pill was never meant to affect at all. `avail`
+            // is rebuilt here with the column width capped at
+            // `openTallNormalOcclusionWidth` — this pose's own normal,
+            // un-grown ring width — so the stage holds the exact
+            // position and size it already had before any pill grew,
+            // however wide `occlusion` reports itself this frame.
+            let cappedColumnWidth = max(Rail.hit, min(occlusion?.width ?? 0, Self.openTallNormalOcclusionWidth))
+            let stageAvail = CGRect(x: avail.minX, y: avail.minY,
+                                     width: max(0, containerSize.width - cappedColumnWidth - avail.minX),
+                                     height: avail.height)
+            let stageFitted = fitRect(in: stageAvail, aspectRatio: aspectRatio)
+            if stageFitted.width < stageAvail.width {
+                return CGRect(x: stageAvail.maxX - stageFitted.width, y: stageFitted.minY, width: stageFitted.width, height: stageFitted.height)
             }
             if let visual = railVisualEdge(containerSize: containerSize, safeAreaTop: safeAreaTop) {
-                let rightEdge = max(avail.maxX, visual.x - Self.minChromeRailClearance)
-                let widerBox = CGRect(x: 0, y: avail.minY, width: rightEdge, height: avail.height)
+                let rightEdge = max(stageAvail.maxX, visual.x - Self.minChromeRailClearance)
+                let widerBox = CGRect(x: 0, y: stageAvail.minY, width: rightEdge, height: stageAvail.height)
                 return fitRect(in: widerBox, aspectRatio: aspectRatio)
             }
+            return stageFitted
         }
         return fitted
     }
@@ -615,6 +637,27 @@ struct DuoLayout {
     /// the measurement this came from.
     static let openTallRingInsetFromTrailingEdge: CGFloat = 47.7
 
+    /// Pose 5's own normal, un-grown ring+time `occlusion` width —
+    /// `stageRect`'s own `.openTall` branch caps the column width it
+    /// reads at this, so a Live Activity's pill (which reports through
+    /// the SAME `occlusion` field, with no way to tell "ring" from
+    /// "grown pill" apart) cannot shrink the STAGE's own available
+    /// width, only the real ring/time's own normal footprint can.
+    ///
+    /// Confirmed this session (`-cloudfull-log-rotation`'s own `occ-`
+    /// field, this pose's own 669×951 Duo sim window, LA Demo app):
+    /// `134` with no activity, `226` with one running — the owner's
+    /// own bug report ("stage 29,0 534×951, was 0,0 534×951") was a
+    /// plain 9:16 video flipping from this file's own height-bound
+    /// branch into the wide-video branch purely because the UNCAPPED
+    /// column width had grown, not because the video itself changed.
+    /// Flagged like every other "measured, no API" constant in this
+    /// file (see `openTallRingInsetFromTrailingEdge`'s own comment,
+    /// just above) — a different window size or a larger Dynamic Type
+    /// setting could measure a different normal width; this has not
+    /// been checked against either.
+    static let openTallNormalOcclusionWidth: CGFloat = 134
+
     // MARK: - Rail column (step 3; extended by steps 4, 5, and the pose fixes)
     //
     // The action rail (Keep, Share, Album, Shrink, Delete) moves off
@@ -710,21 +753,24 @@ struct DuoLayout {
     /// `occlusion.minY` a given frame/pose actually reads, rather than
     /// freezing one sample as a fixed line on one screen size.
     ///
-    /// Checked this session, on the Duo sim: started the LA Demo
-    /// activity (`com.cloudfull.livedemo`, "Start timer"), captured
-    /// pose 1V's own closed display (`--display=1`) before and after.
-    /// The simulator does NOT reproduce the push the owner's own real
-    /// screenshot showed — `occlusion`'s rendered time+ring sat at the
-    /// identical pixel position in both captures; the grown pill drew
-    /// as a dark shape ABOVE them instead of displacing anything. So
-    /// this stays set from the owner's own real-hardware figures
-    /// (pill ≈121pt, plus time + ring) rather than a sim measurement —
-    /// the sim cannot confirm or correct it either way. Still flagged
-    /// like every other "measured, no API" constant in this file (see
-    /// `openTallRingInsetFromTrailingEdge`'s own comment): confirm
-    /// against a REAL closed Duo screen with the activity running
-    /// before trusting this number.
-    static let liveActivityStatusGrowth: CGFloat = 180
+    /// Checked twice this session, on the Duo sim, pose 1V, closed
+    /// display (`--display=1`), LA Demo's own timer activity: the
+    /// FIRST check (Cloudfull relaunched straight back to the front
+    /// right after starting the activity) saw no push at all —
+    /// `occlusion`'s rendered time+ring sat at the identical pixel
+    /// position with the pill on or off. The owner's own live check
+    /// explains why: the pill only shows while the app that owns it
+    /// is NOT the one in front, so relaunching Cloudfull immediately
+    /// suppressed it every time. The owner's own SECOND check (pill
+    /// actually showing) measured `occlusion.minY` at 29pt and the
+    /// grown stack's own bottom at ≈235pt — this constant is that
+    /// gap, 206pt, so `closedStatusWorstCaseBottom` reproduces 235
+    /// from a live `occlusion.minY` of 29 and travels correctly to
+    /// whatever `occlusion.minY` a different pose/window reads.
+    /// Flagged like every other "measured, no API" constant in this
+    /// file (see `openTallRingInsetFromTrailingEdge`'s own comment)
+    /// all the same — one sample, one window size.
+    static let liveActivityStatusGrowth: CGFloat = 206
 
     /// Where the rail column sits, and how wide it is, this frame — or
     /// `nil` when no column applies.
@@ -949,18 +995,67 @@ struct DuoLayout {
         }
         let chinTop = chinCenter.y - Rail.hit / 2
         let bottom = chinTop - Self.railChinGap
+        // Owner re-adapt (live check, pose 1V, pill running with
+        // Cloudfull in front — the pill only shows while its OWN app
+        // is NOT frontmost, which is why an earlier check of this same
+        // code, done with Cloudfull in front, saw no push at all):
+        // Keep's top touched the grown ring's own dots at a bare 0pt
+        // gap. `Self.railKeepClearance` (24pt) is the floor required
+        // ABOVE `closedStatusWorstCaseBottom`'s own worst-case line,
+        // not just clear of it.
+        let minTop = closedStatusWorstCaseBottom(containerSize: containerSize, safeAreaTop: safeAreaTop) + Self.railKeepClearance
         let naiveTop = bottom - Rail.columnHeight
-        let minTop = closedStatusWorstCaseBottom(containerSize: containerSize, safeAreaTop: safeAreaTop)
         guard naiveTop < minTop else {
             return (naiveTop, bottom, Rail.spacing)
         }
+        let compressed = Self.compressedRailLayout(bottom: bottom, minTop: minTop, gap: Self.railChinGap)
+        guard compressed.pitch < Self.railMinPitch else {
+            return (compressed.top, bottom, compressed.spacing)
+        }
+        // Still too tight at the normal gap (a short bar-on window —
+        // 3/4/4W's own landscape column, the owner's own flag: "check
+        // it fits there too"): closing the gap to the chin to
+        // `railChinGapCompressed` buys a little more room before
+        // falling back to the pitch this produces, whatever it is —
+        // `Rail.itemHeight` itself is still never compressed.
+        let tighterGap = Self.railChinGapCompressed
+        let tighterBottom = chinTop - tighterGap
+        let tighterCompressed = Self.compressedRailLayout(bottom: tighterBottom, minTop: minTop, gap: tighterGap)
+        return (tighterCompressed.top, tighterBottom, tighterCompressed.spacing)
+    }
+
+    /// Shared by `railVerticalExtent`'s own two compression attempts
+    /// (normal gap, then the tighter one) — `Rail.itemHeight` (each
+    /// button's own real size) is never compressed, only the air
+    /// between items, floored at 0 (overlapping items, the last-resort
+    /// case neither attempt is expected to reach in practice).
+    private static func compressedRailLayout(bottom: CGFloat, minTop: CGFloat, gap: CGFloat) -> (top: CGFloat, spacing: CGFloat, pitch: CGFloat) {
         let compressedHeight = max(Rail.itemHeight * 5, bottom - minTop)
         let compressedSpacing = max(0, (compressedHeight - Rail.itemHeight * 5) / 4)
-        return (bottom - compressedHeight, bottom, compressedSpacing)
+        return (bottom - compressedHeight, compressedSpacing, Rail.itemHeight + compressedSpacing)
     }
 
     /// See `railVerticalExtent`'s own doc comment.
     static let railChinGap: CGFloat = Rail.spacing
+
+    /// Owner re-adapt (live check, pose 1V): the floor `railVerticalExtent`
+    /// requires between Keep's own top and `closedStatusWorstCaseBottom`'s
+    /// own worst-case line — not merely "not overlapping," real air.
+    static let railKeepClearance: CGFloat = 24
+
+    /// Owner re-adapt (live check): the smallest pitch (item height +
+    /// spacing) `railVerticalExtent`'s own compression is allowed to
+    /// reach before it also closes `railChinGap` down to
+    /// `railChinGapCompressed` for a little more room, rather than
+    /// compressing the pitch further still.
+    static let railMinPitch: CGFloat = 52
+
+    /// Owner re-adapt (live check): `railChinGap`'s own fallback value
+    /// once a bar-on window is short enough that the normal 20pt gap
+    /// cannot leave `railMinPitch` between items even at Keep's own
+    /// required clearance — a shorter landscape column (3/4/4W) is the
+    /// owner's own flagged case to check this against.
+    static let railChinGapCompressed: CGFloat = 12
 
     /// The actual bottom edge of the rail's last button (Delete) this
     /// frame, in the page's own coordinate space (0 at the top) —

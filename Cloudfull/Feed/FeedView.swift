@@ -1479,7 +1479,18 @@ struct FeedView: View {
         let statusBlock = duoLayout.statusBlock(containerSize: containerSize, safeAreaTop: safeAreaTop)
         let stageRect = duoLayout.stageRect(containerSize: containerSize, safeAreaTop: safeAreaTop)
         let leading = stageRect.minX + 16
-        let trailing = stageRect.maxX - 16
+        // Owner re-adapt (Live Activity pass): a Live Activity's own
+        // pill grows the status block LEFTWARD on pose 5 (occlusion
+        // itself widens — unlike the closed display, this pose DOES
+        // see it) and used to cover Bin, since `stage.maxX - 16` alone
+        // never read it. Clamped to `occlusion.minX - 8`, whatever
+        // width that region reports this frame, so Bin stays clear at
+        // any pill width instead of only the un-grown one. `nil`
+        // occlusion (no status block, or a stale cross-display frame
+        // `statusBlock` already filters out) leaves the plain
+        // stage-edge trailing unchanged.
+        let occlusionClamp = duoLayout.occlusion.map { $0.minX - 8 } ?? .infinity
+        let trailing = min(stageRect.maxX - 16, occlusionClamp)
         let width = max(0, trailing - leading)
         let rowHeight: CGFloat = 40
         let centerY = duoLayout.pose == .closed ? safeAreaTop + 8 + rowHeight / 2 : statusBlock.midY

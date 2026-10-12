@@ -526,10 +526,23 @@ struct PlayerPageView: View {
         let hSC = horizontalSizeClass.map { "\($0)" } ?? "nil"
         let vSC = verticalSizeClass.map { "\($0)" } ?? "nil"
         let insets = duoLayout.debugSafeAreaInsets
+        // Owner re-adapt (Live Activity pass, pose 5): the SAME
+        // `stageRect` call the body itself uses (line ~640 above,
+        // same `windowSize`/`safeAreaTop`/aspect rule) — so a Live
+        // Activity's own occlusion growth, and whether the stage
+        // itself shifted or shrank in response, show on the same
+        // line as the `occ-` reading that caused it, instead of
+        // needing a guide-overlay screenshot to see either one.
+        let stage = duoLayout.stageRect(
+            containerSize: windowSize,
+            safeAreaTop: safeAreaTop,
+            aspectRatio: (useVideoAspect || duoLayout.pose == .openTall) ? videoAspectRatio : 9.0 / 16.0
+        )
         let message = "rotation_\(windowOrientationProbeName)_hSC-\(hSC)_vSC-\(vSC)_\(Int(windowSize.width))x\(Int(windowSize.height))"
             + "_pose-\(duoLayout.pose.rawValue)_div-\(rectProbe(duoLayout.division))_occ-\(rectProbe(duoLayout.occlusion))_\(hingeProbe)"
             + "_rawdiv-\(rectProbe(duoLayout.debugRawDivision))_insets-\(Int(insets.top)),\(Int(insets.leading)),\(Int(insets.bottom)),\(Int(insets.trailing))"
             + "_allowsLandscape-\(RotationPolicy.shared.allowsLandscape)_aspect-\(String(format: "%.3f", videoAspectRatio))_wide-\(videoIsLandscape)"
+            + "_stage-\(rectProbe(stage))"
         Self.rotationLog.notice("\(message, privacy: .public)")
         DiagnosticsLog.shared.log("Rotation", message)
     }
@@ -1127,6 +1140,17 @@ struct PlayerPageView: View {
             logRotationPose()
         }
         .onChange(of: duoLayout.hinge) { _, _ in
+            logRotationPose()
+        }
+        // Owner re-adapt (Live Activity pass): a Live Activity's own
+        // pill changes `occlusion` (pose 5 — the closed display's own
+        // `occlusion` does NOT change, see `closedStatusWorstCaseBottom`'s
+        // own comment in DuoLayout.swift) with no pose, hinge, or
+        // `proxy.size` change alongside it, so neither call above ever
+        // fired for it. This is the one line that lets
+        // `-cloudfull-log-rotation` show occlusion growing/shrinking
+        // around a Live Activity starting or ending.
+        .onChange(of: duoLayout.occlusion) { _, _ in
             logRotationPose()
         }
         .onChange(of: isMuted) { _, newValue in
