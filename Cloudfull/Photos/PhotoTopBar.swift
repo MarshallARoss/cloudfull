@@ -30,9 +30,13 @@ struct PhotoTopBar: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
+            // Review fix: Bin is the OUTERMOST control in the mirrored
+            // row, same as `FeedView.topChrome`'s own mirrored branch —
+            // the owner's rule, "Bin outermost, same as the mirrored
+            // top row." This row used to read counter-then-Bin.
             if isMirrored {
-                counterCapsule
                 binButton
+                counterCapsule
                 Spacer(minLength: 8)
                 PhotoFilterMenuView(store: photoOptionsStore)
                 liveToggleButton

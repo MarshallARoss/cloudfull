@@ -62,6 +62,28 @@ struct DuoLayout {
     /// inset on `barEdge`'s side. Zero whenever `barEdge` is `nil`.
     let barWidth: CGFloat
 
+    /// True when `barWidth` above came from `Self.fallbackBarWidth`
+    /// rather than a real measured inset — the known Apple bug
+    /// (FB24906205) where a LEADING bar's own `insets.leading` reads
+    /// `0` even while the bar is genuinely showing. `false` on
+    /// `.none`/`.regularPhone(leftHandedControls:)`, where there is no
+    /// bar to measure at all. `PlayerPageView`'s own
+    /// `-cloudfull-log-rotation` line appends this as `barFallback-`,
+    /// so a real leading-bar reading that finally stops needing the
+    /// fallback shows up there without a guide-overlay screenshot.
+    ///
+    /// `var`, with a `false` default, rather than a plain `let` like
+    /// every other field here — a `let` with an inline default is
+    /// fixed at that value and drops OUT of the synthesized memberwise
+    /// initializer entirely, which would make it un-settable from
+    /// `current(...)` below. The default itself is what lets that
+    /// initializer still accept a construction that omits this
+    /// parameter — needed for
+    /// `Cloudfull/Design/DuoPosePreviews.swift`'s own `DuoLayout(...)`
+    /// calls, an untracked preview file this review pass must leave
+    /// untouched.
+    var usedBarWidthFallback: Bool = false
+
     /// The first active `.occlusion` reserved region this frame reports
     /// (the inner camera), or `nil` when none is active.
     let occlusion: CGRect?
@@ -116,13 +138,18 @@ struct DuoLayout {
     /// configuration to switch into); the SYSTEM's own
     /// `toolbarVerticalEdge == .leading` (never overridden by the
     /// setting below — the bar's own real side always wins when there
-    /// IS one); and, only when there is no bar at all
-    /// (`toolbarVerticalEdge == nil` — a regular iPhone, or the Duo's
-    /// own bar-off poses 5/6), the owner's manual
+    /// IS one); and, only with no bar at all AND no `hinge` either
+    /// (`toolbarVerticalEdge == nil && hinge == nil` — a regular
+    /// iPhone; NOT a bar-off Duo pose reached by unfolding, like 5 or
+    /// 6, since `hinge` there is non-nil), the owner's manual
     /// `leftHandedControls` setting (`SettingsView`'s own "Left-handed
     /// controls" toggle, read live the same way every other `current(...)`
     /// parameter already is — this struct itself stays a pure value
-    /// with no `UserDefaults`/`AppStorage` read of its own).
+    /// with no `UserDefaults`/`AppStorage` read of its own). Owner
+    /// decision: "the Duo follows the system bar; the Left-handed
+    /// controls setting is for regular iPhones only" — see
+    /// `current(...)`'s own comment on this exact line for the full
+    /// reasoning and the unfold-from-pose-3 bug it fixes.
     ///
     /// Every function below that hardcodes a `.trailing`-only formula —
     /// `railColumn`'s own open (pose 5) branch, `ringCenteredColumnX`'s
@@ -173,7 +200,7 @@ struct DuoLayout {
     /// pixel-identical, and this value is only ever handed out before
     /// `current(...)` has had a chance to read anything at all (the
     /// very first frame, on an OS below iOS 27.1).
-    static let none = DuoLayout(barEdge: nil, barWidth: 0, occlusion: nil, division: nil,
+    static let none = DuoLayout(barEdge: nil, barWidth: 0, usedBarWidthFallback: false, occlusion: nil, division: nil,
                                 pose: .regularPhone, hinge: nil, hingeDegrees: nil,
                                 debugRawDivision: nil, debugSafeAreaInsets: EdgeInsets(),
                                 isMirrored: false, isUpsideDown: false)
@@ -194,7 +221,7 @@ struct DuoLayout {
     /// whether `current(...)`'s own richer (27.1-only) reading is
     /// also available, never whether the setting itself applies.
     static func regularPhone(leftHandedControls: Bool) -> DuoLayout {
-        DuoLayout(barEdge: nil, barWidth: 0, occlusion: nil, division: nil,
+        DuoLayout(barEdge: nil, barWidth: 0, usedBarWidthFallback: false, occlusion: nil, division: nil,
                   pose: .regularPhone, hinge: nil, hingeDegrees: nil,
                   debugRawDivision: nil, debugSafeAreaInsets: EdgeInsets(),
                   isMirrored: DuoForceMirror.isOn || leftHandedControls, isUpsideDown: false)
@@ -258,21 +285,40 @@ struct DuoLayout {
         // ever taken), the one configuration actually confirmed — the
         // moment a real leading-bar reading on real hardware shows a
         // non-zero `insets.leading`, this fallback simply never
-        // triggers again. `-cloudfull-log-rotation` should flag
-        // whenever this branch fires (print a `barFallback` field) so a
-        // real device check does not need to go looking for it.
-        let width = (toolbarVerticalEdge == .leading && measuredWidth <= 0) ? Self.fallbackBarWidth : measuredWidth
-        // Mirrored-layout round: the bar's own real side always wins
-        // over the manual setting when there IS a bar — the setting
-        // only ever applies with no bar at all (`toolbarVerticalEdge
-        // == nil` — a regular iPhone, or the Duo's own bar-off poses 5
-        // and 6). `DuoForceMirror.isOn` (`-cloudfull-force-mirror`,
-        // DEBUG only) forces this `true` regardless of either signal,
+        // triggers again. `usedBarWidthFallback` (this struct's own
+        // stored field) is this same test, named, so
+        // `-cloudfull-log-rotation` can print a `barFallback` field
+        // instead of a real device check going looking for it.
+        let usedBarWidthFallback = toolbarVerticalEdge == .leading && measuredWidth <= 0
+        let width = usedBarWidthFallback ? Self.fallbackBarWidth : measuredWidth
+        // Owner decision (relayed, iPhone Duo mirrored-layout round):
+        // "the Duo follows the system bar; the Left-handed controls
+        // setting is for regular iPhones only." The bar's own real
+        // side still always wins when there IS one
+        // (`toolbarVerticalEdge == .leading`) — unchanged. The manual
+        // `leftHandedControls` setting now also requires `hinge` to be
+        // `nil` — `hinge` (this function's own parameter) reads
+        // non-nil only on a foldable device (`DuoHingeStatus`'s own
+        // comment), so a bar-off Duo pose reached by unfolding (5,
+        // open-tall; 6, laptop) no longer mirrors from the setting.
+        // Before this fix, unfolding from pose 3 (bar trailing,
+        // right-handed) to pose 5 (no bar) flipped the whole layout to
+        // the owner's own `leftHandedControls` reading, even though
+        // nothing about the setting changed — only the bar going away.
+        // A regular iPhone's own `hinge` is always `nil` (no hinge to
+        // read), so this is still the one case the setting actually
+        // controls. `hinge` can itself read `nil` for the very first
+        // frame on a real Duo, before `HingeReader`'s first
+        // `onHingeChange` delivery — a transient one-frame gap, not a
+        // device check, and not worth guarding here: the next frame's
+        // real hinge reading corrects it on its own.
+        // `DuoForceMirror.isOn` (`-cloudfull-force-mirror`, DEBUG only)
+        // still forces this `true` regardless of every other signal,
         // for testing every pose's own mirrored geometry on the Duo
         // sim without a real leading-bar configuration to switch into.
         let isMirrored = DuoForceMirror.isOn
             || toolbarVerticalEdge == .leading
-            || (toolbarVerticalEdge == nil && leftHandedControls)
+            || (toolbarVerticalEdge == nil && hinge == nil && leftHandedControls)
         // Round 2 (Opus diagnosis): `reservedRegions` reports each
         // frame relative to THIS view's own local origin — `proxy`'s
         // own (0, 0), which sits `insets.top`/`insets.leading` below
@@ -340,11 +386,24 @@ struct DuoLayout {
         // Split View layout in this pose, since the fold is the split
         // boundary, so a fold that leaves less than `minFoldPageExtent`
         // on either side counts as no fold at all.
+        //
+        // Review fix: for a VERTICAL fold (the book/split case, this
+        // `if` branch), each side's own real usable extent is the raw
+        // gap to that edge MINUS whatever bar column already sits on
+        // that same edge — a bar-on page has that much less real page
+        // left than the raw division gap alone reports. Reuses the
+        // same `width` this function already computed above for
+        // `barWidth` itself, so there is no second measurement to
+        // drift out of sync with it.
         let divisionFrame = rawDivisionFrame.flatMap { (frame: CGRect) -> CGRect? in
             guard windowBounds.contains(frame) else { return nil }
             if frame.height > frame.width {
-                if frame.minX < Self.minFoldPageExtent
-                    || windowSize.width - frame.maxX < Self.minFoldPageExtent {
+                let leadingBarWidth = toolbarVerticalEdge == .leading ? width : 0
+                let trailingBarWidth = toolbarVerticalEdge == .trailing ? width : 0
+                let leftExtent = frame.minX - leadingBarWidth
+                let rightExtent = windowSize.width - frame.maxX - trailingBarWidth
+                if leftExtent < Self.minFoldPageExtent
+                    || rightExtent < Self.minFoldPageExtent {
                     return nil
                 }
             } else {
@@ -370,8 +429,23 @@ struct DuoLayout {
         // (`-cloudfull-force-upside-down`, DEBUG only) forces it, the
         // same testing role `DuoForceMirror` already plays for
         // `isMirrored`.
+        //
+        // Review fix: the `midY` check now also requires the occlusion
+        // frame itself to fall inside this window (`windowBounds`,
+        // already computed above for `divisionFrame`'s own containment
+        // check) — a stale cross-display reading (seen live, pose 5:
+        // `occ-457,385,212,84` against a 469×669 window, well past
+        // both the window's own trailing and bottom edges) must not
+        // flip `isUpsideDown`, same reasoning as `divisionFrame`'s own
+        // filter just above. Live sim 2026-10-12: iOS never actually
+        // offers `portraitUpsideDown` on the closed Duo — the Home
+        // Screen and Safari both stay plain upright portrait there —
+        // so `isUpsideDown` is reachable only through
+        // `DuoForceUpsideDown`'s own DEBUG flag today; this guard just
+        // keeps a stale reading from ever flipping it once a real
+        // upside-down configuration does exist to read.
         let isUpsideDown = pose == .closed
-            && (DuoForceUpsideDown.isOn || (occlusionFrame.map { $0.midY > windowSize.height / 2 } ?? false))
+            && (DuoForceUpsideDown.isOn || (occlusionFrame.map { windowBounds.contains($0) && $0.midY > windowSize.height / 2 } ?? false))
         // Round 2 debug probe only (`debugRawDivision`'s own comment):
         // the SAME raw query, but `.includeInactive` and left in
         // `proxy`'s own un-offset local space — a diagnostic snapshot
@@ -382,6 +456,7 @@ struct DuoLayout {
         return DuoLayout(
             barEdge: toolbarVerticalEdge,
             barWidth: toolbarVerticalEdge == nil ? 0 : width,
+            usedBarWidthFallback: toolbarVerticalEdge == nil ? false : usedBarWidthFallback,
             occlusion: occlusionFrame,
             division: divisionFrame,
             pose: pose,
@@ -1241,6 +1316,19 @@ struct DuoLayout {
         }
     }
 
+    /// Minimum real page width (vertical fold) or height (horizontal
+    /// fold) a division frame must leave on EACH side of itself to
+    /// count as an actual fold — below this, the "page" on that side
+    /// is too thin to be real, and `current(...)` drops the division
+    /// entirely (see its own comment, book pose, 2026-10-12).
+    ///
+    /// NIT review fix: this constant, and this doc comment, used to
+    /// sit AFTER the long doc block below — which documents
+    /// `wideOcclusionThreshold`, not this constant — so this own doc
+    /// read as the TAIL of that unrelated block instead of its own
+    /// comment. Moved above it so each constant keeps its own doc.
+    static let minFoldPageExtent: CGFloat = 120
+
     /// The rail/chin column's own horizontal CENTRE this frame, for
     /// positioning content inside it — `nil` when no column applies.
     ///
@@ -1321,13 +1409,6 @@ struct DuoLayout {
     /// pose — reverted: confirmed via the same log field that only
     /// ONE region is ever active here, so there was never a second,
     /// correct one to pick.
-    /// Minimum real page width (vertical fold) or height (horizontal
-    /// fold) a division frame must leave on EACH side of itself to
-    /// count as an actual fold — below this, the "page" on that side
-    /// is too thin to be real, and `current(...)` drops the division
-    /// entirely (see its own comment, book pose, 2026-10-12).
-    static let minFoldPageExtent: CGFloat = 120
-
     static let wideOcclusionThreshold: CGFloat = 60
 
     /// Owner correction (relayed, live 1V + pose-5 check): "General
@@ -1925,10 +2006,22 @@ struct DuoLayout {
     /// leaves the trailing half, so the mirrored check correctly finds
     /// nothing on the (now-checked) leading half and falls back to the
     /// zero-width leading anchor instead of a wrong reading.
+    ///
+    /// NIT review fix (pose 5): the fallback above used to throw the
+    /// real occlusion away outright on that exact `-force-mirror` case
+    /// — a real, live reading discarded for a synthetic zero-width
+    /// box, just because the hardware ring itself never physically
+    /// moves to the leading half. `ringCenteredColumnX`'s own rule
+    /// already covers this: "mirrored x = W − (normal x)." So once an
+    /// occlusion exists at all, this reflects it across the window's
+    /// own width instead of discarding it — same `y`/size, only `x`
+    /// moves — and only falls to the synthetic box with no occlusion
+    /// to reflect in the first place.
     func statusBlock(containerSize: CGSize, safeAreaTop: CGFloat) -> CGRect {
         if isMirrored {
-            if let occlusion, occlusion.maxX < containerSize.width / 2 {
-                return occlusion
+            if let occlusion {
+                return CGRect(x: containerSize.width - occlusion.maxX, y: occlusion.minY,
+                               width: occlusion.width, height: occlusion.height)
             }
             return CGRect(x: 0, y: 0, width: 0, height: safeAreaTop)
         }
@@ -2093,9 +2186,20 @@ struct DuoLayout {
     /// reverses, builds from the chin downward" (the owner's own 1V-
     /// upside-down description, the same principle applied here) —
     /// the chin moves from slot 5 (trailing) to slot 0 (leading), and
-    /// the five rail buttons shift into slots 1–5, keeping their own
-    /// Keep→Delete order: the row still "builds away from the chin,"
-    /// just from the other end.
+    /// the five rail buttons shift into slots 1–5.
+    ///
+    /// Review fix: those five slots must ALSO reverse their own
+    /// order, not just move over — the owner's general rule, "mirrored
+    /// x = W − (normal x)." Slot 1, right next to the chin, is where
+    /// slot 5 (also right next to the chin, in the unmirrored row) used
+    /// to sit — Delete, not Keep. Reading `xs.suffix(5)` in ARRAY order
+    /// (ascending x) used to put Keep next to the chin and Delete at
+    /// the far end instead, the mirror of the unmirrored row's own
+    /// geometric POSITIONS without mirroring which BUTTON sits at each
+    /// one. `.reversed()` fixes that: the mirrored row now reads
+    /// left-to-right "chin, Delete, Shrink, Album, Share, Keep" — each
+    /// button the same distance from the chin, on either side, as it
+    /// was before mirroring.
     func laptopRailRow(containerSize: CGSize, safeAreaBottom: CGFloat) -> (centers: [CGPoint], hairlineX: CGFloat, hairlineY: CGFloat, chinCenter: CGPoint)? {
         guard let bottom = laptopBottomRect(containerSize: containerSize, safeAreaBottom: safeAreaBottom) else { return nil }
         let band = Self.laptopBand(bottom, 1)
@@ -2105,7 +2209,7 @@ struct DuoLayout {
         let slot = usable / 6
         let xs = (0..<6).map { leading + (CGFloat($0) + 0.5) * slot }
         if isMirrored {
-            let centers = xs.suffix(5).map { CGPoint(x: $0, y: y) }
+            let centers = xs.suffix(5).reversed().map { CGPoint(x: $0, y: y) }
             let chinCenter = CGPoint(x: xs[0], y: y)
             return (centers: Array(centers), hairlineX: (xs[0] + xs[1]) / 2, hairlineY: y, chinCenter: chinCenter)
         }

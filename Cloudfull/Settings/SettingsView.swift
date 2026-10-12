@@ -298,8 +298,14 @@ struct SettingsView: View {
         } header: {
             Text("Layout")
         } footer: {
+            // Review fix (owner decision: "the Duo follows the system
+            // bar; the Left-handed controls setting is for regular
+            // iPhones only"): the old footer said this setting applies
+            // with no bar showing — no longer true. `DuoLayout
+            // .isMirrored`'s own comment has the full rule: on the
+            // Duo, this toggle now has no effect at all.
             if duoLayout.pose != .regularPhone {
-                Text("On an iPhone Duo, the system sets the bar's side when a vertical bar is showing. This setting applies only when there is no bar.")
+                Text("On an iPhone Duo, the controls always follow the system bar's side. This setting has no effect here.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }

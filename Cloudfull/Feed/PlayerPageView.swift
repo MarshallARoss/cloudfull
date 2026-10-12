@@ -539,6 +539,13 @@ struct PlayerPageView: View {
     /// directly, so a stale aspect from the PREVIOUS page's own video
     /// shows up here as a mismatch against what the centred page
     /// actually holds, rather than staying a guess.
+    ///
+    /// Review fix: adds `barFallback-` (`duoLayout
+    /// .usedBarWidthFallback`), the FB24906205 leading-bar fallback
+    /// this file's own `current(...)` comment already promised a log
+    /// field for — true whenever `width` came from
+    /// `DuoLayout.fallbackBarWidth` rather than a real measured inset,
+    /// so a real device check does not need to go looking for it.
     private func logRotationPose() {
         guard isActive, DiagnosticsGate.isOn("-cloudfull-log-rotation") else { return }
         let hSC = horizontalSizeClass.map { "\($0)" } ?? "nil"
@@ -568,6 +575,7 @@ struct PlayerPageView: View {
             + "_rawdiv-\(rectProbe(duoLayout.debugRawDivision))_insets-\(Int(insets.top)),\(Int(insets.leading)),\(Int(insets.bottom)),\(Int(insets.trailing))"
             + "_allowsLandscape-\(RotationPolicy.shared.allowsLandscape)_aspect-\(String(format: "%.3f", videoAspectRatio))_wide-\(videoIsLandscape)"
             + "_stage-\(rectProbe(stage))_ringX-\(ringX.map { String(format: "%.1f", $0) } ?? "nil")"
+            + "_barFallback-\(duoLayout.usedBarWidthFallback)"
         Self.rotationLog.notice("\(message, privacy: .public)")
         DiagnosticsLog.shared.log("Rotation", message)
     }

@@ -1358,11 +1358,19 @@ struct FeedView: View {
         // mirror — "top row mirrored, Bin top-left." The shrink
         // progress capsule (not suppressed on any pose) stays the
         // child next to the `Spacer`, on whichever side that now is.
+        //
+        // Review fix: Bin must be the OUTERMOST control in the
+        // mirrored row, not the counter — the owner's own rule, "Bin
+        // outermost, same as the mirrored top row," confirmed against
+        // `pose5TopRow`'s own mirrored branch just below in this file
+        // (`binButton()` first, then `counterCapsule`). This row used
+        // to read counter-then-Bin, the one pair out of step with that
+        // rule.
         return HStack(alignment: .top, spacing: 8) {
             if duoLayout.isMirrored {
                 if !suppressDefaultRow {
-                    counterCapsule
                     binButton()
+                    counterCapsule
                 }
                 Spacer(minLength: 8)
                 if let job = activeShrinkJob, let text = shrinkActiveProgressText {
@@ -1536,7 +1544,17 @@ struct FeedView: View {
         // occlusion (no status block, or a stale cross-display frame
         // `statusBlock` already filters out) leaves the plain
         // stage-edge trailing unchanged.
-        let occlusionClamp = duoLayout.occlusion.map { $0.minX - 8 } ?? .infinity
+        //
+        // Review fix (1H): the clamp above only ever makes sense when
+        // the occlusion genuinely sits PAST `leading` — a real Live
+        // Activity pill grown leftward on the trailing side. In 1H the
+        // reported occlusion sits at `x = 29`, well left of `leading`
+        // itself, so the old unconditional clamp read `29 - 8 = 21`
+        // and collapsed this whole row to zero width. Only applying
+        // the clamp when `occlusion.minX > leading` keeps that
+        // unrelated, near-leading-edge occlusion from ever touching
+        // this row's own trailing edge.
+        let occlusionClamp = duoLayout.occlusion.map { $0.minX > leading ? $0.minX - 8 : .infinity } ?? .infinity
         let trailing = min(stageRect.maxX - 16, occlusionClamp)
         let width = max(0, trailing - leading)
         let rowHeight: CGFloat = 40
@@ -3582,8 +3600,21 @@ private struct FeedPageContent: View {
     /// and `FeedView.laptopCaptionDateLineCenterY`'s. `duoLaptopCaption`
     /// passes `isActive` here, so only the one page genuinely on
     /// screen (not a preloaded neighbor) ever reports a position.
+    ///
+    /// Review fix: the `VStack`'s own `alignment` used to stay
+    /// `.leading` regardless of `duoLayout.isMirrored` — every call
+    /// site already flips its OWN outer `.frame(alignment:)` to put
+    /// the box on the trailing side when mirrored (see
+    /// `duoOpenWideCaption`/`duoLaptopCaption`'s own bodies), but the
+    /// text's own reading edge inside that box stayed leading either
+    /// way — wrong once the two lines genuinely differ in width (a
+    /// long place name on the date line, say): the shorter line should
+    /// hug the TRAILING edge when mirrored, matching the comment near
+    /// `duoLaptopCaption`'s own mirrored branch ("the TEXT's own
+    /// reading edge within it" flips too, not only the block's
+    /// position).
     private func captionTexts(measureDateLineCenter: Bool = false) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: duoLayout.isMirrored ? .trailing : .leading, spacing: 3) {
             Text(dateLine)                           // "<date> · <time> · <place>"
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(.white)

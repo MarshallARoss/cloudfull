@@ -1457,13 +1457,17 @@ struct PhotoPostView: View {
         // Mirrored-layout round (owner call, relayed: "mirror it too,
         // consistency for left-handed users"): the group reads in the
         // other direction and sits flush against the trailing edge
-        // instead of the leading one. The old `Spacer(minLength: 0)`
-        // was already a no-op — this row never expanded to fill its
-        // own width on its own (`postBody`'s own `VStack(alignment:
-        // .leading)` only ever gave it its tight content width) — so
-        // it is dropped here rather than conditionally repositioned;
-        // the `.frame(maxWidth: .infinity, alignment:)` below is what
-        // actually moves the group now.
+        // instead of the leading one. `.frame(maxWidth: .infinity,
+        // alignment:)` below is what moves the group to whichever
+        // edge applies.
+        //
+        // Review fix (owner call, relayed): the UNMIRRORED branch must
+        // stay byte-for-byte the pre-mirrored-round layout — restored
+        // the original trailing `Spacer(minLength: 0)` (and the 14pt
+        // gap `HStack(spacing: 14)` already gives it) exactly as
+        // `git diff duo-before-night` shows it, rather than trusting
+        // the "already a no-op" reasoning this comment used to make
+        // for dropping it. The mirrored branch is unchanged.
         HStack(spacing: 14) {
             if isMirrored {
                 trashButton
@@ -1475,6 +1479,7 @@ struct PhotoPostView: View {
                 albumButton
                 shareButton
                 trashButton
+                Spacer(minLength: 0)
             }
         }
         .frame(maxWidth: .infinity, alignment: isMirrored ? .trailing : .leading)
