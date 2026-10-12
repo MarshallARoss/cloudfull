@@ -20,18 +20,31 @@ struct PhotoTopBar: View {
     @Binding var isLiveOn: Bool
     let safeAreaTop: CGFloat
     let onOpenBinRequested: () -> Void
+    /// Mirrored-layout round: true when the host's own `DuoLayout
+    /// .isMirrored` reads true — see `FeedView.topChrome`'s identical
+    /// mirror for the reasoning. Default `false`, pixel-identical to
+    /// before this round.
+    var isMirrored: Bool = false
 
     @ObservedObject private var photoOptionsStore = PhotoOptionsStore.shared
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
-            liveToggleButton
-            // The photo-specific filter menu, distinct from the video
-            // feed's filter menu.
-            PhotoFilterMenuView(store: photoOptionsStore)
-            Spacer(minLength: 8)
-            counterCapsule
-            binButton
+            if isMirrored {
+                counterCapsule
+                binButton
+                Spacer(minLength: 8)
+                PhotoFilterMenuView(store: photoOptionsStore)
+                liveToggleButton
+            } else {
+                liveToggleButton
+                // The photo-specific filter menu, distinct from the
+                // video feed's filter menu.
+                PhotoFilterMenuView(store: photoOptionsStore)
+                Spacer(minLength: 8)
+                counterCapsule
+                binButton
+            }
         }
         .padding(.horizontal, 12)
         .padding(.top, StageGeometry.chromeTop(safeAreaTop: safeAreaTop))

@@ -318,11 +318,17 @@ struct PhotoFeedView: View {
                     trashService: trashService,
                     isLiveOn: $isLiveOn,
                     safeAreaTop: safeAreaTop,
-                    onOpenBinRequested: { Usage.shared.binOpened(); showTrash = true }
+                    onOpenBinRequested: { Usage.shared.binOpened(); showTrash = true },
+                    isMirrored: duoLayout.isMirrored
                 )
+                // Mirrored-layout round: `availableRect` already
+                // excludes the column from whichever edge it is on —
+                // this outer alignment just needs to match that same
+                // edge, or a mirrored column and this row would land
+                // on the same pixels.
                 .frame(width: duoLayout.availableRect(containerSize: rootProxy.size, safeAreaTop: safeAreaTop).width,
-                       alignment: .leading)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                       alignment: duoLayout.isMirrored ? .trailing : .leading)
+                .frame(maxWidth: .infinity, alignment: duoLayout.isMirrored ? .trailing : .leading)
                 // Every mode mounts exactly one instance. `bottomBand: 0`
                 // because Photos has no 9:16 stage. `railAlignedCenter`/
                 // `railAlignedTopClamp` are `DuoLayout`'s own shared chin

@@ -1398,8 +1398,14 @@ struct FeedView: View {
         // Duo too narrow for a column, `availableRect` returns the
         // full window unchanged, so `binButton`'s trailing edge lands
         // exactly where it always has.
+        // Mirrored-layout round: `availableRect` already excludes the
+        // column from whichever edge it is on — this outer alignment
+        // must match that same edge (PhotoTopBar's identical call site
+        // has the same fix), or the row would still start at x=0 even
+        // with its own children already reversed above, landing on
+        // top of a mirrored column instead of clear of it.
         .frame(width: duoLayout.availableRect(containerSize: containerSize, safeAreaTop: safeAreaTop).width,
-               alignment: .leading)
+               alignment: duoLayout.isMirrored ? .trailing : .leading)
         .padding(.top, topChromeTopPadding(safeAreaTop: safeAreaTop, containerSize: containerSize))
         // Keeps `muteButton` (the row's own leading edge) clear of the
         // display's own rounded top corner — reported on the open-wide
@@ -3400,15 +3406,19 @@ private struct FeedPageContent: View {
                         // past `stage.maxX` to the window's own
                         // trailing edge when it right-aligns
                         // (mirrored) instead.
-                        let stage = duoLayout.stageRect(containerSize: proxy.size, safeAreaTop: safeAreaTop)
-                        let leadingClearance: CGFloat
-                        if duoLayout.pose == .openTall {
-                            leadingClearance = duoLayout.isMirrored
+                        // A plain closure, invoked at once — an
+                        // `if/else` with no trailing View expression,
+                        // written directly in this `@ViewBuilder`
+                        // body, is read as a view branch and fails to
+                        // type-check (see `duoLaptopCaption`'s
+                        // identical note).
+                        let leadingClearance: CGFloat = {
+                            guard duoLayout.pose == .openTall else { return 16 }
+                            let stage = duoLayout.stageRect(containerSize: proxy.size, safeAreaTop: safeAreaTop)
+                            return duoLayout.isMirrored
                                 ? proxy.size.width - stage.maxX + 16
                                 : stage.minX + 16
-                        } else {
-                            leadingClearance = 16
-                        }
+                        }()
                         captionZone(leadingClearance: leadingClearance, trailingClearance: railColumnRect.width + 16, hidden: false, bandHeight: realBottomBand)
                     } else {
                         HStack(alignment: .bottom, spacing: 0) {
@@ -3876,9 +3886,15 @@ private struct FeedPageContent: View {
             let width = max(0, trailing - leading)
             let top = scrubberRect.maxY + 8
             let rect = CGRect(x: leading, y: top, width: width, height: max(0, bottomY - top))
+            // Owner call (relayed, item 3): "caption right-aligned on
+            // that line" once mirrored — the group sits on the LEFT of
+            // band 0's own date line, so the caption now reads from
+            // the RIGHT instead of the left, both the block's own
+            // position (handled above, by `leading`/`trailing`) and
+            // the TEXT's own reading edge within it.
             captionTexts(measureDateLineCenter: isActive)
                 .feedShadow()
-                .frame(width: rect.width, alignment: .leading)
+                .frame(width: rect.width, alignment: duoLayout.isMirrored ? .trailing : .leading)
                 .opacity(isScrubbing ? 0 : 1)
                 .animation(.easeOut(duration: 0.15), value: isScrubbing)
                 .allowsHitTesting(false)
@@ -3886,7 +3902,7 @@ private struct FeedPageContent: View {
                 .accessibilityHidden(hideForFullscreen)
                 .accessibilityIdentifier(isActive && !hideForFullscreen ? "feed_caption" : "")
                 .accessibilityLabel(meta.placeText.map { "\($0). " + meta.voiceOverLabel } ?? meta.voiceOverLabel)
-                .frame(width: rect.width, height: rect.height, alignment: .topLeading)
+                .frame(width: rect.width, height: rect.height, alignment: duoLayout.isMirrored ? .topTrailing : .topLeading)
                 .position(x: rect.midX, y: rect.midY)
                 .duoGuideMark("caption", color: .pink, active: isActive)
         }
