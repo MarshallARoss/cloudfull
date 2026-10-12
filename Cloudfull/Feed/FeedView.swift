@@ -442,7 +442,7 @@ struct FeedView: View {
             // is there a real rail for the chin to ever need to clear.
             ChinNavigation(bottomBand: StageGeometry.bottomBand(safeAreaTop: safeAreaTop,
                                                                containerSize: rootProxy.size),
-                           railBottom: duoLayout.railBottom(safeAreaTop: safeAreaTop, containerSize: rootProxy.size),
+                           railBottom: duoLayout.railBottom(safeAreaTop: safeAreaTop, safeAreaBottom: fullscreenSafeArea.bottom, containerSize: rootProxy.size),
                            railAlignedCenter: duoLayout.railAlignedChinCenter(safeAreaTop: safeAreaTop, safeAreaBottom: fullscreenSafeArea.bottom, containerSize: windowSize),
                            railAlignedTopClamp: duoLayout.railAlignedTopClamp(containerSize: windowSize, safeAreaBottom: fullscreenSafeArea.bottom),
                            safeAreaBottom: fullscreenSafeArea.bottom)
@@ -1269,7 +1269,7 @@ struct FeedView: View {
                     // `containerSize: fullWindow` argument already
                     // assumes, via this view's own `.padding(.top:)`/
                     // `.frame` pair below.
-                    chromeColumn(duoLayout: duoLayout, safeAreaTop: realTopInset, containerSize: fullWindow)
+                    chromeColumn(duoLayout: duoLayout, safeAreaTop: realTopInset, safeAreaBottom: realBottomInset, containerSize: fullWindow)
                 }
                 if usesPose5TopRow {
                     pose5TopRow(duoLayout: duoLayout, safeAreaTop: realTopInset, containerSize: fullWindow)
@@ -1398,8 +1398,8 @@ struct FeedView: View {
     /// label can never reach further than the button's own right edge
     /// already does). `.minimumScaleFactor` shrinks it rather than
     /// letting it overflow past either bound.
-    private func chromeColumn(duoLayout: DuoLayout, safeAreaTop: CGFloat, containerSize: CGSize) -> some View {
-        let centers = duoLayout.zigzagCenters(containerSize: containerSize, safeAreaTop: safeAreaTop)
+    private func chromeColumn(duoLayout: DuoLayout, safeAreaTop: CGFloat, safeAreaBottom: CGFloat, containerSize: CGSize) -> some View {
+        let centers = duoLayout.zigzagCenters(containerSize: containerSize, safeAreaTop: safeAreaTop, safeAreaBottom: safeAreaBottom)
         let columnRect = duoLayout.chromeColumnRect(containerSize: containerSize, safeAreaTop: safeAreaTop)
         let railEdge = duoLayout.railVisualEdge(containerSize: containerSize, safeAreaTop: safeAreaTop)?.x
         return Group {
@@ -3680,10 +3680,10 @@ private struct FeedPageContent: View {
     /// `proxy.size`, needed separately because `railVerticalExtent`
     /// measures from the page's own top and bottom, not from `rect`.
     private func actionRailColumn(rect: CGRect, containerSize: CGSize) -> some View {
-        let extent = duoLayout.railVerticalExtent(containerSize: containerSize, safeAreaTop: safeAreaTop)
+        let extent = duoLayout.railVerticalExtent(containerSize: containerSize, safeAreaTop: safeAreaTop, safeAreaBottom: safeAreaBottom)
         let top = extent?.top ?? 0
         let centerX = duoLayout.ringCenteredColumnX(containerSize: containerSize, safeAreaTop: safeAreaTop) ?? rect.midX
-        return VStack(spacing: Rail.spacing) {
+        return VStack(spacing: extent?.spacing ?? Rail.spacing) {
             if isActive, let calloutMessage = shareCoordinator.calloutMessage {
                 railCallout(calloutMessage)
             }

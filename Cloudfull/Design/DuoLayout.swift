@@ -679,6 +679,53 @@ struct DuoLayout {
         return occlusion.maxY
     }
 
+    /// A Live Activity's own pill grows the Dynamic Island and pushes
+    /// the system's time + connectivity ring down with it — but no
+    /// public API reports the growth (owner probe: reservedRegions,
+    /// safe area, traits, layout regions, and a layout callback were
+    /// all checked and found unchanged while the pill is up, so
+    /// `occlusion` itself never grows to report it either). The one
+    /// thing this frame CAN still read, pill or no pill, is
+    /// `occlusion.minY` — the status cluster's own top edge, which the
+    /// pill grows DOWN from, not up. This adds a flat, hand-measured
+    /// margin on top of that live top edge: `Self
+    /// .liveActivityStatusGrowth`, the owner's own screenshot-measured
+    /// worst case with the demo activity running (grown pill height,
+    /// plus the time text and ring that still sit below it).
+    ///
+    /// Used only by `railVerticalExtent`'s own bottom-up branch, only
+    /// to COMPRESS the rail's own pitch so Keep's own top never reaches
+    /// above this line — never to move the rail, the chin, or anything
+    /// else. Same stale-frame guard as `closedStatusBottom` above.
+    private func closedStatusWorstCaseBottom(containerSize: CGSize, safeAreaTop: CGFloat) -> CGFloat {
+        guard let occlusion, CGRect(origin: .zero, size: containerSize).contains(occlusion) else {
+            return safeAreaTop + Self.liveActivityStatusGrowth
+        }
+        return occlusion.minY + Self.liveActivityStatusGrowth
+    }
+
+    /// The grown pill, plus the time text and ring that still sit
+    /// below it, measured as the span BEYOND `occlusion.minY` — not an
+    /// absolute y — so the same margin travels to whatever
+    /// `occlusion.minY` a given frame/pose actually reads, rather than
+    /// freezing one sample as a fixed line on one screen size.
+    ///
+    /// Checked this session, on the Duo sim: started the LA Demo
+    /// activity (`com.cloudfull.livedemo`, "Start timer"), captured
+    /// pose 1V's own closed display (`--display=1`) before and after.
+    /// The simulator does NOT reproduce the push the owner's own real
+    /// screenshot showed — `occlusion`'s rendered time+ring sat at the
+    /// identical pixel position in both captures; the grown pill drew
+    /// as a dark shape ABOVE them instead of displacing anything. So
+    /// this stays set from the owner's own real-hardware figures
+    /// (pill ≈121pt, plus time + ring) rather than a sim measurement —
+    /// the sim cannot confirm or correct it either way. Still flagged
+    /// like every other "measured, no API" constant in this file (see
+    /// `openTallRingInsetFromTrailingEdge`'s own comment): confirm
+    /// against a REAL closed Duo screen with the activity running
+    /// before trusting this number.
+    static let liveActivityStatusGrowth: CGFloat = 180
+
     /// Where the rail column sits, and how wide it is, this frame — or
     /// `nil` when no column applies.
     ///
@@ -859,16 +906,61 @@ struct DuoLayout {
     /// 10pt to 26pt, lowering the whole rail (Keep through Delete, and
     /// the chin below it where the chin's own anchor tracks the
     /// rail's bottom) clear of the ring.
-    func railVerticalExtent(containerSize: CGSize, safeAreaTop: CGFloat) -> (top: CGFloat, bottom: CGFloat)? {
+    /// Owner re-adapt (Live Activity pass): bar-on (`isClosedBar`) no
+    /// longer centres the rail in the column — it builds BOTTOM-UP
+    /// from the closed chin instead. Why: a Live Activity's own pill
+    /// grows the Dynamic Island and pushes the system's time +
+    /// connectivity ring down with it (~85pt, owner's own measurement)
+    /// with no public API reporting the growth — the old centred-then-
+    /// clamped rule reads `occlusion` for that clamp, and `occlusion`
+    /// itself never grows, so it could not see the pill coming; the
+    /// owner's own screenshot with the demo activity running showed
+    /// the ring sitting on Keep. Anchoring from the BOTTOM instead —
+    /// Delete's own bottom edge `Self.railChinGap` above the chin's own
+    /// top edge, same as always, pill or no pill — never depends on
+    /// that signal at all, so there is nothing for it to miss.
+    ///
+    /// `Self.railChinGap` is the SAME pitch as between the rail's own
+    /// five items (`Rail.spacing`) — "no new magic numbers beyond that
+    /// gap" — not pose 5's own, already different, already named
+    /// `chinColumnGap` (40pt, the bar-OFF case).
+    ///
+    /// Safety net: `closedStatusWorstCaseBottom` is this frame's own
+    /// worst-case reading of where the grown status cluster's bottom
+    /// edge could reach. If the bottom-up stack's own top (Keep) would
+    /// rise ABOVE that line on this frame, this compresses the pitch
+    /// between items — Delete's own bottom edge stays fixed at the
+    /// chin — rather than let Keep overlap the ring. `Rail.itemHeight`
+    /// (each button's own real size) is never compressed, only the air
+    /// between them.
+    func railVerticalExtent(containerSize: CGSize, safeAreaTop: CGFloat, safeAreaBottom: CGFloat) -> (top: CGFloat, bottom: CGFloat, spacing: CGFloat)? {
         guard railColumnRect(containerSize: containerSize, safeAreaTop: safeAreaTop) != nil else { return nil }
         let centeredTop = (containerSize.height - Rail.columnHeight) / 2
         guard isClosedBar else {
-            return (centeredTop, centeredTop + Rail.columnHeight)
+            return (centeredTop, centeredTop + Rail.columnHeight, Rail.spacing)
         }
-        let minTop = closedStatusBottom(containerSize: containerSize, safeAreaTop: safeAreaTop) + 26
-        let top = max(minTop, centeredTop)
-        return (top, top + Rail.columnHeight)
+        guard let chinCenter = railAlignedChinCenter(safeAreaTop: safeAreaTop, safeAreaBottom: safeAreaBottom, containerSize: containerSize) else {
+            // Defensive only — every `isClosedBar` pose already has a
+            // rail column, so `railAlignedChinCenter` always resolves
+            // one here too. Falls back to the pre-Live-Activity rule.
+            let minTop = closedStatusBottom(containerSize: containerSize, safeAreaTop: safeAreaTop) + 26
+            let top = max(minTop, centeredTop)
+            return (top, top + Rail.columnHeight, Rail.spacing)
+        }
+        let chinTop = chinCenter.y - Rail.hit / 2
+        let bottom = chinTop - Self.railChinGap
+        let naiveTop = bottom - Rail.columnHeight
+        let minTop = closedStatusWorstCaseBottom(containerSize: containerSize, safeAreaTop: safeAreaTop)
+        guard naiveTop < minTop else {
+            return (naiveTop, bottom, Rail.spacing)
+        }
+        let compressedHeight = max(Rail.itemHeight * 5, bottom - minTop)
+        let compressedSpacing = max(0, (compressedHeight - Rail.itemHeight * 5) / 4)
+        return (bottom - compressedHeight, bottom, compressedSpacing)
     }
+
+    /// See `railVerticalExtent`'s own doc comment.
+    static let railChinGap: CGFloat = Rail.spacing
 
     /// The actual bottom edge of the rail's last button (Delete) this
     /// frame, in the page's own coordinate space (0 at the top) —
@@ -890,8 +982,8 @@ struct DuoLayout {
     /// the chin (it hangs from the stage's own top, not the page's
     /// own bottom), so the clamp stays a no-op there too — just no
     /// longer for the same algebraic reason.
-    func railBottom(safeAreaTop: CGFloat, containerSize: CGSize) -> CGFloat {
-        if let extent = railVerticalExtent(containerSize: containerSize, safeAreaTop: safeAreaTop) {
+    func railBottom(safeAreaTop: CGFloat, safeAreaBottom: CGFloat, containerSize: CGSize) -> CGFloat {
+        if let extent = railVerticalExtent(containerSize: containerSize, safeAreaTop: safeAreaTop, safeAreaBottom: safeAreaBottom) {
             return extent.bottom
         }
         let bottomBand = StageGeometry.bottomBand(safeAreaTop: safeAreaTop, containerSize: containerSize)
@@ -1121,12 +1213,17 @@ struct DuoLayout {
     /// this file, not the taller labelled-rail-item unit `pitch` used
     /// before. `[]` when `chromeColumnRect`/`railVerticalExtent` found
     /// nothing to anchor against.
-    func zigzagCenters(containerSize: CGSize, safeAreaTop: CGFloat) -> [CGPoint] {
+    func zigzagCenters(containerSize: CGSize, safeAreaTop: CGFloat, safeAreaBottom: CGFloat) -> [CGPoint] {
         guard let columnRect = chromeColumnRect(containerSize: containerSize, safeAreaTop: safeAreaTop),
-              let extent = railVerticalExtent(containerSize: containerSize, safeAreaTop: safeAreaTop)
+              let extent = railVerticalExtent(containerSize: containerSize, safeAreaTop: safeAreaTop, safeAreaBottom: safeAreaBottom)
         else { return [] }
         let pitch = Rail.hit + 12
-        let filterY = extent.top + Rail.columnHeight / 2
+        // The rail's own vertical centre — `(extent.top + extent.bottom)
+        // / 2` rather than `extent.top + Rail.columnHeight / 2` — so
+        // this still lands on the rail's REAL centre if the bottom-up
+        // anchor ever compresses the column shorter than
+        // `Rail.columnHeight` (the Live Activity safety net).
+        let filterY = (extent.top + extent.bottom) / 2
         return [filterY - pitch, filterY, filterY + pitch].map { y in
             CGPoint(x: columnRect.midX, y: y)
         }
