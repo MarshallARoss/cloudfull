@@ -332,7 +332,8 @@ struct PhotoFeedView: View {
                 ChinNavigation(bottomBand: 0,
                                railAlignedCenter: duoLayout.railAlignedChinCenter(safeAreaTop: safeAreaTop, safeAreaBottom: safeAreaBottom, containerSize: windowSize),
                                railAlignedTopClamp: duoLayout.railAlignedTopClamp(containerSize: windowSize, safeAreaBottom: safeAreaBottom),
-                               safeAreaBottom: safeAreaBottom)
+                               safeAreaBottom: safeAreaBottom,
+                               isMirrored: duoLayout.isMirrored)
                 // Zero-size. Presents and dismisses the system share sheet
                 // imperatively. Mirrors `FeedView`'s identical host.
                 ActivityViewControllerHost(coordinator: shareCoordinator)

@@ -178,7 +178,8 @@ struct SettingsView: View {
                 ChinNavigation(bottomBand: 0,
                                railAlignedCenter: duoLayout.railAlignedChinCenter(safeAreaTop: safeAreaTop, safeAreaBottom: safeAreaBottom, containerSize: windowSize),
                                railAlignedTopClamp: duoLayout.railAlignedTopClamp(containerSize: windowSize, safeAreaBottom: safeAreaBottom),
-                               safeAreaBottom: safeAreaBottom)
+                               safeAreaBottom: safeAreaBottom,
+                               isMirrored: duoLayout.isMirrored)
             }
             .onAppear {
                 Usage.shared.settingsOpened()

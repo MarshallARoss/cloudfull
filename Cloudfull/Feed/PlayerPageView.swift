@@ -419,8 +419,26 @@ struct PlayerPageView: View {
     /// derived from the live geometry `openWideWideVideoRect` already
     /// computes, not a second hand-measured number that can drift from
     /// the first the way the un-clamped constant did.
-    private func ringFixedPoint(containerSize: CGSize, stageMinX: CGFloat) -> CGPoint? {
+    /// Mirrored-layout round: `stageMaxX` is the new second input —
+    /// the stage's own TRAILING edge, needed only when `isMirrored`
+    /// moves the "clear of the stage, near the bezel" point to the
+    /// TRAILING bezel instead (`stageRect`'s own `openWideWideVideoBox`/
+    /// `bookStagePageBox` already move the stage itself there; this
+    /// mirrors the SAME x the unmirrored case reads off `stageMinX`,
+    /// off `containerSize.width - stageMaxX` instead).
+    private func ringFixedPoint(containerSize: CGSize, stageMinX: CGFloat, stageMaxX: CGFloat) -> CGPoint? {
         let ringRadius = CloudDownloadRing.standardDiameter / 2 + CloudDownloadRing.discPadding
+        if duoLayout.isMirrored {
+            let clearOfStage = containerSize.width - stageMaxX - ringRadius - 6
+            switch duoLayout.pose {
+            case .openWide:
+                return CGPoint(x: containerSize.width - min(48, clearOfStage), y: containerSize.height - 113)
+            case .book where useVideoAspect:
+                return CGPoint(x: containerSize.width - min(44, clearOfStage), y: containerSize.height - 79)
+            default:
+                return nil
+            }
+        }
         let clearOfStage = stageMinX - ringRadius - 6
         switch duoLayout.pose {
         case .openWide:
@@ -1021,7 +1039,7 @@ struct PlayerPageView: View {
                 // `.accessibilityHidden(true)` always: the hidden
                 // instance still carries the real "Loading video"
                 // label, so VoiceOver never hears it twice.
-                if usesFixedRingPoint, let fixedPoint = ringFixedPoint(containerSize: proxy.size, stageMinX: stageRect.minX) {
+                if usesFixedRingPoint, let fixedPoint = ringFixedPoint(containerSize: proxy.size, stageMinX: stageRect.minX, stageMaxX: stageRect.maxX) {
                     CloudDownloadRing(fraction: downloadFraction, isRunning: showSpinner)
                         .allowsHitTesting(false)
                         .accessibilityHidden(true)
@@ -1601,8 +1619,13 @@ struct PlayerPageView: View {
                 // The modifier chain keeps one identity. This is the
                 // rule the identity comment on `stageContent` in `body`
                 // protects.
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
-                .padding(.leading, isFullscreen ? fullscreenSafeArea.leading + 10 : 10)
+                // Mirrored-layout round: "caption + iCloud ring
+                // bottom-trailing" — same opposite-the-rail principle,
+                // the near-edge padding moving from leading to
+                // trailing (and its own fullscreen safe-area reading
+                // with it).
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: duoLayout.isMirrored ? .bottomTrailing : .bottomLeading)
+                .padding(duoLayout.isMirrored ? .trailing : .leading, isFullscreen ? (duoLayout.isMirrored ? fullscreenSafeArea.trailing : fullscreenSafeArea.leading) + 10 : 10)
                 .padding(.bottom, isFullscreen ? fullscreenSafeArea.bottom + 10 : loaderLift(bottomBand: bottomBand))
                 // `spinnerRevealKey` folds `isLoading` and `isActive` into
                 // the task's own identity. So SwiftUI's `.task(id:)`

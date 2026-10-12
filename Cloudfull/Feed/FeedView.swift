@@ -164,7 +164,7 @@ struct FeedView: View {
     /// `.opacity(0)` for that one frame instead of guessing a Y.
     @State private var laptopCaptionDateLineCenterY: CGFloat?
     /// Pose 6 (laptop), round 4: the Mute/Filter/Bin group's
-    /// (`laptopDeckControls`) own real, just-laid-out left edge, in
+    /// (`laptopDeckControls`) own real, just-laid-out frame, in
     /// window space — `FeedPageContent.duoLaptopCaption` keeps its
     /// own caption text clear of it, the same live-measurement
     /// reasoning as `laptopCaptionDateLineCenterY` just above, mounted
@@ -172,7 +172,12 @@ struct FeedView: View {
     /// against here. `nil` outside pose 6, or before the group has
     /// ever laid out this launch; `duoLaptopCaption` falls back to its
     /// own old near-full-width clearance for that one frame.
-    @State private var laptopControlGroupLeadingX: CGFloat?
+    ///
+    /// Mirrored-layout round: renamed from `laptopControlGroupLeadingX`
+    /// (a plain `CGFloat?`) to the whole frame — `duoLaptopCaption`
+    /// reads `.minX` unmirrored, `.maxX` mirrored; see
+    /// `LaptopControlGroupFrameKey`'s own comment.
+    @State private var laptopControlGroupFrame: CGRect?
     /// Pose 3/4/4W's own Bin capsule (`chromeColumnBinCapsule`) — its
     /// real, just-laid-out height, in window space. Empty (`Rail.hit`,
     /// the same plain-circle height Mute/Filter use) until the bin has
@@ -464,7 +469,8 @@ struct FeedView: View {
                            railBottom: duoLayout.railBottom(safeAreaTop: safeAreaTop, safeAreaBottom: fullscreenSafeArea.bottom, containerSize: rootProxy.size),
                            railAlignedCenter: duoLayout.railAlignedChinCenter(safeAreaTop: safeAreaTop, safeAreaBottom: fullscreenSafeArea.bottom, containerSize: windowSize),
                            railAlignedTopClamp: duoLayout.railAlignedTopClamp(containerSize: windowSize, safeAreaBottom: fullscreenSafeArea.bottom),
-                           safeAreaBottom: fullscreenSafeArea.bottom)
+                           safeAreaBottom: fullscreenSafeArea.bottom,
+                           isMirrored: duoLayout.isMirrored)
                 .opacity(hidesGlobalChrome ? 0 : 1)
                 .allowsHitTesting(!hidesGlobalChrome)
                 .accessibilityHidden(hidesGlobalChrome)
@@ -590,9 +596,9 @@ struct FeedView: View {
             .onPreferenceChange(DuoRightGridBottomKey.self) { duoRightGridBottomY = $0 }
             // Same catch point, same reasoning, for pose 6's own pair
             // of live measurements — see `laptopCaptionDateLineCenterY`/
-            // `laptopControlGroupLeadingX`'s own comments.
+            // `laptopControlGroupFrame`'s own comments.
             .onPreferenceChange(LaptopCaptionDateLineCenterKey.self) { laptopCaptionDateLineCenterY = $0 }
-            .onPreferenceChange(LaptopControlGroupLeadingXKey.self) { laptopControlGroupLeadingX = $0 }
+            .onPreferenceChange(LaptopControlGroupFrameKey.self) { laptopControlGroupFrame = $0 }
             // Same catch point, same reasoning, for pose 3/4/4W's own
             // Bin capsule height — see `chromeBinCapsuleHeight`'s own
             // comment.
@@ -914,7 +920,7 @@ struct FeedView: View {
                             safeAreaBottom: fullscreenSafeArea.bottom,
                             duoLayout: duoLayout,
                             duoRightGridBottomY: duoRightGridBottomY,
-                            laptopControlGroupLeadingX: laptopControlGroupLeadingX,
+                            laptopControlGroupFrame: laptopControlGroupFrame,
                             keepRequestNonce: doubleTapKeepNonces[entry.id] ?? 0
                         )
                         .opacity(isFullscreen ? 0 : 1)
@@ -1347,21 +1353,42 @@ struct FeedView: View {
         // origin, so it keeps working and hides the problem. A finger
         // tap is always fine; only the synthesized XCUITest tap
         // coordinates are wrong.
+        // Mirrored-layout round (item D, regular iPhone): the row's own
+        // child order reverses, same idea as `pose5TopRow`'s own
+        // mirror — "top row mirrored, Bin top-left." The shrink
+        // progress capsule (not suppressed on any pose) stays the
+        // child next to the `Spacer`, on whichever side that now is.
         return HStack(alignment: .top, spacing: 8) {
-            // A tap on the video also toggles mute, with a center flash.
-            // This pill is the second mute control.
-            if !suppressDefaultRow {
-                muteButton
-                FilterMenuView(store: optionsStore, hidesChrome: hidesGlobalChrome)
-                    .duoGuideMark("top.filter", color: .teal)
-            }
-            if let job = activeShrinkJob, let text = shrinkActiveProgressText {
-                shrinkProgressCapsule(text, assetID: job.id)
-            }
-            Spacer(minLength: 8)
-            if !suppressDefaultRow {
-                counterCapsule
-                binButton()
+            if duoLayout.isMirrored {
+                if !suppressDefaultRow {
+                    counterCapsule
+                    binButton()
+                }
+                Spacer(minLength: 8)
+                if let job = activeShrinkJob, let text = shrinkActiveProgressText {
+                    shrinkProgressCapsule(text, assetID: job.id)
+                }
+                if !suppressDefaultRow {
+                    FilterMenuView(store: optionsStore, hidesChrome: hidesGlobalChrome)
+                        .duoGuideMark("top.filter", color: .teal)
+                    muteButton
+                }
+            } else {
+                // A tap on the video also toggles mute, with a center
+                // flash. This pill is the second mute control.
+                if !suppressDefaultRow {
+                    muteButton
+                    FilterMenuView(store: optionsStore, hidesChrome: hidesGlobalChrome)
+                        .duoGuideMark("top.filter", color: .teal)
+                }
+                if let job = activeShrinkJob, let text = shrinkActiveProgressText {
+                    shrinkProgressCapsule(text, assetID: job.id)
+                }
+                Spacer(minLength: 8)
+                if !suppressDefaultRow {
+                    counterCapsule
+                    binButton()
+                }
             }
         }
         .padding(.horizontal, 12)
@@ -1508,13 +1535,28 @@ struct FeedView: View {
         let width = max(0, trailing - leading)
         let rowHeight: CGFloat = 40
         let centerY = duoLayout.pose == .closed ? safeAreaTop + 8 + rowHeight / 2 : statusBlock.midY
+        // Mirrored-layout round: "Bin top-left, Mute/Filter top-right"
+        // — the row's own child order simply reverses. The counter
+        // stays the child immediately next to Bin either way (it reads
+        // left of Bin unmirrored, right of Bin mirrored), since
+        // reversing the whole sequence keeps every pair's own relative
+        // order, just read from the other end.
         return HStack(spacing: Rail.spacing) {
-            muteButton
-            FilterMenuView(store: optionsStore, hidesChrome: hidesGlobalChrome)
-                .duoGuideMark("top.filter", color: .teal)
-            Spacer(minLength: 8)
-            counterCapsule
-            binButton()
+            if duoLayout.isMirrored {
+                binButton()
+                counterCapsule
+                Spacer(minLength: 8)
+                FilterMenuView(store: optionsStore, hidesChrome: hidesGlobalChrome)
+                    .duoGuideMark("top.filter", color: .teal)
+                muteButton
+            } else {
+                muteButton
+                FilterMenuView(store: optionsStore, hidesChrome: hidesGlobalChrome)
+                    .duoGuideMark("top.filter", color: .teal)
+                Spacer(minLength: 8)
+                counterCapsule
+                binButton()
+            }
         }
         .frame(width: width, height: rowHeight, alignment: .center)
         .position(x: leading + width / 2, y: centerY)
@@ -1554,18 +1596,28 @@ struct FeedView: View {
     /// LEFT on its own — "when it appears the group shifts left so it
     /// stays inside" — with no gap arithmetic here at all. The
     /// `background` `GeometryReader` reports that real, just-laid-out
-    /// left edge back up through `LaptopControlGroupLeadingXKey`,
+    /// frame back up through `LaptopControlGroupFrameKey`,
     /// attached to the `HStack` itself (before the outer `.frame`
     /// inflates it to the box's own full width), so what bubbles up
     /// is the group's own tight bounds, not the box's.
     private func laptopDeckControls(duoLayout: DuoLayout, safeAreaBottom: CGFloat, containerSize: CGSize) -> some View {
         Group {
-            if let trailingX = duoLayout.laptopControlGroupTrailingX(containerSize: containerSize, safeAreaBottom: safeAreaBottom) {
+            if let nearX = duoLayout.laptopControlGroupTrailingX(containerSize: containerSize, safeAreaBottom: safeAreaBottom) {
                 // Owner re-adapt (round-4 review): no more guessed
                 // `fallbackY` — hidden instead for the one frame
                 // before `laptopCaptionDateLineCenterY` reports its
                 // first real value, rather than drawn at a guessed Y
                 // and then jumped once the real one lands.
+                //
+                // Mirrored-layout round: `nearX` is the group's own
+                // LEADING edge, not trailing, once mirrored — the box
+                // spans `[nearX, containerWidth]` instead of `[0,
+                // nearX]`, content leading-aligned, growing rightward.
+                // Order within the `HStack` is unchanged either way —
+                // "inner side of the rail," not its own mirror — since
+                // only ITS POSITION, not its own internal reading
+                // order, was ever asked to flip.
+                let width = duoLayout.isMirrored ? containerSize.width - nearX : nearX
                 HStack(spacing: 12) {
                     muteButton
                     FilterMenuView(store: optionsStore, hidesChrome: hidesGlobalChrome)
@@ -1585,11 +1637,11 @@ struct FeedView: View {
                 }
                 .background(
                     GeometryReader { proxy in
-                        Color.clear.preference(key: LaptopControlGroupLeadingXKey.self, value: proxy.frame(in: .global).minX)
+                        Color.clear.preference(key: LaptopControlGroupFrameKey.self, value: proxy.frame(in: .global))
                     }
                 )
-                .frame(width: trailingX, alignment: .trailing)
-                .position(x: trailingX / 2, y: laptopCaptionDateLineCenterY ?? 0)
+                .frame(width: width, alignment: duoLayout.isMirrored ? .leading : .trailing)
+                .position(x: duoLayout.isMirrored ? nearX + width / 2 : width / 2, y: laptopCaptionDateLineCenterY ?? 0)
                 .opacity(laptopCaptionDateLineCenterY == nil ? 0 : 1)
             }
             if let pager = duoLayout.laptopPagerCenters(containerSize: containerSize, safeAreaBottom: safeAreaBottom) {
@@ -2318,16 +2370,18 @@ struct FeedView: View {
         }
         // The Mute/Filter/Bin group's own real rendered box (round 4)
         // — unlike `top.mute`/`top.filter`/`top.bin` above, which mark
-        // each BUTTON, this marks the GROUP as a whole, the same
-        // trailing-margin box `laptopDeckControls` itself positions,
-        // so the guide shows whether the group is actually staying
-        // inside band 0's own trailing margin (and shifting left for
-        // `binBadgeText`) rather than just where its buttons landed.
-        if let trailingX = duoLayout.laptopControlGroupTrailingX(containerSize: containerSize, safeAreaBottom: safeAreaInsets.bottom),
-           let centerY = laptopCaptionDateLineCenterY,
-           let leadingX = laptopControlGroupLeadingX {
-            let rect = CGRect(x: leadingX, y: centerY - 22, width: trailingX - leadingX, height: 44)
-            duoGuideRect(rect, color: .teal, label: "deck.group \(duoGuideFormat(rect))")
+        // each BUTTON, this marks the GROUP as a whole, so the guide
+        // shows whether the group is actually staying inside band 0's
+        // own margin (and shifting left for `binBadgeText`) rather
+        // than just where its buttons landed.
+        //
+        // Mirrored-layout round: reads `laptopControlGroupFrame`
+        // directly now — the real, measured frame, whichever edge the
+        // group grew from — rather than reconstructing a box from a
+        // separately-computed `trailingX`, which only ever described
+        // the unmirrored (trailing-anchored) case correctly.
+        if let frame = laptopControlGroupFrame {
+            duoGuideRect(frame, color: .teal, label: "deck.group \(duoGuideFormat(frame))")
         }
         if let pager = duoLayout.laptopPagerCenters(containerSize: containerSize, safeAreaBottom: safeAreaInsets.bottom) {
             let prevRect = CGRect(x: pager.previous.x - pager.width / 2, y: pager.previous.y - pager.height / 2,
@@ -2977,15 +3031,22 @@ struct LaptopCaptionDateLineCenterKey: PreferenceKey {
     }
 }
 
-/// `FeedView.laptopControlGroupLeadingX`'s own anchor — the Mute/
-/// Filter/Bin group's real left edge, reported by `FeedView
+/// `FeedView.laptopControlGroupFrame`'s own anchor — the Mute/
+/// Filter/Bin group's real rendered frame, reported by `FeedView
 /// .laptopDeckControls` itself. That view mounts once, globally, never
 /// per page, so — unlike `LaptopCaptionDateLineCenterKey` above —
 /// there is no second contributor this `reduce` ever needs to guard
 /// against.
-struct LaptopControlGroupLeadingXKey: PreferenceKey {
-    static let defaultValue: CGFloat? = nil
-    static func reduce(value: inout CGFloat?, nextValue: () -> CGFloat?) {
+///
+/// Mirrored-layout round: carries the whole frame, not only `minX` —
+/// renamed from `LaptopControlGroupLeadingXKey`. Unmirrored,
+/// `duoLaptopCaption` still only ever needs `.minX` (the group's own
+/// leading edge, the caption's own clearance point on its trailing
+/// side); mirrored, it needs `.maxX` instead (the group now sits on
+/// the LEADING side, and the caption must clear its trailing edge).
+struct LaptopControlGroupFrameKey: PreferenceKey {
+    static let defaultValue: CGRect? = nil
+    static func reduce(value: inout CGRect?, nextValue: () -> CGRect?) {
         if let next = nextValue() { value = next }
     }
 }
@@ -3073,13 +3134,13 @@ private struct FeedPageContent: View {
     /// once this launch.
     let duoRightGridBottomY: CGFloat?
     /// Pose 6 (laptop), round 4: the Mute/Filter/Bin group's own real
-    /// left edge, threaded the same way `duoRightGridBottomY` is — see
-    /// `FeedView.laptopControlGroupLeadingX`'s own comment. Read only
-    /// by `duoLaptopCaption`, to keep the caption's own text clear of
-    /// the group sharing its row. `nil` on every pose but laptop, and
-    /// on laptop itself until the group has laid out at least once
-    /// this launch.
-    let laptopControlGroupLeadingX: CGFloat?
+    /// rendered frame, threaded the same way `duoRightGridBottomY` is
+    /// — see `FeedView.laptopControlGroupFrame`'s own comment. Read
+    /// only by `duoLaptopCaption`, to keep the caption's own text
+    /// clear of the group sharing its row — `.minX` unmirrored,
+    /// `.maxX` mirrored. `nil` on every pose but laptop, and on laptop
+    /// itself until the group has laid out at least once this launch.
+    let laptopControlGroupFrame: CGRect?
     /// Bumped by `FeedView` on every double tap of this page's video — see
     /// `FeedView.doubleTapKeepNonces`. Watched below; each bump is one
     /// `keepFromDoubleTap()`.
@@ -3327,9 +3388,27 @@ private struct FeedPageContent: View {
                         // `railColumnRect` branch but never moves its
                         // own video off the leading edge, so this is a
                         // no-op there (`stageRect.minX` is already 0).
-                        let leadingClearance = duoLayout.pose == .openTall
-                            ? duoLayout.stageRect(containerSize: proxy.size, safeAreaTop: safeAreaTop).minX + 16
-                            : 16
+                        //
+                        // Mirrored-layout round: `captionZone`'s own
+                        // `leadingClearance` is really "the gap on the
+                        // side AWAY from the rail" — it lands on the
+                        // trailing edge once mirrored (see that
+                        // function's own comment), so this must read
+                        // whichever side of `stageRect` is now the
+                        // away-from-rail one too: `stage.minX` when
+                        // the video left-aligns (unmirrored), the gap
+                        // past `stage.maxX` to the window's own
+                        // trailing edge when it right-aligns
+                        // (mirrored) instead.
+                        let stage = duoLayout.stageRect(containerSize: proxy.size, safeAreaTop: safeAreaTop)
+                        let leadingClearance: CGFloat
+                        if duoLayout.pose == .openTall {
+                            leadingClearance = duoLayout.isMirrored
+                                ? proxy.size.width - stage.maxX + 16
+                                : stage.minX + 16
+                        } else {
+                            leadingClearance = 16
+                        }
                         captionZone(leadingClearance: leadingClearance, trailingClearance: railColumnRect.width + 16, hidden: false, bandHeight: realBottomBand)
                     } else {
                         HStack(alignment: .bottom, spacing: 0) {
@@ -3548,6 +3627,18 @@ private struct FeedPageContent: View {
     private func captionZone(leadingClearance: CGFloat = 16, trailingClearance: CGFloat, hidden: Bool, bandHeight: CGFloat) -> some View {
         let liftsForScrubber = duoLayout.pose != .regularPhone && bandHeight < 50
         let bottomPadding: CGFloat = duoLayout.pose == .closed ? 20 : (liftsForScrubber ? 20 + 28 : 20)
+        // Mirrored-layout round: "caption bottom-trailing" — the
+        // caption reads from the TRAILING edge instead, the SAME two
+        // clearance values just reflected: `leadingClearance` (the
+        // plain, small default every unmirrored caller leaves at 16)
+        // becomes the TRAILING padding, and `trailingClearance` (the
+        // caller's own rail/chrome-clearance amount) becomes the
+        // LEADING padding, clearing the rail/chrome now sitting there
+        // instead. Callers do not need their own mirrored branch —
+        // they already compute "the small gap" and "the gap that
+        // clears the rail" as two numbers; this is the one place that
+        // decides which edge each lands on.
+        let mirrored = duoLayout.isMirrored
         return captionTexts()
             .feedShadow()
             // Marked HERE, before `.frame(maxWidth: .infinity,
@@ -3561,10 +3652,10 @@ private struct FeedPageContent: View {
             // caption), but the same structural bug regardless of
             // when it shows.
             .duoGuideMark("caption", color: .pink, active: isActive)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.leading, leadingClearance)
+            .frame(maxWidth: .infinity, alignment: mirrored ? .trailing : .leading)
+            .padding(mirrored ? .trailing : .leading, leadingClearance)
             .padding(.bottom, bottomPadding)
-            .padding(.trailing, trailingClearance)
+            .padding(mirrored ? .leading : .trailing, trailingClearance)
         // Keeps this block clear of the display's own rounded bottom
         // corner — reported on the open-wide (landscape, bar-on) pose,
         // where this caption sits flush at the window's leading edge
@@ -3627,13 +3718,20 @@ private struct FeedPageContent: View {
     /// OWN bottom-leading corner at `(24, H − 30)` regardless of its
     /// rendered height, with no need to measure that height first.
     private func duoOpenWideCaption(containerSize: CGSize, safeAreaTop: CGFloat) -> some View {
-        let stageMinX = duoLayout.stageRect(containerSize: containerSize, safeAreaTop: safeAreaTop).minX
-        let leading: CGFloat = 24
-        let width = max(0, stageMinX - 40 - leading)
-        let rect = CGRect(x: leading, y: 0, width: width, height: max(0, containerSize.height - 30))
+        // Mirrored-layout round: this caption sits off the video, on
+        // the SAME bezel the stage itself touches — `openWideWideVideoBox`
+        // already moves that bezel to the trailing edge when mirrored,
+        // so this reads `stageMaxX` and the window's own trailing
+        // margin instead of `stageMinX`/leading.
+        let stage = duoLayout.stageRect(containerSize: containerSize, safeAreaTop: safeAreaTop)
+        let mirrored = duoLayout.isMirrored
+        let near: CGFloat = 24
+        let width = max(0, mirrored ? (containerSize.width - stage.maxX - 40 - near) : (stage.minX - 40 - near))
+        let rect = CGRect(x: mirrored ? containerSize.width - near - width : near, y: 0,
+                           width: width, height: max(0, containerSize.height - 30))
         return captionTexts()
             .feedShadow()
-            .frame(width: rect.width, alignment: .leading)
+            .frame(width: rect.width, alignment: mirrored ? .trailing : .leading)
             .opacity(isScrubbing ? 0 : 1)
             .animation(.easeOut(duration: 0.15), value: isScrubbing)
             .allowsHitTesting(false)
@@ -3641,7 +3739,7 @@ private struct FeedPageContent: View {
             .accessibilityHidden(hideForFullscreen)
             .accessibilityIdentifier(isActive && !hideForFullscreen ? "feed_caption" : "")
             .accessibilityLabel(meta.placeText.map { "\($0). " + meta.voiceOverLabel } ?? meta.voiceOverLabel)
-            .frame(width: rect.width, height: rect.height, alignment: .bottomLeading)
+            .frame(width: rect.width, height: rect.height, alignment: mirrored ? .bottomTrailing : .bottomLeading)
             .position(x: rect.midX, y: rect.midY)
             .duoGuideMark("caption", color: .pink, active: isActive)
     }
@@ -3708,10 +3806,13 @@ private struct FeedPageContent: View {
     /// the bottom section, across and aligned from the date and
     /// time." This row now has a second occupant — the Mute/Filter/
     /// Bin group (`FeedView.laptopDeckControls`) — so it can no
-    /// longer claim the row's whole width. `trailing` stops short of
-    /// the group's own real left edge (`laptopControlGroupLeadingX`,
-    /// a live measurement — see that property's own comment), with
-    /// `DuoLayout.pagePad` clear between them.
+    /// longer claim the row's whole width. Unmirrored, `trailing` stops
+    /// short of the group's own real left edge
+    /// (`laptopControlGroupFrame.minX`, a live measurement — see that
+    /// property's own comment), with `DuoLayout.pagePad` clear between
+    /// them; mirrored, the caption reads from the TRAILING side
+    /// instead, `leading` stopping short of the group's own real right
+    /// edge (`.maxX`) the same way — see this function's own body.
     ///
     /// Owner re-adapt (round-4 review): the fallback for the one
     /// frame before the group has ever reported was the OLD
@@ -3744,10 +3845,34 @@ private struct FeedPageContent: View {
     private func duoLaptopCaption(containerSize: CGSize, safeAreaBottom: CGFloat) -> some View {
         if let scrubberRect = duoLayout.laptopScrubberRect(containerSize: containerSize, safeAreaBottom: safeAreaBottom),
            let bottomY = duoLayout.laptopCaptionBottomY(containerSize: containerSize, safeAreaBottom: safeAreaBottom) {
-            let leading = DuoLayout.pagePad
-            let fallbackTrailing = (duoLayout.laptopControlGroupTrailingX(containerSize: containerSize, safeAreaBottom: safeAreaBottom) ?? containerSize.width)
-                - (3 * 44 + 2 * 12) - DuoLayout.pagePad
-            let trailing = laptopControlGroupLeadingX.map { $0 - DuoLayout.pagePad } ?? fallbackTrailing
+            // Mirrored-layout round: the group moved to the LEADING
+            // side, so the caption now reads from the TRAILING side
+            // instead — "caption + iCloud ring bottom-trailing," the
+            // same opposite-the-rail principle as everywhere else.
+            // `nearX` is `laptopControlGroupTrailingX`'s own value,
+            // whichever edge it now measures from (see that
+            // function's own comment); the `3 * 44 + 2 * 12` estimate
+            // (`Rail`'s own 44pt tap target × 3 buttons, the group's
+            // own 12pt `HStack` spacing × 2 gaps) is unchanged, only
+            // which edge it is subtracted from or added to flips.
+            let nearX = duoLayout.laptopControlGroupTrailingX(containerSize: containerSize, safeAreaBottom: safeAreaBottom)
+            let groupWidthEstimate: CGFloat = 3 * 44 + 2 * 12
+            // A plain closure, invoked at once: an `if/else` with no
+            // trailing View expression, written directly in this
+            // `@ViewBuilder` function's body, is read as a VIEW branch
+            // by the builder and fails to type-check (`()` is not a
+            // `View`) — this keeps the branch a plain value
+            // computation, outside the builder's own transform.
+            let (leading, trailing): (CGFloat, CGFloat) = {
+                if duoLayout.isMirrored {
+                    let fallbackLeading = (nearX ?? 0) + groupWidthEstimate + DuoLayout.pagePad
+                    let leading = laptopControlGroupFrame.map { $0.maxX + DuoLayout.pagePad } ?? fallbackLeading
+                    return (leading, containerSize.width - DuoLayout.pagePad)
+                }
+                let fallbackTrailing = (nearX ?? containerSize.width) - groupWidthEstimate - DuoLayout.pagePad
+                let trailing = laptopControlGroupFrame.map { $0.minX - DuoLayout.pagePad } ?? fallbackTrailing
+                return (DuoLayout.pagePad, trailing)
+            }()
             let width = max(0, trailing - leading)
             let top = scrubberRect.maxY + 8
             let rect = CGRect(x: leading, y: top, width: width, height: max(0, bottomY - top))
@@ -3840,6 +3965,12 @@ private struct FeedPageContent: View {
     /// rail's bottom edge sits `Rail.seamClearance` above the video's
     /// bottom edge, the playhead seam — on the video, not in the chin.
     private func actionRail(bottomBand: CGFloat) -> some View {
+        // Mirrored-layout round (item D, left-handed regular iPhone):
+        // the whole point of the setting — the rail itself moves to
+        // the LEADING edge. No rail COLUMN exists here (this is the
+        // pre-Duo overlay, `railColumnRect == nil`), so this is the
+        // one place that reads `isMirrored` directly rather than
+        // through `DuoLayout.railColumn`'s own edge.
         VStack(spacing: Rail.spacing) {
             likeButton(rail)
             shareButton
@@ -3847,7 +3978,7 @@ private struct FeedPageContent: View {
             shrinkButton(rail)
             deleteButton(rail)
         }
-        .padding(.trailing, 10)
+        .padding(duoLayout.isMirrored ? .leading : .trailing, 10)
         .padding(.bottom, bottomBand + Rail.seamClearance)
     }
 
