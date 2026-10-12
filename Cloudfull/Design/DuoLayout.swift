@@ -893,8 +893,10 @@ struct DuoLayout {
     /// The smallest gap the chrome column is ever allowed to close to
     /// the rail's own real pixels — the owner's own floor (pose pass,
     /// round 4: "move those 3 buttons closer to the rail … keeping
-    /// 8pt clear").
-    private static let minChromeRailClearance: CGFloat = 8
+    /// 8pt clear"). Not `private` since the owner's own Bin-badge
+    /// clamp (`FeedView.chromeColumn`) reads this too, so the two
+    /// stay the one floor, not a second hand-copied `8`.
+    static let minChromeRailClearance: CGFloat = 8
 
     /// The rail's own real visual edge this frame, closest to the
     /// chrome column — `ringCenteredColumnX` (the SAME x
@@ -918,7 +920,13 @@ struct DuoLayout {
     /// / 2, …)` clamp (its own comment) already keeps the BUTTON'S
     /// own position from crossing the structural column — the
     /// non-overlap guarantee this clamp duplicated, less accurately.
-    private func railVisualEdge(containerSize: CGSize, safeAreaTop: CGFloat) -> (edge: HorizontalEdge, x: CGFloat)? {
+    ///
+    /// Not `private` since `FeedView.chromeColumn`'s own Bin-badge
+    /// label clamp (owner re-adapt, BLOCKER: the badge's own widened
+    /// capsule ran over the rail's Shrink icon) reads this too — the
+    /// same real boundary the button's own position already answers
+    /// to, not a second guess at it.
+    func railVisualEdge(containerSize: CGSize, safeAreaTop: CGFloat) -> (edge: HorizontalEdge, x: CGFloat)? {
         guard let column = railColumn(containerSize: containerSize, safeAreaTop: safeAreaTop),
               railColumnRect(containerSize: containerSize, safeAreaTop: safeAreaTop) != nil,
               let centerX = ringCenteredColumnX(containerSize: containerSize, safeAreaTop: safeAreaTop)

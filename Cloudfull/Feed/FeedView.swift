@@ -1444,7 +1444,7 @@ struct FeedView: View {
             Spacer(minLength: 8)
             if !suppressDefaultRow {
                 counterCapsule
-                binButton
+                binButton()
             }
         }
         .padding(.horizontal, 12)
@@ -1481,17 +1481,33 @@ struct FeedView: View {
     /// flowing left to right — "each button is level with a gap
     /// between two rail buttons" (`DUO_POSES.md`).
     ///
-    /// `binButton`'s own queued-count badge rides inside its capsule,
-    /// same as every other pose — `.position()` here centers whatever
-    /// width that capsule actually needs, so the narrow chrome column
-    /// (`DuoLayout.chromeColumnRect`) is never a hard clip on it.
-    ///
     /// Owner re-adapt: this used to ALSO repeat the count as its own
     /// line under Bin, "counter one line 4pt under Bin" — a real
     /// doubled-badge bug, "it shows the count and space twice." Shown
-    /// once now, the pill's own inline badge, same as everywhere else.
+    /// once, below, not twice.
+    ///
+    /// Owner re-adapt (round-4 review, BLOCKER): `binButton`'s own
+    /// inline badge — the fix for that first doubled-badge report —
+    /// widens its capsule for "count · size," and `.position()` here
+    /// centres that WIDER capsule on a fixed point with no `HStack`
+    /// flow to push a neighbour out of the way the way `topChrome`/
+    /// `pose5TopRow`/`laptopDeckControls` all have; its own right half
+    /// ran over the rail's Shrink icon. `showsInlineBadge: false`
+    /// keeps Bin a plain circle here instead, and this function draws
+    /// the one count/size label itself, UNDER that circle, small
+    /// (11pt, the wireframe's own "12 GB under Bin"), WIDTH-CLAMPED to
+    /// whichever is tighter: the column's own leading edge
+    /// (`chromeColumnRect.minX`, the column's own reserved space —
+    /// never further left, into the video) or `railVisualEdge`'s own
+    /// real x minus `DuoLayout.minChromeRailClearance` (the SAME
+    /// boundary `chromeColumnRect` itself already answers to, so the
+    /// label can never reach further than the button's own right edge
+    /// already does). `.minimumScaleFactor` shrinks it rather than
+    /// letting it overflow past either bound.
     private func chromeColumn(duoLayout: DuoLayout, safeAreaTop: CGFloat, containerSize: CGSize) -> some View {
         let centers = duoLayout.zigzagCenters(containerSize: containerSize, safeAreaTop: safeAreaTop)
+        let columnRect = duoLayout.chromeColumnRect(containerSize: containerSize, safeAreaTop: safeAreaTop)
+        let railEdge = duoLayout.railVisualEdge(containerSize: containerSize, safeAreaTop: safeAreaTop)?.x
         return Group {
             if centers.count == 3 {
                 muteButton
@@ -1499,8 +1515,23 @@ struct FeedView: View {
                 FilterMenuView(store: optionsStore, hidesChrome: hidesGlobalChrome)
                     .duoGuideMark("top.filter", color: .teal)
                     .position(centers[1])
-                binButton
+                binButton(showsInlineBadge: false)
                     .position(centers[2])
+                if let binBadgeText, let columnRect {
+                    let binX = centers[2].x
+                    let maxLeadingHalf = binX - columnRect.minX
+                    let maxTrailingHalf = (railEdge ?? binX) - DuoLayout.minChromeRailClearance - binX
+                    let maxWidth = max(0, min(maxLeadingHalf, maxTrailingHalf) * 2)
+                    Text(binBadgeText)
+                        .font(.system(size: 11, weight: .medium))
+                        .monospacedDigit()
+                        .foregroundStyle(.white)
+                        .feedShadow()
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.6)
+                        .frame(maxWidth: maxWidth)
+                        .position(x: binX, y: centers[2].y + 22)
+                }
             }
         }
     }
@@ -1564,7 +1595,7 @@ struct FeedView: View {
                 .duoGuideMark("top.filter", color: .teal)
             Spacer(minLength: 8)
             counterCapsule
-            binButton
+            binButton()
         }
         .frame(width: width, height: rowHeight, alignment: .center)
         .position(x: leading + width / 2, y: centerY)
@@ -1620,7 +1651,7 @@ struct FeedView: View {
                     muteButton
                     FilterMenuView(store: optionsStore, hidesChrome: hidesGlobalChrome)
                         .duoGuideMark("top.filter", color: .teal)
-                    binButton
+                    binButton()
                     // Owner re-adapt: this used to ALSO repeat the
                     // count/size trailing of Bin, inside the deck's
                     // own margin — the same doubled-badge bug
@@ -1907,12 +1938,22 @@ struct FeedView: View {
     //
     // The glyph is `archivebox.fill`.
 
-    private var binButton: some View {
+    /// `showsInlineBadge` (owner re-adapt, pose 3/4/4W BLOCKER):
+    /// `false` only for `chromeColumn`'s own call — this button's
+    /// capsule otherwise WIDENS for "count · size," which ran its own
+    /// right half over the rail's Shrink icon once `chromeColumn`
+    /// centres this on a fixed point in that narrow column, with no
+    /// row to push a neighbour out of the way the way `topChrome`/
+    /// `pose5TopRow`/`laptopDeckControls`'s own `HStack` flow does.
+    /// `chromeColumn` instead keeps this a plain circle and draws the
+    /// same text as its own separate, clamped label under it — see
+    /// that function's own comment.
+    private func binButton(showsInlineBadge: Bool = true) -> some View {
         Button { Usage.shared.binOpened(); showTrash = true } label: {
             HStack(spacing: 5) {
                 Image(systemName: "archivebox.fill")
                     .font(.system(size: 15, weight: .medium))
-                if let binBadgeText {
+                if showsInlineBadge, let binBadgeText {
                     Text(binBadgeText)
                         .font(.system(size: 14, weight: .semibold))
                         .monospacedDigit()
