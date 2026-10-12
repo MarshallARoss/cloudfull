@@ -141,6 +141,16 @@ struct ChinNavigation: View {
     /// (`railAlignedCenter == nil`) never reads this at all.
     let safeAreaBottom: CGFloat
 
+    /// Mirrored-layout round: true when this host's own `DuoLayout
+    /// .isMirrored` reads true — see that property's own comment.
+    /// Flips which edge this control anchors to and grows from:
+    /// LEADING instead of TRAILING, in every state this file already
+    /// handles collapsed or expanded, rail-aligned or the plain
+    /// default. `false` by default (every call site but the three real
+    /// hosts, and any host that has not read `DuoLayout` at all),
+    /// which keeps this pixel-identical to before this round.
+    let isMirrored: Bool
+
     @State private var isExpanded = false
     @ObservedObject private var modeStore = AppModeStore.shared
     // Collapses the switcher when either pager starts to scroll.
@@ -186,13 +196,14 @@ struct ChinNavigation: View {
 
     init(
         bottomBand: CGFloat, railBottom: CGFloat = 0, railAlignedCenter: CGPoint? = nil,
-        railAlignedTopClamp: CGFloat? = nil, safeAreaBottom: CGFloat = 0
+        railAlignedTopClamp: CGFloat? = nil, safeAreaBottom: CGFloat = 0, isMirrored: Bool = false
     ) {
         self.bottomBand = bottomBand
         self.railBottom = railBottom
         self.railAlignedCenter = railAlignedCenter
         self.railAlignedTopClamp = railAlignedTopClamp
         self.safeAreaBottom = safeAreaBottom
+        self.isMirrored = isMirrored
     }
 
     var body: some View {
@@ -208,7 +219,12 @@ struct ChinNavigation: View {
         // ignores the safe area. This reader does the same, so
         // `captionCenterFromBottom` is the same distance in both places.
         GeometryReader { proxy in
-            ZStack(alignment: .bottomTrailing) {
+            // Mirrored-layout round: `isMirrored` flips this whole
+            // ZStack's own alignment to `.bottomLeading` — the chin
+            // anchors to, and expands from, the LEADING edge instead,
+            // the capsule's own leading edge fixed in place — see
+            // `resolvedNearPadding`'s own comment.
+            ZStack(alignment: isMirrored ? .bottomLeading : .bottomTrailing) {
                 // A clear full-screen catcher mounts only while the
                 // switcher is expanded. A tap or a short drag on it
                 // collapses the switcher. Declared first, so the capsule
@@ -276,13 +292,14 @@ struct ChinNavigation: View {
                 // exactly as they do on a regular iPhone, from
                 // whichever spot this pose uses.
                 switcher(containerWidth: proxy.size.width)
-                    // 12pt from the right edge on every host that has
-                    // no rail-aligned spot — the control does not sit
+                    // 12pt from the near edge (trailing, or leading
+                    // when mirrored) on every host that has no
+                    // rail-aligned spot — the control does not sit
                     // under the trash can. A rail-aligned pose pulls
                     // this in instead, to its own measured spot, in
                     // EVERY state, collapsed or expanded — see
-                    // `resolvedTrailingPadding`.
-                    .padding(.trailing, resolvedTrailingPadding(containerWidth: proxy.size.width))
+                    // `resolvedNearPadding`.
+                    .padding(isMirrored ? .leading : .trailing, resolvedNearPadding(containerWidth: proxy.size.width))
                     // The bottom padding centers the shape on
                     // `captionCenterFromBottom` by default — pulled
                     // closer to the page bottom only if the rail's own
@@ -296,7 +313,7 @@ struct ChinNavigation: View {
                     .padding(.bottom, resolvedBottomPadding(containerHeight: proxy.size.height))
                     .duoGuideMark("chin", color: .mint)
             }
-            .frame(width: proxy.size.width, height: proxy.size.height, alignment: .bottomTrailing)
+            .frame(width: proxy.size.width, height: proxy.size.height, alignment: isMirrored ? .bottomLeading : .bottomTrailing)
         }
         .ignoresSafeArea()
         // The switcher is always expanded on the Settings screen. Seeding
@@ -376,45 +393,56 @@ struct ChinNavigation: View {
     /// push it past the page's own left margin.
     private static let pagePad: CGFloat = 16
 
-    /// This control's own trailing padding — the distance between its
-    /// own trailing edge and the page's.
+    /// This control's own NEAR-edge padding — trailing, ordinarily; the
+    /// distance between its own leading edge and the page's instead,
+    /// once `isMirrored` flips `body`'s own alignment and padding edge
+    /// to match (renamed from `resolvedTrailingPadding`, mirrored-layout
+    /// round).
     ///
     /// `railAlignedCenter == nil`: the plain 12pt every host has
     /// always used, unconditionally, in every state — pixel-identical
-    /// to what this control has always done.
+    /// to what this control has always done, on whichever edge `body`
+    /// applies it to.
     ///
-    /// `railAlignedCenter != nil`: solved for the trailing padding
-    /// that puts this view's own trailing edge — the ZStack aligns it
-    /// `.bottomTrailing` — exactly `collapsedTapTarget / 2` past
+    /// `railAlignedCenter != nil`: solved for the padding that puts
+    /// this view's own NEAR edge — the ZStack aligns it to that same
+    /// corner — exactly `collapsedTapTarget / 2` past
     /// `railAlignedCenter.x`, the same point `.position(x:,y:)` used
-    /// to be handed directly. This is the SAME value whether collapsed
-    /// or expanded: since `.padding(.trailing:)` fixes the view's own
-    /// trailing edge regardless of its width, holding this padding
-    /// constant through the expand/collapse morph is what keeps the
-    /// capsule's own trailing edge exactly where the collapsed
-    /// button's trailing edge was, growing only leftward — "expand in
-    /// place" (owner report, pose 6: "it moves to the bottom of the
-    /// screen" instead). Expressing the pose's own spot as padding on
-    /// the ordinary view, instead of a separate `.position()` on a
-    /// separate branch, is what lets `expand()`/`collapse()`'s springs
-    /// (unchanged) animate the move — see `body`'s own comment.
+    /// to be handed directly. Mirrored, that is `railAlignedCenter.x`
+    /// itself, measured in from the LEADING edge; unmirrored, it is
+    /// `containerWidth - railAlignedCenter.x`, measured in from the
+    /// TRAILING edge — the same formula, reflected. This is the SAME
+    /// value whether collapsed or expanded: since a fixed-edge padding
+    /// holds the view's own near edge in place regardless of its
+    /// width, holding this padding constant through the expand/collapse
+    /// morph is what keeps the capsule's own near edge exactly where
+    /// the collapsed button's near edge was, growing only into the
+    /// container — "expand in place" (owner report, pose 6: "it moves
+    /// to the bottom of the screen" instead). Expressing the pose's own
+    /// spot as padding on the ordinary view, instead of a separate
+    /// `.position()` on a separate branch, is what lets
+    /// `expand()`/`collapse()`'s springs (unchanged) animate the move —
+    /// see `body`'s own comment.
     ///
-    /// Clamped while expanded so the capsule's own LEADING edge never
+    /// Clamped while expanded so the capsule's own FAR edge never
     /// passes `Self.pagePad`: a rail-aligned anchor can sit close
-    /// enough to the page's own leading edge (pose 5, portrait, the
-    /// ring-centred column) that growing a full 252pt-wide capsule
-    /// leftward from it, with no clamp, would push part of the glass
-    /// off screen. The clamp only ever pulls the padding DOWN (pushing
-    /// the capsule right, back on screen); it never fires at any
-    /// measured pose today, since every rail-aligned anchor already
-    /// leaves more than `pagePad` clear on its leading side.
-    private func resolvedTrailingPadding(containerWidth: CGFloat) -> CGFloat {
+    /// enough to the page's own far edge (pose 5, portrait, the
+    /// ring-centred column, on either edge once mirrored) that growing
+    /// a full 252pt-wide capsule into it, with no clamp, would push
+    /// part of the glass off screen. The clamp only ever pulls the
+    /// padding DOWN (pushing the capsule back on screen); it never
+    /// fires at any measured pose today, since every rail-aligned
+    /// anchor already leaves more than `pagePad` clear on its far
+    /// side.
+    private func resolvedNearPadding(containerWidth: CGFloat) -> CGFloat {
         guard let railAlignedCenter else { return 12 }
-        let anchored = containerWidth - railAlignedCenter.x - collapsedTapTarget / 2
+        let anchored = isMirrored
+            ? railAlignedCenter.x - collapsedTapTarget / 2
+            : containerWidth - railAlignedCenter.x - collapsedTapTarget / 2
         guard isExpanded else { return anchored }
         let expandedWidth = Self.expandedWidth(containerWidth: containerWidth)
-        let maxTrailingForOnScreenLeading = containerWidth - expandedWidth - Self.pagePad
-        return min(anchored, maxTrailingForOnScreenLeading)
+        let maxNearForOnScreenFarEdge = containerWidth - expandedWidth - Self.pagePad
+        return min(anchored, maxNearForOnScreenFarEdge)
     }
 
     /// This control's own bottom padding — the distance between its

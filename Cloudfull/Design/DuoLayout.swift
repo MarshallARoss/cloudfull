@@ -491,7 +491,7 @@ struct DuoLayout {
             return CGRect(x: 0, y: 0, width: containerSize.width, height: division.minY)
         case .book:
             guard let division else { return nil }
-            return CGRect(x: 0, y: 0, width: max(0, division.minX), height: containerSize.height)
+            return bookStagePageBox(division: division, containerSize: containerSize)
         case .openWide where isWideVideo:
             return openWideWideVideoBox(containerSize: containerSize, safeAreaTop: safeAreaTop)
         case .regularPhone:
@@ -555,9 +555,15 @@ struct DuoLayout {
             return openWideWideVideoRect(containerSize: containerSize, safeAreaTop: safeAreaTop, aspectRatio: aspectRatio)
         }
         if pose == .book, let division {
+            // Mirrored-layout round: the stage is always the page AWAY
+            // from the rail/chrome, never a fixed left/right page — the
+            // fold's own real position (`division`) does not move, only
+            // which of its two pages the bar sits beside does. `rightPage(...)`
+            // (the OTHER page — the grid) mirrors the same way, from the
+            // same principle.
             return aspectRatio >= 1
                 ? bookWideVideoRect(division: division, containerSize: containerSize, aspectRatio: aspectRatio)
-                : fitRect(in: CGRect(x: 0, y: 0, width: max(0, division.minX), height: containerSize.height),
+                : fitRect(in: bookStagePageBox(division: division, containerSize: containerSize),
                           aspectRatio: aspectRatio)
         }
         if pose == .laptop, let division {
@@ -822,6 +828,22 @@ struct DuoLayout {
         return CGRect(x: 0, y: 0, width: max(0, rightEdge), height: height)
     }
 
+    /// Pose 4/4W's stage PAGE — the page the rail/chrome is NOT beside
+    /// — plain, pre-video-aspect box: `[0, division.minX] × [0, H]`
+    /// unmirrored (the left page), `[division.maxX, W] × [0, H]`
+    /// mirrored (the right page). The fold's own real position
+    /// (`division`) never moves; only which page the bar sits beside
+    /// does, so this is the one place that decides which page is "the
+    /// stage" — `bookWideVideoRect` and `rightPage` each read this
+    /// same choice, from the same principle, rather than deciding it
+    /// twice.
+    private func bookStagePageBox(division: CGRect, containerSize: CGSize) -> CGRect {
+        if isMirrored {
+            return CGRect(x: division.maxX, y: 0, width: max(0, containerSize.width - division.maxX), height: containerSize.height)
+        }
+        return CGRect(x: 0, y: 0, width: max(0, division.minX), height: containerSize.height)
+    }
+
     /// Pose 4W's stage box. Originally "width `division.minX − 32`, x
     /// = 16, centred on H" — `pagePad` clear on each side of the left
     /// page's own span.
@@ -831,16 +853,22 @@ struct DuoLayout {
     /// "0 → fold minX": `x` is `0`, `width` is `division.minX` itself,
     /// no `pagePad` margin on either side any more. Still a WIDTH-first
     /// box, not a FIT-into-box one like every other case in this file:
-    /// the left page's own width is fixed first, then the height
+    /// the stage page's own width is fixed first, then the height
     /// follows from `aspectRatio` alone, centred vertically in the
     /// full window height. This differs from `fitRect` deliberately —
     /// a FIT box here could bind on height first for a near-square
-    /// `division.minX`, which would narrow the video below the page's
-    /// own full width.
+    /// page width, which would narrow the video below the page's own
+    /// full width.
+    ///
+    /// Mirrored-layout round: reads `bookStagePageBox`'s own choice of
+    /// page instead of assuming the left one — "touch the bezel" now
+    /// means the TRAILING bezel, `x` starting at the stage page's own
+    /// `minX` (`division.maxX` when mirrored), not always `0`.
     private func bookWideVideoRect(division: CGRect, containerSize: CGSize, aspectRatio: CGFloat) -> CGRect {
-        let width = max(0, division.minX)
+        let page = bookStagePageBox(division: division, containerSize: containerSize)
+        let width = page.width
         let height = width / aspectRatio
-        return CGRect(x: 0, y: (containerSize.height - height) / 2, width: width, height: height)
+        return CGRect(x: page.minX, y: (containerSize.height - height) / 2, width: width, height: height)
     }
 
     // MARK: - Pose-table constants (build 3)
@@ -1630,11 +1658,15 @@ struct DuoLayout {
         }
     }
 
-    /// The book pose's right page (pose 4/4W only; `nil` otherwise, or
-    /// with no active division to anchor against): "`x ∈
-    /// [division.maxX, W − bar − 80]`, full height" — the fold's own
-    /// trailing edge to the leading edge of whichever column (rail/
-    /// bar, then chrome) sits on the window's own far side. Reads
+    /// The book pose's GRID page (pose 4/4W only; `nil` otherwise, or
+    /// with no active division to anchor against) — the page the stage
+    /// is NOT on (`stageRect`/`bookWideVideoRect`'s own
+    /// `bookStagePageBox`), named `rightPage` from when that was always
+    /// the physical right page; it is the LEFT page once mirrored
+    /// swaps the stage to the right. Originally "`x ∈ [division.maxX,
+    /// W − bar − 80]`, full height" — the fold's own trailing edge to
+    /// the leading edge of whichever column (rail/bar, then chrome)
+    /// sits on the window's own far side. Reads
     /// `chromeColumnStageExclusion`, not `chromeColumnWidth` — see
     /// that function's own comment (round-4 review, BLOCKER): the
     /// wireframe keeps this page at its OLD edge even though round 4
@@ -1642,24 +1674,25 @@ struct DuoLayout {
     /// `DuoRightPage` (build 12) mounts here, and reads this rect on
     /// every reload for its own grid/tile sizing — not unread, as an
     /// earlier version of this comment said.
+    ///
+    /// Mirrored-layout round: unmirrored, unchanged — the fold's own
+    /// trailing edge to the rail/chrome's own leading edge, same as
+    /// always. Mirrored, the grid is the LEFT page instead — the
+    /// rail/chrome's own trailing edge (now on the window's own
+    /// leading side) to the fold's own leading edge.
     func rightPage(containerSize: CGSize, safeAreaTop: CGFloat) -> CGRect? {
         guard pose == .book, let division else { return nil }
         let column = railColumn(containerSize: containerSize, safeAreaTop: safeAreaTop)
         let barWidth = column?.width ?? 0
-        switch column?.edge ?? .trailing {
-        case .trailing:
-            let minX = division.maxX
-            let maxX = max(minX, containerSize.width - barWidth
-                - chromeColumnStageExclusion(containerSize: containerSize, safeAreaTop: safeAreaTop))
+        let chromeExclusion = chromeColumnStageExclusion(containerSize: containerSize, safeAreaTop: safeAreaTop)
+        if isMirrored {
+            let maxX = division.minX
+            let minX = min(maxX, barWidth + chromeExclusion)
             return CGRect(x: minX, y: 0, width: maxX - minX, height: containerSize.height)
-        case .leading:
-            // Not a configuration this pose has ever measured (the
-            // bar is always trailing on the book pose) — mirrored for
-            // the same reason `availableRect`/`railColumn` handle
-            // both edges generically.
-            let minX = division.maxX
-            return CGRect(x: minX, y: 0, width: max(0, containerSize.width - minX), height: containerSize.height)
         }
+        let minX = division.maxX
+        let maxX = max(minX, containerSize.width - barWidth - chromeExclusion)
+        return CGRect(x: minX, y: 0, width: maxX - minX, height: containerSize.height)
     }
 
     /// Pose 5's own top-chrome anchor (build 6): "the active
@@ -1833,9 +1866,18 @@ struct DuoLayout {
     /// `laptopCaptionDateLineCenterY` reports its first real value,
     /// instead of drawing at a guessed spot for one frame and then
     /// jumping.
+    /// Mirrored-layout round: the group moves to band 0's own LEADING
+    /// margin instead, same `pagePad` inset — the returned value is
+    /// then an X coordinate near the window's LEFT edge, not the
+    /// right, and the group grows rightward from it. The name stays
+    /// `laptopControlGroupTrailingX` (the unmirrored case this file
+    /// has always measured); `FeedView.laptopDeckControls`/
+    /// `duoLaptopCaption` are the two callers that turn this one
+    /// number into a box on whichever side `isMirrored` picks.
     func laptopControlGroupTrailingX(containerSize: CGSize, safeAreaBottom: CGFloat) -> CGFloat? {
         guard let bottom = laptopBottomRect(containerSize: containerSize, safeAreaBottom: safeAreaBottom) else { return nil }
-        return Self.laptopBand(bottom, 0).maxX - Self.pagePad
+        let band = Self.laptopBand(bottom, 0)
+        return isMirrored ? band.minX + Self.pagePad : band.maxX - Self.pagePad
     }
 
     /// The horizontal action rail, centred in band 1: the same five
@@ -1853,6 +1895,13 @@ struct DuoLayout {
     /// `railAlignedChinCenter` reads `chinCenter` to anchor
     /// `ChinNavigation`'s own collapsed switcher here, the same
     /// position-based path pose 5's rail column already uses.
+    /// Mirrored-layout round: "chin bottom-leading … rail order
+    /// reverses, builds from the chin downward" (the owner's own 1V-
+    /// upside-down description, the same principle applied here) —
+    /// the chin moves from slot 5 (trailing) to slot 0 (leading), and
+    /// the five rail buttons shift into slots 1–5, keeping their own
+    /// Keep→Delete order: the row still "builds away from the chin,"
+    /// just from the other end.
     func laptopRailRow(containerSize: CGSize, safeAreaBottom: CGFloat) -> (centers: [CGPoint], hairlineX: CGFloat, hairlineY: CGFloat, chinCenter: CGPoint)? {
         guard let bottom = laptopBottomRect(containerSize: containerSize, safeAreaBottom: safeAreaBottom) else { return nil }
         let band = Self.laptopBand(bottom, 1)
@@ -1861,6 +1910,11 @@ struct DuoLayout {
         let usable = max(0, band.width - Self.pagePad * 2)
         let slot = usable / 6
         let xs = (0..<6).map { leading + (CGFloat($0) + 0.5) * slot }
+        if isMirrored {
+            let centers = xs.suffix(5).map { CGPoint(x: $0, y: y) }
+            let chinCenter = CGPoint(x: xs[0], y: y)
+            return (centers: Array(centers), hairlineX: (xs[0] + xs[1]) / 2, hairlineY: y, chinCenter: chinCenter)
+        }
         let centers = xs.prefix(5).map { CGPoint(x: $0, y: y) }
         let chinCenter = CGPoint(x: xs[5], y: y)
         return (centers: Array(centers), hairlineX: (xs[4] + xs[5]) / 2, hairlineY: y, chinCenter: chinCenter)
