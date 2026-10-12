@@ -77,8 +77,15 @@ struct DuoRightPage: View {
         .padding(.top, 16)
         .frame(width: contentRect.width, height: contentRect.height, alignment: .top)
         .position(x: contentRect.midX, y: contentRect.midY)
-        .task(id: currentAssetID) { await reload() }
-        .onChange(of: trashService.count) { _, _ in Task { await reload() } }
+        // One `.task(id:)`, keyed on both inputs `reload()` depends on,
+        // not a separate `.onChange(of: trashService.count)` spawning
+        // its own untracked `Task`. SwiftUI cancels and restarts a
+        // `.task(id:)` itself whenever its id changes, so a Bin count
+        // change arriving mid-reload cancels the stale run instead of
+        // racing it — the old `onChange` `Task` was never cancelled and
+        // could finish after, and overwrite, a newer reload from a
+        // since-changed `currentAssetID`.
+        .task(id: "\(currentAssetID)_\(trashService.count)") { await reload() }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("duo_right_page")
     }

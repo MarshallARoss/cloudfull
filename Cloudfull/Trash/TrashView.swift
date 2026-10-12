@@ -726,23 +726,42 @@ private struct TrashPreviewView: View {
         }
         .presentationDetents([.large])
         .presentationDragIndicator(.visible)
-        .task {
-            if isPhoto {
-                // Loads the photo at the preview container's own size
-                // with aspect fit, never a guessed screen size. It uses
-                // the same fetch as the bin thumbnails. The service does
-                // the fetch off the main thread. `max(width, height)`
-                // covers either orientation with one request, matching
-                // `UIScreen.main.bounds.height`'s old intent of "the
-                // long edge" without assuming which edge that is.
-                let side = max(previewSize.width, previewSize.height) * displayScale
-                guard let image = await library.thumbnail(for: assetKey, side: side, contentMode: .aspectFit) else {
-                    loadFailed = true
-                    return
-                }
-                photo = image
+        // Review fix: a photo preview used to load on the sheet's plain
+        // `.task {}` below, which can run before `.onGeometryChange`
+        // above ever fires — `previewSize` then reads `.zero`, and
+        // `side` (its `max`) is 0, a request this view never meant to
+        // make. Keyed on `previewSize` instead, so this task reruns
+        // the moment the real size arrives (cancelling any zero-size
+        // fetch already in flight), and skips outright while it is
+        // still `.zero`. Split out from the video path below — that
+        // one has no size dependency, and must not restart (a second
+        // `playerItem` fetch, a second `NotificationCenter` observer
+        // leaked alongside the first) every time geometry settles.
+        .task(id: previewSize) {
+            guard isPhoto, previewSize != .zero else { return }
+            // Loads the photo at the preview container's own size
+            // with aspect fit, never a guessed screen size. It uses
+            // the same fetch as the bin thumbnails. The service does
+            // the fetch off the main thread. `max(width, height)`
+            // covers either orientation with one request, matching
+            // `UIScreen.main.bounds.height`'s old intent of "the
+            // long edge" without assuming which edge that is.
+            let side = max(previewSize.width, previewSize.height) * displayScale
+            let image = await library.thumbnail(for: assetKey, side: side, contentMode: .aspectFit)
+            // Review fix: `withPhotoKitTimeout` also returns `nil` when
+            // a new `previewSize` cancels this fetch, same as a real
+            // failure. Bail out here instead of reporting that as
+            // `loadFailed`.
+            guard !Task.isCancelled else { return }
+            guard let image else {
+                loadFailed = true
                 return
             }
+            loadFailed = false
+            photo = image
+        }
+        .task {
+            guard !isPhoto else { return }
             guard let item = await library.playerItem(for: assetKey) else {
                 loadFailed = true
                 return

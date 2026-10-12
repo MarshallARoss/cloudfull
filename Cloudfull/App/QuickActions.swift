@@ -73,6 +73,31 @@ final class CloudfullAppDelegate: NSObject, UIApplicationDelegate {
         return true
     }
 
+    /// The pre-iOS 27 counterpart of
+    /// `CloudfullSceneDelegate.supportedInterfaceOrientations(for:)`.
+    /// `UIWindowScene.h` in the iOS 27.1 SDK marks that scene-delegate
+    /// method iOS 27.0+ only; `IPHONEOS_DEPLOYMENT_TARGET` is 26.0
+    /// (`project.pbxproj`), so on iOS 26 the system never calls it at
+    /// all and falls back to this older, app-delegate-level method
+    /// instead — without this override, iOS 26 would see no mask
+    /// override and read the Info.plist's `UISupportedInterfaceOrientations`
+    /// directly, which now lists all three orientations (landscape
+    /// included) for every screen, not only the ones that opt in.
+    ///
+    /// Same `RotationPolicy.shared.allowsLandscape` the scene delegate
+    /// reads, same `.allButUpsideDown` / `.portrait` formula — one
+    /// source of truth for the mask, asked for through whichever of the
+    /// two system methods this OS version actually calls.
+    /// `RotationPolicy.requestUpdate()` already calls
+    /// `setNeedsUpdateOfSupportedInterfaceOrientations()` (iOS 16+) on
+    /// every `allowsLandscape` change, which re-queries through
+    /// whichever method applies, so no separate invalidation path is
+    /// needed here for iOS 26.
+    func application(_ application: UIApplication,
+                     supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
+        RotationPolicy.shared.allowsLandscape ? .allButUpsideDown : .portrait
+    }
+
     func application(_ application: UIApplication,
                      configurationForConnecting connectingSceneSession: UISceneSession,
                      options: UIScene.ConnectionOptions) -> UISceneConfiguration {

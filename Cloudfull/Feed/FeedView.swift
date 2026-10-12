@@ -229,11 +229,16 @@ struct FeedView: View {
     /// `isScrubbing`. Only the centered page can ever be fullscreen, so at
     /// most one page's callback ever reports `true`.
     @State private var isFullscreen = false
-    /// The signal from whichever page's `PlayerPageView` currently reports
+    /// The id of whichever page's `PlayerPageView` most recently reported
     /// `allowsLandscapeCandidate == true`, through `onAllowsLandscapeChanged`
-    /// — the page half of `allowsLandscape` below. Same shape as
-    /// `isFullscreen`; only the centered page can ever report `true`.
-    @State private var pageAllowsLandscape = false
+    /// — `nil` once that same page reports back `false`. `pageAllowsLandscape`
+    /// below derives from comparing this against `currentPageID`, rather
+    /// than storing the bool directly, so a page-change `.onChange` and a
+    /// child's own report can never race to overwrite each other: whichever
+    /// of the two fires last, the comparison still reads correctly, because
+    /// neither side writes a bool that the other could stomp on — see
+    /// `pageAllowsLandscape`'s own comment for the race this replaced.
+    @State private var landscapePageID: String?
 
     /// Owns the share flow end to end: the Wi-Fi guard, resolving a
     /// shareable file, presenting the system share sheet, and the album
@@ -348,6 +353,30 @@ struct FeedView: View {
     /// the stage/aspect-ratio math alone, with no chrome-hiding role of
     /// its own left to inherit.
     private var hidesGlobalChrome: Bool { isFullscreen }
+
+    /// `landscapePageID != nil && landscapePageID == currentPageID`, not a
+    /// stored bool.
+    ///
+    /// Review fix: the parent's own page-change `.onChange(of:
+    /// currentPageID)` used to reset a stored `pageAllowsLandscape = false`
+    /// directly, and the new page's own `onAllowsLandscapeChanged` report
+    /// set it `true` once that page qualified — two independent writers of
+    /// the same bool, with no guarantee which fired last. A fast swipe (or
+    /// a UI test) could land the new page's own "true" report BEFORE the
+    /// page-change `.onChange` ran, which then clobbered it back to
+    /// `false` — or the other order, leaving a stale `true` standing for a
+    /// page that never actually qualified. Deriving this from identity
+    /// instead removes the ordering dependency entirely: whichever of the
+    /// two fires last, the comparison below still reads correctly, because
+    /// neither side overwrites a bool the other one owns.
+    ///
+    /// BLOCKER fix: both ids start out `nil` (cold launch, a fresh
+    /// remount, or an empty deck), so a plain `==` reads `nil == nil` as
+    /// a match and grants landscape before any page ever reported in.
+    /// The explicit `!= nil` keeps that case `false`.
+    private var pageAllowsLandscape: Bool {
+        landscapePageID != nil && landscapePageID == currentPageID
+    }
 
     /// Decision A's own `allowsLandscape` rule
     /// (`design/duo/duo_audit_apple_checklist.md` §3, R4): "(active page
@@ -656,6 +685,16 @@ struct FeedView: View {
         .onChange(of: allowsLandscape, initial: true) { _, newValue in
             RotationPolicy.shared.update(allowsLandscape: newValue)
         }
+        // `RootView`'s mode `switch` unmounts this view on a Photos/
+        // Settings switch (see that type's own comment) — the
+        // `.onChange` above never fires again once that happens, so a
+        // landscape grant made just before leaving would otherwise sit
+        // there forever. Clears it on the way out; `initial: true`
+        // above re-asserts the current page's own value the moment
+        // this view is mounted again.
+        .onDisappear {
+            RotationPolicy.shared.update(allowsLandscape: false)
+        }
         .task {
             viewModel.start()
             trashService.start()
@@ -705,14 +744,15 @@ struct FeedView: View {
             if shareCoordinator.probeState == .preparing {
                 shareCoordinator.cancelShare()
             }
-            // R4 fix: the other half of the race guard in
-            // `onAllowsLandscapeChanged` below — see that closure's own
-            // comment. A page change always starts from "no landscape
-            // grant," the same way `PlayerPageView.dismissedThisSpell`
-            // resets on its own page-change edge; the new centered
-            // page's own report (once its video's shape is known) sets
-            // this back to `true` if it actually qualifies.
-            pageAllowsLandscape = false
+            // Review fix: this used to also reset a stored
+            // `pageAllowsLandscape = false` here, racing the new
+            // centered page's own `onAllowsLandscapeChanged` report —
+            // see `pageAllowsLandscape`'s own comment. Nothing to reset
+            // any more: `pageAllowsLandscape` derives from comparing
+            // `landscapePageID` against `currentPageID` directly, so it
+            // already reads `false` the instant `currentPageID` no
+            // longer matches whichever page last claimed it, with no
+            // separate write needed on this edge.
         }
         // The one place options reach the deck. `apply` is idempotent, so
         // a duplicate notification costs nothing. `start()` reads the
@@ -888,26 +928,32 @@ struct FeedView: View {
                             onScrubbingChanged: { isScrubbing = $0 },
                             fullscreenAllowed: fullscreenAllowed,
                             onFullscreenChanged: { isFullscreen = $0 },
-                            // R4 fix: `entry.id == currentPageID` is
-                            // re-checked LIVE here, not the `isActive`
-                            // snapshot this closure captured at creation
-                            // time — the pager may already have moved on
-                            // by the time this fires. Without this
-                            // guard, a page swiped past quickly (rapid
-                            // swipes, or a UI test) can report `true`
-                            // and leave `pageAllowsLandscape` stuck
-                            // granting landscape for a page that never
-                            // asked for it; confirmed on the 17 Pro sim
-                            // (a portrait video's window genuinely
-                            // rotated to landscape after scrolling past
-                            // a wide one). `.onChange(of: currentPageID)`
-                            // above is this guard's other half: it resets
-                            // the flag on every page change, since a
-                            // dropped stale report here must not leave a
-                            // stale `true` standing either.
+                            // Review fix: this used to `guard entry.id ==
+                            // currentPageID` before writing a shared
+                            // `pageAllowsLandscape` bool directly — a
+                            // live re-check against a value the parent's
+                            // own `.onChange(of: currentPageID)` could
+                            // still be in the middle of updating, so
+                            // which write landed last depended on
+                            // ordering between two different call sites.
+                            // This closure now only ever records THIS
+                            // page's own claim, by id, independent of
+                            // whatever `currentPageID` happens to read at
+                            // this exact moment; `pageAllowsLandscape`'s
+                            // own comparison against `currentPageID`
+                            // (see that computed property's comment) is
+                            // what decides whether it counts, every time
+                            // it is read, with no ordering to get wrong.
+                            // The `else if` only clears a claim this same
+                            // page made — a stale `false` from a page
+                            // that already lost the claim to a newer one
+                            // must not erase that newer one's `true`.
                             onAllowsLandscapeChanged: { newValue in
-                                guard entry.id == currentPageID else { return }
-                                pageAllowsLandscape = newValue
+                                if newValue {
+                                    landscapePageID = entry.id
+                                } else if landscapePageID == entry.id {
+                                    landscapePageID = nil
+                                }
                             },
                             safeAreaTop: safeAreaTop,
                             fullscreenSafeArea: fullscreenSafeArea,
@@ -2275,89 +2321,14 @@ struct FeedView: View {
             )
     }
 
-    // MARK: - Duo alignment guides
-
-    /// Owner, direct: "if you have to add a helper box or line to the
-    /// UI in dev that's fine, cause you're not nailing the network
-    /// status icon alignment at all." DEBUG-only, on only behind
-    /// `-cloudfull-duo-guides` — deliberately a bare launch-argument
-    /// check, not `DiagnosticsGate`/`DiagnosticsSwitch`: those also
-    /// turn on from the in-app diagnostics toggle, which would put
-    /// this on screen in an otherwise-normal DEBUG session. This must
-    /// never appear by accident, and never in a shipped build.
-    ///
-    /// Now a plain alias for `DuoGuides.isOn` — the shared flag every
-    /// `.duoGuideMark` call site across the app reads too, so there is
-    /// one source of truth instead of two bare launch-argument checks
-    /// that could drift.
-    private static var showsDuoGuides: Bool { DuoGuides.isOn }
-
-    /// `pager`'s own background — plain black outside
-    /// `-cloudfull-duo-guides`, unchanged. Owner: "I can't tell if the
-    /// laptop video sits flush on the fold." A video is opaque and
-    /// exactly fills whatever rect layout actually gave it — the only
-    /// way to SEE a gap between that rect and where it was supposed to
-    /// reach is to colour the destination differently from its
-    /// surroundings and let the video cover whatever it actually
-    /// reaches: any colour still showing through once it is on screen
-    /// IS the gap.
-    ///
-    /// `blue` is the whole window — "everything else behind controls."
-    /// `red` is this pose's own STRUCTURAL stage area — the box a video
-    /// is FIT into, not the aspect-dependent FITted rect itself (that
-    /// would always exactly equal the video's own rect, by definition,
-    /// and could never show a gap). `.laptop`/`.book` draw their own
-    /// `division` as a third, dim grey band on top of both, so the
-    /// fold's own edges stay visible against whichever colour is
-    /// under them.
-    ///
-    /// Pose by pose: `.laptop` — red is `[0, W] × [0, division.minY]`,
-    /// the SAME box `stageRect`'s own `.laptop` branch FITs into (see
-    /// that branch's own comment for why its bottom is `division.minY`
-    /// itself now, no separate gap) — the owner's own ask, stated
-    /// directly: "the upright half (window top → division.minY) RED,
-    /// the flat half (division.maxY → window bottom) BLUE." `.book`
-    /// (4/4W) — red is the left page, `[0, division.minX] × [0, H]`,
-    /// the same box `stageRect`'s own `.book` tall-video branch FITs
-    /// into; the right page (the grid) stays blue, unmarked, matching
-    /// the owner's own "left page red, right page blue." Every other
-    /// Duo pose (1V, 3, 5) — red is `availableRect`, the structural
-    /// box every one of THEIR OWN stage branches FITs into before an
-    /// aspect ratio narrows it (pose 3's own wide-video box additionally
-    /// excludes the chrome column and the caption band — `availableRect`
-    /// alone over-states that one pose's own red area slightly; flagged
-    /// here rather than adding a second, pose-3-only box, since the
-    /// owner's own ask was for the fold-flush check specifically).
-    /// `.tent` falls to the same `availableRect` default — no rail
-    /// column there either, so it reduces to the full container and red
-    /// sits exactly over blue, harmless, nothing to see either way.
-    /// `.regularPhone` draws no red at all (`nil`) — this tool is for
-    /// Duo pose work specifically, and a regular iPhone's own stage is
-    /// never in question here.
-    /// `stageArea`/`division` come from `DuoLayout.debugStageArea` — see
-    /// that method's own comment for the red rect's own pose-by-pose
-    /// definition and the `availableRect`/pose-3 caveat.
-    ///
-    /// This is the PAGER's own shared background, behind the whole
-    /// `ScrollView` — mostly covered in practice by each page's own
-    /// opaque background (`PlayerPageView`'s identical use of this same
-    /// pair, which is what actually shows through around a video in
-    /// normal use). Kept here too for whatever this layer alone ever
-    /// shows (between pages, before the first page lays out) so it
-    /// never reads plain black while guides are on.
-    @ViewBuilder
-    private func pagerBackground(duoLayout: DuoLayout, safeAreaTop: CGFloat, containerSize: CGSize) -> some View {
-        #if DEBUG
-        if Self.showsDuoGuides && DuoGuideColours.isOn {
-            DuoGuideColouredBackground(duoLayout: duoLayout, safeAreaTop: safeAreaTop, containerSize: containerSize)
-                .ignoresSafeArea()
-        } else {
-            Color.black
-        }
-        #else
-        Color.black
-        #endif
-    }
+    // MARK: - Duo alignment guides (debug overlay)
+    //
+    // `showsDuoGuides` and `pagerBackground` used to live in this block
+    // too, but `pagerBackground` is called unconditionally from `body`
+    // (outside any `#if DEBUG`), so a Release build could never see its
+    // declaration. Both now sit just after this block's own `#endif`,
+    // compiled in every configuration; `pagerBackground`'s own internal
+    // `#if DEBUG` still keeps the coloured-guide branch DEBUG-only.
 
     /// `body`'s own root touch logger (`-cloudfull-log-touches`) —
     /// see that `simultaneousGesture`'s own comment.
@@ -2747,6 +2718,94 @@ struct FeedView: View {
         }
     }
     #endif
+
+    // MARK: - Pager background
+    //
+    // Compiled in every configuration — `pagerBackground` is called
+    // unconditionally from `body`'s `.background(...)` — unlike the
+    // guide overlay above, which only ever runs from inside DEBUG.
+
+    /// Owner, direct: "if you have to add a helper box or line to the
+    /// UI in dev that's fine, cause you're not nailing the network
+    /// status icon alignment at all." DEBUG-only, on only behind
+    /// `-cloudfull-duo-guides` — deliberately a bare launch-argument
+    /// check, not `DiagnosticsGate`/`DiagnosticsSwitch`: those also
+    /// turn on from the in-app diagnostics toggle, which would put
+    /// this on screen in an otherwise-normal DEBUG session. This must
+    /// never appear by accident, and never in a shipped build.
+    ///
+    /// Now a plain alias for `DuoGuides.isOn` — the shared flag every
+    /// `.duoGuideMark` call site across the app reads too, so there is
+    /// one source of truth instead of two bare launch-argument checks
+    /// that could drift.
+    private static var showsDuoGuides: Bool { DuoGuides.isOn }
+
+    /// `pager`'s own background — plain black outside
+    /// `-cloudfull-duo-guides`, unchanged. Owner: "I can't tell if the
+    /// laptop video sits flush on the fold." A video is opaque and
+    /// exactly fills whatever rect layout actually gave it — the only
+    /// way to SEE a gap between that rect and where it was supposed to
+    /// reach is to colour the destination differently from its
+    /// surroundings and let the video cover whatever it actually
+    /// reaches: any colour still showing through once it is on screen
+    /// IS the gap.
+    ///
+    /// `blue` is the whole window — "everything else behind controls."
+    /// `red` is this pose's own STRUCTURAL stage area — the box a video
+    /// is FIT into, not the aspect-dependent FITted rect itself (that
+    /// would always exactly equal the video's own rect, by definition,
+    /// and could never show a gap). `.laptop`/`.book` draw their own
+    /// `division` as a third, dim grey band on top of both, so the
+    /// fold's own edges stay visible against whichever colour is
+    /// under them.
+    ///
+    /// Pose by pose: `.laptop` — red is `[0, W] × [0, division.minY]`,
+    /// the SAME box `stageRect`'s own `.laptop` branch FITs into (see
+    /// that branch's own comment for why its bottom is `division.minY`
+    /// itself now, no separate gap) — the owner's own ask, stated
+    /// directly: "the upright half (window top → division.minY) RED,
+    /// the flat half (division.maxY → window bottom) BLUE." `.book`
+    /// (4/4W) — red is the left page, `[0, division.minX] × [0, H]`,
+    /// the same box `stageRect`'s own `.book` tall-video branch FITs
+    /// into; the right page (the grid) stays blue, unmarked, matching
+    /// the owner's own "left page red, right page blue." Every other
+    /// Duo pose (1V, 3, 5) — red is `availableRect`, the structural
+    /// box every one of THEIR OWN stage branches FITs into before an
+    /// aspect ratio narrows it (pose 3's own wide-video box additionally
+    /// excludes the chrome column and the caption band — `availableRect`
+    /// alone over-states that one pose's own red area slightly; flagged
+    /// here rather than adding a second, pose-3-only box, since the
+    /// owner's own ask was for the fold-flush check specifically).
+    /// `.tent` falls to the same `availableRect` default — no rail
+    /// column there either, so it reduces to the full container and red
+    /// sits exactly over blue, harmless, nothing to see either way.
+    /// `.regularPhone` draws no red at all (`nil`) — this tool is for
+    /// Duo pose work specifically, and a regular iPhone's own stage is
+    /// never in question here.
+    /// `stageArea`/`division` come from `DuoLayout.debugStageArea` — see
+    /// that method's own comment for the red rect's own pose-by-pose
+    /// definition and the `availableRect`/pose-3 caveat.
+    ///
+    /// This is the PAGER's own shared background, behind the whole
+    /// `ScrollView` — mostly covered in practice by each page's own
+    /// opaque background (`PlayerPageView`'s identical use of this same
+    /// pair, which is what actually shows through around a video in
+    /// normal use). Kept here too for whatever this layer alone ever
+    /// shows (between pages, before the first page lays out) so it
+    /// never reads plain black while guides are on.
+    @ViewBuilder
+    private func pagerBackground(duoLayout: DuoLayout, safeAreaTop: CGFloat, containerSize: CGSize) -> some View {
+        #if DEBUG
+        if Self.showsDuoGuides && DuoGuideColours.isOn {
+            DuoGuideColouredBackground(duoLayout: duoLayout, safeAreaTop: safeAreaTop, containerSize: containerSize)
+                .ignoresSafeArea()
+        } else {
+            Color.black
+        }
+        #else
+        Color.black
+        #endif
+    }
 
     // MARK: - Actions
     //
