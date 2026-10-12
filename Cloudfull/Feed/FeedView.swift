@@ -1481,19 +1481,15 @@ struct FeedView: View {
     /// flowing left to right — "each button is level with a gap
     /// between two rail buttons" (`DUO_POSES.md`).
     ///
-    /// `binButton`'s own queued-count badge rides inside its capsule
-    /// in the row layout; the narrow chrome column (`DuoLayout
-    /// .chromeColumnRect`, round-4 re-adapt: computed live from the
-    /// rail's own real position rather than a fixed 80pt, so it has
-    /// gotten narrower still) has no room for that, so it repeats as
-    /// its own line under Bin
-    /// instead — the table's "counter one line 4pt under Bin." The
-    /// `22`pt offset below is a hand-picked stand-in for "Bin's own
-    /// half-height + 4pt + the counter's own half-height": no
-    /// wireframe measurement exists for Bin's own rendered size in
-    /// this column, so this needs the owner's own look at the sim to
-    /// confirm, same as every other "measured, no API" constant in
-    /// this file is confirmed before being trusted.
+    /// `binButton`'s own queued-count badge rides inside its capsule,
+    /// same as every other pose — `.position()` here centers whatever
+    /// width that capsule actually needs, so the narrow chrome column
+    /// (`DuoLayout.chromeColumnRect`) is never a hard clip on it.
+    ///
+    /// Owner re-adapt: this used to ALSO repeat the count as its own
+    /// line under Bin, "counter one line 4pt under Bin" — a real
+    /// doubled-badge bug, "it shows the count and space twice." Shown
+    /// once now, the pill's own inline badge, same as everywhere else.
     private func chromeColumn(duoLayout: DuoLayout, safeAreaTop: CGFloat, containerSize: CGSize) -> some View {
         let centers = duoLayout.zigzagCenters(containerSize: containerSize, safeAreaTop: safeAreaTop)
         return Group {
@@ -1505,16 +1501,6 @@ struct FeedView: View {
                     .position(centers[1])
                 binButton
                     .position(centers[2])
-                if let binBadgeText {
-                    Text(binBadgeText)
-                        .font(.system(size: 11, weight: .medium))
-                        .monospacedDigit()
-                        .foregroundStyle(.white)
-                        .feedShadow()
-                        .lineLimit(1)
-                        .fixedSize()
-                        .position(x: centers[2].x, y: centers[2].y + 22)
-                }
             }
         }
     }
@@ -1635,22 +1621,17 @@ struct FeedView: View {
                     FilterMenuView(store: optionsStore, hidesChrome: hidesGlobalChrome)
                         .duoGuideMark("top.filter", color: .teal)
                     binButton
-                    // `binButton`'s own inline badge already rides inside
-                    // its capsule (same as every call site of this button);
-                    // this repeats the count trailing of Bin, inside the
-                    // deck's own margin, the same doubled-but-deliberate
-                    // pattern `chromeColumn`'s identical comment already
-                    // documents for the vertical zigzag column (now gone,
-                    // but the pattern itself is unchanged).
-                    if let binBadgeText {
-                        Text(binBadgeText)
-                            .font(.system(size: 11, weight: .medium))
-                            .monospacedDigit()
-                            .foregroundStyle(.white)
-                            .feedShadow()
-                            .lineLimit(1)
-                            .fixedSize()
-                    }
+                    // Owner re-adapt: this used to ALSO repeat the
+                    // count/size trailing of Bin, inside the deck's
+                    // own margin — the same doubled-badge bug
+                    // `chromeColumn`'s identical comment now
+                    // documents, "it shows the count and space
+                    // twice." Shown once now, the pill's own inline
+                    // badge — the `trailingX`-anchored frame below
+                    // still keeps the group inside its own margin
+                    // when that inline badge alone widens the pill,
+                    // the same real-measurement mechanism as before,
+                    // just with one fewer thing making it wider.
                 }
                 .background(
                     GeometryReader { proxy in
