@@ -455,7 +455,16 @@ struct DuoLayout {
             // reads the 9:16 default (`useVideoAspect` is `false` for
             // it), so it is unaffected — "tall videos stay as they
             // are."
-            let top = safeAreaTop + 10
+            //
+            // Owner re-adapt: "the video should go all the way to the
+            // top" — the box's own top is now the window's own top
+            // edge (`0`), not `safeAreaTop + 10`, the same full-bleed
+            // rule 1V/5 already follow (system status draws OVER the
+            // video there too, not beside it). Nothing interactive
+            // mounts above the fold in this pose, so there is nothing
+            // under that status area for a tap to miss. `bottom` is
+            // unchanged — only the top edge moved.
+            let top: CGFloat = 0
             let bottom = max(top, division.minY - 14)
             let box = CGRect(x: 0, y: top, width: containerSize.width, height: bottom - top)
             return fitRect(in: box, aspectRatio: aspectRatio)
