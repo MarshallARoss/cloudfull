@@ -331,8 +331,29 @@ struct DuoLayout {
         // needs one.
         let windowBounds = CGRect(origin: .zero, size: windowSize).insetBy(dx: -1, dy: -1)
         let rawDivisionFrame = (proxy.reservedRegions(kind: .division).first(where: \.isActive)?.frame).map(toWindowSpace)
+        // Split View, book pose (live sim 2026-10-12): with Cloudfull on
+        // the LEFT page only, its own 469pt window still reports an
+        // active `.division` at 455,0,13,669 — the fold sitting on the
+        // window's own trailing edge, not inside it. Classified as
+        // `.book`, the stage page box came out 0pt wide and the video
+        // vanished. The split wireframe (C-left/C-right) keeps the flat
+        // Split View layout in this pose, since the fold is the split
+        // boundary, so a fold that leaves less than `minFoldPageExtent`
+        // on either side counts as no fold at all.
         let divisionFrame = rawDivisionFrame.flatMap { (frame: CGRect) -> CGRect? in
-            windowBounds.contains(frame) ? frame : nil
+            guard windowBounds.contains(frame) else { return nil }
+            if frame.height > frame.width {
+                if frame.minX < Self.minFoldPageExtent
+                    || windowSize.width - frame.maxX < Self.minFoldPageExtent {
+                    return nil
+                }
+            } else {
+                if frame.minY < Self.minFoldPageExtent
+                    || windowSize.height - frame.maxY < Self.minFoldPageExtent {
+                    return nil
+                }
+            }
+            return frame
         }
         let pose = classify(
             horizontalSizeClass: horizontalSizeClass,
@@ -1300,6 +1321,13 @@ struct DuoLayout {
     /// pose — reverted: confirmed via the same log field that only
     /// ONE region is ever active here, so there was never a second,
     /// correct one to pick.
+    /// Minimum real page width (vertical fold) or height (horizontal
+    /// fold) a division frame must leave on EACH side of itself to
+    /// count as an actual fold — below this, the "page" on that side
+    /// is too thin to be real, and `current(...)` drops the division
+    /// entirely (see its own comment, book pose, 2026-10-12).
+    static let minFoldPageExtent: CGFloat = 120
+
     static let wideOcclusionThreshold: CGFloat = 60
 
     /// Owner correction (relayed, live 1V + pose-5 check): "General
