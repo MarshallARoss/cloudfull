@@ -2312,13 +2312,28 @@ struct DuoLayout {
 
     /// Photos tab only: the box the Photos top row (Live, Filter, Bin)
     /// centres in, in true window space. `nil` keeps `PhotoTopBar`'s own
-    /// original padding placement — regular iPhone, `.closed` (1V, 1H,
-    /// Split View halves), `.tent` — so those stay pixel-identical.
+    /// original padding placement — regular iPhone, `.tent` — so those
+    /// stay pixel-identical.
     /// 5/6: the Videos tab's `pose5TopRow` rule (y = `statusBlock.midY`,
     /// trailing clamped clear of the real occlusion), with Photos' own
     /// 12pt margin. 3/4: kept at the top (owner prefers it there on
     /// Photos), 8pt below the safe-area top like Videos' 1V row, inside
-    /// `availableRect` so Bin ends at the photo's own edge.
+    /// `availableRect` so Bin ends at the photo's own edge. `.closed`
+    /// (1V, 1H, Split View halves): the owner's review decision D1 —
+    /// the row moves from the old padding cy (16.8) to cy 28, the same
+    /// rule 3/4 already uses, so it lands at the Videos 1V/Split row's
+    /// own cy (27.5) and the Bin ends at the photo edge minus the 12pt
+    /// margin instead of 84pt short of it. `PhotoFeedView` keeps the
+    /// photo content and its chrome band on the OLD formula on `.closed`
+    /// even though this now returns non-nil there — see `clearanceRow`
+    /// at that call site — so only the Live/Filter/Bin row itself moves.
+    /// Follow-up fix (live Split View reading, 469×669, fallback leading
+    /// bar): D1's own "photo edge minus 12pt" promise only held for a
+    /// REAL bar — on `railColumn`'s 84pt FALLBACK guess
+    /// (`usedBarWidthFallback`, a bar iOS reports as 0 width), the
+    /// photos themselves never reserve that guessed column, so this
+    /// case now follows their own, un-narrowed span instead of
+    /// `availableRect`'s fictional one. See the `.closed` case below.
     func photosTopRowRect(containerSize: CGSize, safeAreaTop: CGFloat) -> CGRect? {
         let rowHeight: CGFloat = 40
         let margin: CGFloat = 12
@@ -2332,6 +2347,52 @@ struct DuoLayout {
             return CGRect(x: leading, y: midY - rowHeight / 2, width: max(0, trailing - leading), height: rowHeight)
         case .openWide, .book:
             let area = availableRect(containerSize: containerSize, safeAreaTop: safeAreaTop).insetBy(dx: margin, dy: 0)
+            return CGRect(x: area.minX, y: safeAreaTop + 8, width: max(0, area.width), height: rowHeight)
+        case .closed:
+            // Live reading (Split View, Cloudfull on the LEFT half,
+            // 469×669, Photos tab, leading bar): `availableRect` always
+            // subtracts `railColumn`'s own bar width, including its 84pt
+            // FALLBACK guess for a bar iOS reports as 0 width
+            // (`usedBarWidthFallback`, FB24906205) — but `PhotoFeedView`'s
+            // own posts never reserve that guessed column; they size
+            // against `rootProxy.size.width` alone (see that view's own
+            // comment at its `content(containerWidth:...)` call site),
+            // which tracks only the REAL safe-area reservation — zero
+            // here. That left an 84pt gap left of Bin the photos
+            // themselves never had, while a mirrored Live sat ~12pt from
+            // the edge. A REAL (measured) bar narrows the photos by that
+            // same real amount already, so only the fallback case needs
+            // to stop subtracting here — `usedBarWidthFallback` is
+            // exactly the signal for which case this is, so this follows
+            // the photos' own span instead of the fictional column.
+            // Decision 1 (owner, 2026-10-12): "With Photos in split
+            // screen on the left everything should be exactly the same
+            // except the tab switcher moves to the left … But photos
+            // the heart to delete got mirrored. Don't do that." This
+            // row's own POSITION must stay exactly as if not mirrored,
+            // same as its order (`PhotoTopBar.row`) — only the tab
+            // switcher moves for a mirrored window.
+            // `availableRect`/`railColumn` reflect their column onto
+            // `isMirrored`'s side on purpose (correct for the Videos
+            // tab, which swaps on purpose) — reading `barEdge` directly
+            // here instead excludes the real bar on whichever side it
+            // is actually measured, never the mirrored-for-Videos side,
+            // so a mirrored window and an unmirrored one get the same
+            // answer whenever both have a real bar.
+            let bounds: CGRect
+            if usedBarWidthFallback {
+                bounds = CGRect(origin: .zero, size: containerSize)
+            } else if let barEdge, barWidth > 0 {
+                switch barEdge {
+                case .leading:
+                    bounds = CGRect(x: barWidth, y: 0, width: max(0, containerSize.width - barWidth), height: containerSize.height)
+                case .trailing:
+                    bounds = CGRect(x: 0, y: 0, width: max(0, containerSize.width - barWidth), height: containerSize.height)
+                }
+            } else {
+                bounds = CGRect(origin: .zero, size: containerSize)
+            }
+            let area = bounds.insetBy(dx: margin, dy: 0)
             return CGRect(x: area.minX, y: safeAreaTop + 8, width: max(0, area.width), height: rowHeight)
         default:
             return nil
@@ -2638,6 +2699,20 @@ struct DuoLayout {
         return laptopBottomRect(containerSize: containerSize, safeAreaBottom: safeAreaBottom)?.minY
     }
 
+    /// The real camera's own height on the closed display, read off the
+    /// 1V occlusion (`occ-399,29,37,37`) — the bottom gap to the window's
+    /// own trailing edge (466 − 29 − 37 = 400, rounded to the owner's
+    /// measured 399) turned to a landscape width: 466 − 399 − 37 = 30.
+    /// Used only by `photosChinCenter`'s own 1H landscapeRight branch
+    /// below, to compute the camera's top on frames whose occlusion
+    /// reading is missing, outside the window, or stale (the owner's
+    /// review item A2).
+    static let closedLandscapeCameraBottomGap: CGFloat = 30
+    /// The real camera's own measured side, `occ-399,29,37,37`'s width
+    /// and height both — square on the closed display in every
+    /// rotation. Paired with `closedLandscapeCameraBottomGap` above.
+    static let closedCameraSize: CGFloat = 37
+
     /// Photos tab only: the chin centre. Same as `railAlignedChinCenter`
     /// on every pose except `.laptop`, where Photos has no bottom deck,
     /// so the chin takes pose 5's own bottom-trailing spot (owner: "on 6
@@ -2646,6 +2721,78 @@ struct DuoLayout {
     /// (wide-occlusion branch) and `railAlignedChinCenter`'s y, so 6
     /// lands on 5's exact point.
     func photosChinCenter(safeAreaTop: CGFloat, safeAreaBottom: CGFloat, containerSize: CGSize) -> CGPoint? {
+        // 1H landscapeRight: the bar is trailing and the camera is at the bottom-right.
+        // Keep the usual bottom spot, lifted to clear the camera on EVERY frame,
+        // including frames whose occlusion is outside the window or stale.
+        // Review fix 2 (SHOULD-FIX): gated on `containerSize.height` as
+        // well, not just `width > height` — the closed display's own
+        // landscape height is 466; this branch is for THAT physical
+        // size, not any wider-than-tall `.closed` window a future pose
+        // might report. 470 leaves a few points of rounding tolerance.
+        //
+        // Decision 2 (owner, 2026-10-12): "Upside down 1H with the fold
+        // on the bottom — the switcher is on the wrong side and the
+        // live, filter, and bin buttons are mirrored. It should look
+        // exactly like 1H with the fold on top." Live sim reading
+        // (closed, landscape, 678×466, Photos tab): the photos spanned
+        // x 0…594 and an EMPTY reserved column sat at 594…678 on the
+        // RIGHT — the very same real, trailing-side reservation normal
+        // (fold-on-top) 1H has — yet `isMirrored` read true there, a
+        // `toolbarVerticalEdge == .leading` misreport on this
+        // sub-pose, so the switcher landed on the WRONG (leading) side
+        // (Decision 1 already fixes the Live/Filter/Bin mirroring this
+        // same misreport caused). `isMirrored`/`barEdge` both derive
+        // from `toolbarVerticalEdge` and carry that misreport forward;
+        // `debugSafeAreaInsets` is this frame's own RAW
+        // `safeAreaInsets`, independent of `toolbarVerticalEdge`, and
+        // it reads correctly here (trailing > 0, leading == 0). So the
+        // switcher's side below now comes from THAT real reading first
+        // — `isMirrored` only decides the side when NEITHER real inset
+        // is nonzero (the Split View left-half fallback-bar case, where
+        // the real bar lives in the companion app's own window, not
+        // this one's, so neither inset is ever measurable here).
+        if pose == .closed, containerSize.width > containerSize.height,
+           containerSize.height <= 470,
+           let normalX = normalRingCenteredColumnX(containerSize: containerSize, safeAreaTop: safeAreaTop) {
+            let realTrailingInset = debugSafeAreaInsets.trailing > 0
+            let realLeadingInset = debugSafeAreaInsets.leading > 0
+            let columnIsTrailing = realTrailingInset ? true : (realLeadingInset ? false : !isMirrored)
+            let x = columnIsTrailing ? normalX : containerSize.width - normalX
+            let usualY = containerSize.height - max(safeAreaBottom - Self.chinBottomInset, Self.chinBottomInset) - Rail.hit / 2
+            // Computed camera top: the 1V reading (occ 399,29,37,37) turned to landscape.
+            // 466 − 30 − 37 = 399, which agrees with the landscape reading occ-611,399,37,37.
+            var cameraTop = containerSize.height - Self.closedLandscapeCameraBottomGap - Self.closedCameraSize
+            // Review fix 3 (SHOULD-FIX): clip the occlusion to the
+            // window before reading its `minY`, instead of requiring the
+            // whole rect to already fit inside the window. A grown Live
+            // Activity pill that touches or passes the window's bottom
+            // or trailing edge (e.g. `occ-596,443,82,226`) used to fail
+            // the old plain `contains` gate outright and get ignored —
+            // this reads its clipped position instead of falling back
+            // to the fixed 399 on every such frame.
+            //
+            // Decision 2: the camera-clearance side check below now
+            // follows `columnIsTrailing` too, the same reasoning as `x`
+            // above — on the bug's own misread frame the real column
+            // (and so the real camera) is on the trailing side
+            // (`columnIsTrailing` reads `true` there from the real
+            // inset), so this still clears the real camera instead of
+            // checking the wrong edge.
+            let bounds = CGRect(origin: .zero, size: containerSize)
+            if let occlusion {
+                let clipped = occlusion.intersection(bounds)
+                let onCameraSide = columnIsTrailing
+                    ? clipped.minX >= containerSize.width - barWidth - 8
+                    : clipped.maxX <= barWidth + 8
+                if !clipped.isEmpty,
+                   clipped.midY > containerSize.height / 2,
+                   onCameraSide {
+                    cameraTop = min(cameraTop, clipped.minY)
+                }
+            }
+            let clearY = cameraTop - Self.chinBottomInset - ChinNavigation.expandedHeight / 2
+            return CGPoint(x: x, y: min(usualY, clearY))
+        }
         guard pose == .laptop else {
             return railAlignedChinCenter(safeAreaTop: safeAreaTop, safeAreaBottom: safeAreaBottom, containerSize: containerSize)
         }

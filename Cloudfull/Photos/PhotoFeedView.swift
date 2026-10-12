@@ -8,6 +8,7 @@
 
 import SwiftUI
 import SwiftData
+import os
 
 /// Holds the photo pager's per-row frames without publishing them.
 ///
@@ -198,6 +199,77 @@ struct PhotoFeedView: View {
     /// identifier. Resets on a page change, so a stale reading from the
     /// previous current post can never linger.
     @State private var currentLiveState: LivePhotoPlaybackState?
+
+    /// `-cloudfull-log-rotation`: one line per Photos-tab layout change
+    /// — the same flag, the same logger subsystem, and the same
+    /// `DiagnosticsLog` mirror `PlayerPageView.logRotationPose` already
+    /// uses for the Videos tab. Photos has no pose/rotation probe of its
+    /// own today, so this covers the same ground here: window size, the
+    /// root `GeometryReader`'s own size, the safe-area insets,
+    /// `toolbarVerticalEdge` (the Duo bar reader's own reading, fed to
+    /// `DuoLayout.current`), and `duoLayout`'s pose/mirror/occlusion/bar
+    /// fields, plus the two Photos-only placements that reading drives
+    /// — `photosTopRowRect` and `photosChinCenter`.
+    private static let photosLayoutLog = Logger(subsystem: "com.cloudfull.app", category: "PhotosLayout")
+
+    /// `CGRect?` as `"x,y,w,h"`, or `"none"` — a private copy of
+    /// `PlayerPageView.rectProbe`'s own formatting. That helper is
+    /// private to its own file, so this view keeps its own copy rather
+    /// than reach across files for one formatting line.
+    private static func photosLayoutRectProbe(_ rect: CGRect?) -> String {
+        guard let rect else { return "none" }
+        return "\(Int(rect.minX)),\(Int(rect.minY)),\(Int(rect.width)),\(Int(rect.height))"
+    }
+
+    /// `"leading"`/`"trailing"`/`"nil"` for `toolbarVerticalEdge` and
+    /// `duoLayout.barEdge`, both `HorizontalEdge?`.
+    private static func photosLayoutEdgeProbe(_ edge: HorizontalEdge?) -> String {
+        switch edge {
+        case .leading: return "leading"
+        case .trailing: return "trailing"
+        case nil: return "nil"
+        }
+    }
+
+    /// Builds the `photosLayout_…` line itself, from exactly the values
+    /// `body`'s own `GeometryReader` already computed — no second,
+    /// possibly stale read of `self`'s stored properties. A `static`
+    /// function so a review of this probe can see it takes no implicit
+    /// state. Called on every body pass (cheap: string formatting only),
+    /// but only ever logged on a change — see the `.onChange` below,
+    /// which gates the actual `Logger`/`DiagnosticsLog` write on this
+    /// line changing, not on body running.
+    private static func photosLayoutProbeLine(
+        rootProxy: GeometryProxy,
+        duoLayout: DuoLayout,
+        safeAreaTop: CGFloat,
+        safeAreaBottom: CGFloat,
+        windowSize: CGSize,
+        toolbarVerticalEdge: HorizontalEdge?,
+        topRow: CGRect?
+    ) -> String {
+        let insets = rootProxy.safeAreaInsets
+        let chinCenter = duoLayout.photosChinCenter(safeAreaTop: safeAreaTop, safeAreaBottom: safeAreaBottom, containerSize: windowSize)
+        let chinCenterProbe = chinCenter.map { "\(Int($0.x)),\(Int($0.y))" } ?? "nil"
+        return "photosLayout_\(Int(windowSize.width))x\(Int(windowSize.height))"
+            + "_proxy-\(Int(rootProxy.size.width))x\(Int(rootProxy.size.height))"
+            + "_insets-\(Int(insets.top)),\(Int(insets.leading)),\(Int(insets.bottom)),\(Int(insets.trailing))"
+            + "_edge-\(photosLayoutEdgeProbe(toolbarVerticalEdge))"
+            + "_pose-\(duoLayout.pose.rawValue)_mirrored-\(duoLayout.isMirrored)_upsideDown-\(duoLayout.isUpsideDown)"
+            + "_barEdge-\(photosLayoutEdgeProbe(duoLayout.barEdge))_barWidth-\(Int(duoLayout.barWidth))_barFallback-\(duoLayout.usedBarWidthFallback)"
+            + "_occ-\(photosLayoutRectProbe(duoLayout.occlusion))"
+            + "_topRow-\(photosLayoutRectProbe(topRow))_chin-\(chinCenterProbe)"
+    }
+
+    /// The actual write, gated on `-cloudfull-log-rotation` the same way
+    /// `PlayerPageView.logRotationPose` gates its own. Called only from
+    /// the `.onChange` on `photosLayoutProbeLine` below, so this runs
+    /// once per real change, never once per body pass.
+    private static func logPhotosLayout(_ message: String) {
+        guard DiagnosticsGate.isOn("-cloudfull-log-rotation") else { return }
+        photosLayoutLog.notice("\(message, privacy: .public)")
+        DiagnosticsLog.shared.log("PhotosLayout", message)
+    }
     #endif
 
     init(trashService: TrashService) {
@@ -270,11 +342,35 @@ struct PhotoFeedView: View {
                 height: rootProxy.size.height + safeAreaTop + safeAreaBottom
             )
             // Photos tab only: non-nil on the Duo poses that place
-            // `PhotoTopBar` themselves (3/4/5/6), `nil` everywhere else
-            // (regular iPhone, 1V, 1H, closed Split View halves, tent),
-            // which keeps those poses on the original padding placement,
-            // pixel-identical. See `DuoLayout.photosTopRowRect`.
+            // `PhotoTopBar` themselves. Review fix (D1): that is now
+            // every Duo pose (3/4/5/6, plus `.closed` — 1V, 1H, the
+            // Split View halves), so `nil` is left only on a regular
+            // iPhone and `.tent`, which keep the original padding
+            // placement, pixel-identical. See `DuoLayout.photosTopRowRect`.
             let topRow = duoLayout.photosTopRowRect(containerSize: windowSize, safeAreaTop: safeAreaTop)
+            // Review follow-up (D1): `photosTopRowRect` now also returns
+            // non-nil on `.closed` (1V, 1H, Split View halves), so the
+            // Live/Filter/Bin row itself can move to the Videos cy-28
+            // rule below. The photo content and its chrome band must
+            // NOT move on those poses — only the row does — so this
+            // forces `nil` back for `content`/`topChromeBand` on
+            // `.closed`, while `topRow` itself (used for `PhotoTopBar`'s
+            // own placement just below) keeps the new, non-nil value.
+            let clearanceRow = duoLayout.pose == .closed ? nil : topRow
+            #if DEBUG
+            // `-cloudfull-log-rotation`: see `photosLayoutProbeLine`'s own
+            // comment. Built here, from this `GeometryReader`'s own
+            // locals, rather than inside the helper itself.
+            let photosLayoutProbeLine = Self.photosLayoutProbeLine(
+                rootProxy: rootProxy,
+                duoLayout: duoLayout,
+                safeAreaTop: safeAreaTop,
+                safeAreaBottom: safeAreaBottom,
+                windowSize: windowSize,
+                toolbarVerticalEdge: toolbarVerticalEdge,
+                topRow: topRow
+            )
+            #endif
             // The photo itself, its header, actions row, and caption all
             // measure against `rootProxy.size.width` — the full window,
             // including the closed Duo's trailing vertical-bar column.
@@ -300,14 +396,36 @@ struct PhotoFeedView: View {
                     ToolbarVerticalEdgeReader { toolbarVerticalEdge = $0 }
                 }
                 Color.black.ignoresSafeArea()
-                content(containerWidth: rootProxy.size.width, safeAreaTop: safeAreaTop, viewportHeight: rootProxy.size.height, isMirrored: duoLayout.isMirrored, topRow: topRow)
+                // Decision 1 (owner, 2026-10-12): "With Photos in split
+                // screen on the left everything should be exactly the
+                // same except the tab switcher moves to the left …
+                // But photos the heart to delete got mirrored. Don't
+                // do that." `isMirrored` here reaches `PhotoPostView`'s
+                // own Keep/Album/Share/Delete actions row
+                // (`actionsRow`'s `isMirrored` branch) — hardcoded
+                // `false` so that row stays the unmirrored layout on
+                // every pose; only `ChinNavigation` (the tab switcher,
+                // below) still honours the real `duoLayout.isMirrored`.
+                content(containerWidth: rootProxy.size.width, safeAreaTop: safeAreaTop, viewportHeight: rootProxy.size.height, isMirrored: false, topRow: clearanceRow)
                 // An opaque band that keeps a scrolling post's caption
                 // from showing through behind the status-bar clock and the
                 // top pills. It sits above the scroll content but below
                 // the pills in z-order, drawn before `PhotoTopBar` below.
                 // It never intercepts a touch, so the pills still get
                 // every tap.
-                topChromeBand(safeAreaTop: safeAreaTop, topRow: topRow)
+                // D4 (owner review, review fix 1): on `.closed` poses the
+                // row's own VISIBLE buttons — not `topRow`'s 40pt layout
+                // box, which is taller than the buttons it centres and
+                // reads `maxY` 48, well past where the buttons actually
+                // end — now end at y 44 (`topRow.midY` 28 + half of
+                // `StageGeometry.chromeHeight` (32) = 44). A scrolled
+                // photo's own header could otherwise show through behind
+                // the row's own bottom edge. `minHeight` floors the band
+                // at that 44 ONLY on `.closed`; every other pose passes
+                // 0, a no-op against `topClearance`'s own, larger answer
+                // there.
+                topChromeBand(safeAreaTop: safeAreaTop, topRow: clearanceRow,
+                              minHeight: duoLayout.pose == .closed ? (topRow.map { ceil($0.midY + StageGeometry.chromeHeight / 2) } ?? 0) : 0)
                 // `topRow` non-nil (poses 3/4/5/6): `PhotoTopBar` places
                 // itself with `.position`, in this `ZStack`'s own window
                 // space (it `.ignoresSafeArea()` below, so 0 = true
@@ -315,9 +433,10 @@ struct PhotoFeedView: View {
                 // `DuoLayout.photosTopRowRect` computed `topRow` in) — no
                 // outer `.frame`s needed.
                 //
-                // `topRow` nil (regular iPhone, 1V, 1H, closed Split View
-                // halves, tent): the two chained `.frame`s below clamp
-                // this row to `duoLayout.availableRect`'s width and then
+                // `topRow` nil (regular iPhone, `.tent`, the only poses
+                // left in the `nil` path after D1): the two chained
+                // `.frame`s below clamp this row to
+                // `duoLayout.availableRect`'s width and then
                 // pin it to the leading edge of the full window, so its
                 // trailing content — the space counter, the bin button —
                 // stops before the closed Duo's vertical bar column
@@ -328,13 +447,21 @@ struct PhotoFeedView: View {
                 // `availableRect` returns the full window unchanged on a
                 // regular iPhone, so both chained frames are no-ops
                 // there — `binButton` lands exactly where it always has.
+                // Decision 1 (owner, 2026-10-12): the Live/Filter/Bin
+                // row's own order and position stay exactly as if not
+                // mirrored — only the tab switcher moves. Both
+                // `PhotoTopBar` calls below pass `isMirrored: false`
+                // (was `duoLayout.isMirrored`) so `PhotoTopBar.row`'s
+                // own mirrored branch never engages from here; the
+                // outer alignment just below is hardcoded `.leading`
+                // for the same reason.
                 if let topRow {
                     PhotoTopBar(
                         trashService: trashService,
                         isLiveOn: $isLiveOn,
                         safeAreaTop: safeAreaTop,
                         onOpenBinRequested: { Usage.shared.binOpened(); showTrash = true },
-                        isMirrored: duoLayout.isMirrored,
+                        isMirrored: false,
                         placement: topRow,
                         clearsCorner: duoLayout.pose == .openWide || duoLayout.pose == .book
                     )
@@ -344,16 +471,20 @@ struct PhotoFeedView: View {
                         isLiveOn: $isLiveOn,
                         safeAreaTop: safeAreaTop,
                         onOpenBinRequested: { Usage.shared.binOpened(); showTrash = true },
-                        isMirrored: duoLayout.isMirrored
+                        isMirrored: false
                     )
-                    // Mirrored-layout round: `availableRect` already
-                    // excludes the column from whichever edge it is on —
-                    // this outer alignment just needs to match that same
-                    // edge, or a mirrored column and this row would land
-                    // on the same pixels.
+                    // `availableRect` is full width on every pose that
+                    // reaches this `else` branch (regular iPhone,
+                    // `.tent` — neither ever reserves a column), so
+                    // this alignment is a no-op today either way;
+                    // Decision 1 hardcodes it `.leading` (was
+                    // `duoLayout.isMirrored ? .trailing : .leading`)
+                    // so it stays a no-op rather than a landmine if a
+                    // future pose ever does reach here with a real
+                    // column.
                     .frame(width: duoLayout.availableRect(containerSize: rootProxy.size, safeAreaTop: safeAreaTop).width,
-                           alignment: duoLayout.isMirrored ? .trailing : .leading)
-                    .frame(maxWidth: .infinity, alignment: duoLayout.isMirrored ? .trailing : .leading)
+                           alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 // Every mode mounts exactly one instance. `bottomBand: 0`
                 // because Photos has no 9:16 stage. `photosChinCenter` is
@@ -416,6 +547,18 @@ struct PhotoFeedView: View {
                 measuredPostWidth = newWidth
                 PhotoImagePipeline.shared.configure(widthPoints: newWidth, scale: displayScale)
             }
+            #if DEBUG
+            // `-cloudfull-log-rotation`: fires once per real layout
+            // change (the string itself encodes every tracked input), not
+            // once per body pass — a free-scrolling feed invalidates
+            // `body` on nearly every frame, so logging from the body pass
+            // itself would flood the log with identical lines.
+            // `initial: true` logs the starting layout too, the same as
+            // `PlayerPageView`'s own `proxy.size` rotation-log `onChange`.
+            .onChange(of: photosLayoutProbeLine, initial: true) { _, newLine in
+                Self.logPhotosLayout(newLine)
+            }
+            #endif
         }
         // R2's other half: a scale-only change (an external display, or
         // the inner/outer swap on Duo) moves no width at all, so the
@@ -1031,11 +1174,16 @@ struct PhotoFeedView: View {
     /// A solid black band covers the status-bar clock and the top pill
     /// row. A scrolling post's header or caption never shows through
     /// behind them. The band is 6 pt shorter than `topClearance` above,
-    /// so it ends between the pills and the first content row.
-    private func topChromeBand(safeAreaTop: CGFloat, topRow: CGRect?) -> some View {
+    /// so it ends between the pills and the first content row — unless
+    /// `minHeight` (D4, the owner's review) asks for taller: on
+    /// `.closed` poses the Live/Filter/Bin row itself now ends past
+    /// that 6pt-short answer, so the caller floors this at the row's
+    /// own bottom edge instead. `minHeight` defaults to 0, a no-op
+    /// against the `max` below, so every other call site is unchanged.
+    private func topChromeBand(safeAreaTop: CGFloat, topRow: CGRect?, minHeight: CGFloat = 0) -> some View {
         Color.black
             .frame(maxWidth: .infinity)
-            .frame(height: topClearance(safeAreaTop: safeAreaTop, topRow: topRow) - 6)
+            .frame(height: max(topClearance(safeAreaTop: safeAreaTop, topRow: topRow) - 6, minHeight))
             .ignoresSafeArea(edges: .top)
             .allowsHitTesting(false)
     }

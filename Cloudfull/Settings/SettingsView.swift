@@ -69,7 +69,7 @@ struct SettingsView: View {
     /// what writes this.
     ///
     /// Review follow-up (R5 chin pass): added so this screen can read
-    /// `DuoLayout.railAlignedChinCenter`, the same chin anchor `FeedView`
+    /// `DuoLayout.photosChinCenter`, the same chin anchor `FeedView`
     /// and `PhotoFeedView` already do — this screen had no `DuoLayout`
     /// of its own before, which is why its chin used to jump to a
     /// different spot than the other two tabs on the Duo.
@@ -82,7 +82,7 @@ struct SettingsView: View {
     /// `DuoLayout.current`, behind the `#available` check its own
     /// declaration requires. Returns `DuoLayout.none` on anything below
     /// iOS 27.1 — the "no Duo furniture" value, which keeps `body`'s own
-    /// `railAlignedChinCenter`/`railAlignedTopClamp` reads `nil` there,
+    /// `photosChinCenter`/`railAlignedTopClamp` reads `nil` there,
     /// same as before this screen had a `DuoLayout` at all. Mirrors
     /// `FeedView.resolvedDuoLayout`/`PhotoFeedView.resolvedDuoLayout`; no
     /// `HingeReader` mounted here, the same as `PhotoFeedView` — this
@@ -171,13 +171,24 @@ struct SettingsView: View {
                     // cannot be tapped.
                     .contentMargins(.bottom, 96, for: .scrollContent)
                 }
-                // `railAlignedCenter`/`railAlignedTopClamp` are `DuoLayout`'s
-                // own shared chin anchor (review follow-up) — `nil` on a
-                // regular iPhone, same as before this change, and the same
-                // point `FeedView`/`PhotoFeedView` use on the Duo otherwise.
+                // `railAlignedCenter` was `DuoLayout.railAlignedChinCenter`
+                // (review follow-up) — `nil` on a regular iPhone, same as
+                // before this change. Owner review items C/D3/D6: Settings
+                // has no bottom deck, so `railAlignedChinCenter`'s own
+                // `.laptop` branch (pose 6) sent it to the Videos deck
+                // spot (600, 706) with the fold clamp — a spot that does
+                // not exist on Settings. `photosChinCenter` is
+                // `PhotoFeedView`'s own identical fix for the very same
+                // fault (Photos has no deck either): `.laptop` falls back
+                // to pose 5's own bottom-trailing point instead, and the
+                // new 1H landscapeRight branch (code change 3) lifts the
+                // chin clear of the real camera on every frame, the same
+                // as on Photos. `railAlignedTopClamp` is `nil` to match —
+                // that clamp exists only for the laptop deck's own fold,
+                // which Settings never uses either.
                 ChinNavigation(bottomBand: 0,
-                               railAlignedCenter: duoLayout.railAlignedChinCenter(safeAreaTop: safeAreaTop, safeAreaBottom: safeAreaBottom, containerSize: windowSize),
-                               railAlignedTopClamp: duoLayout.railAlignedTopClamp(containerSize: windowSize, safeAreaBottom: safeAreaBottom),
+                               railAlignedCenter: duoLayout.photosChinCenter(safeAreaTop: safeAreaTop, safeAreaBottom: safeAreaBottom, containerSize: windowSize),
+                               railAlignedTopClamp: nil,
                                safeAreaBottom: safeAreaBottom,
                                isMirrored: duoLayout.isMirrored)
             }

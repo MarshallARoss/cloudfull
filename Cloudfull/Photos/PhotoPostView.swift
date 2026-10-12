@@ -66,6 +66,14 @@ struct PhotoPostView: View {
     /// Mirrored-layout round: the host's own `DuoLayout.isMirrored` —
     /// see `actionsRow`'s own comment. Default `false`, pixel-identical
     /// to before this round.
+    ///
+    /// Decision 1 (owner, 2026-10-12): "the heart to delete got
+    /// mirrored. Don't do that." `PhotoFeedView` now always passes
+    /// `false` here — `actionsRow`'s own order must stay exactly as if
+    /// not mirrored even in a mirrored window; only `ChinNavigation`
+    /// (the tab switcher) still moves. `actionsRow`'s `if isMirrored`
+    /// branch below is left in place rather than removed, but it is
+    /// unreachable from `PhotoFeedView` as of this decision.
     var isMirrored: Bool = false
 
     /// Free properties plus one resource fetch, loaded once at mount.

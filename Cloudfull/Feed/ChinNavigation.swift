@@ -371,7 +371,13 @@ struct ChinNavigation: View {
     /// `collapsedHeight` can grow past that (`Rail.hit`, 40pt, still
     /// does not) but this never shrinks below it.
     private var collapsedTapTarget: CGFloat { max(44, collapsedHeight) }
-    private static let expandedHeight: CGFloat = 56
+    // Access only, not `private`, from here down: `DuoLayout
+    // .photosChinCenter`'s own 1H landscapeRight branch (code change 3,
+    // the owner's review) reads this to lift the expanded capsule clear
+    // of the camera on every frame — a Design-level read of a
+    // Feed-level constant, the same cross-layer read `railGap`/
+    // `pagePad` above already accept rather than duplicate.
+    static let expandedHeight: CGFloat = 56
     private var currentHeight: CGFloat { isExpanded ? Self.expandedHeight : collapsedHeight }
 
     /// Minimum gap kept between this control's own top edge and the

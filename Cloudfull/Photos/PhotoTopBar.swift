@@ -24,11 +24,19 @@ struct PhotoTopBar: View {
     /// .isMirrored` reads true — see `FeedView.topChrome`'s identical
     /// mirror for the reasoning. Default `false`, pixel-identical to
     /// before this round.
+    ///
+    /// Decision 1 (owner, 2026-10-12): "the heart to delete got
+    /// mirrored. Don't do that." `PhotoFeedView` now always passes
+    /// `false` here — this row's own order must stay exactly as if
+    /// not mirrored even in a mirrored window; only `ChinNavigation`
+    /// (the tab switcher) still moves. `row`'s `if isMirrored` branch
+    /// below is left in place rather than removed, but it is
+    /// unreachable from `PhotoFeedView` as of this decision.
     var isMirrored: Bool = false
     /// Non-nil on the Duo poses that place this row themselves —
     /// `DuoLayout.photosTopRowRect` — in true window space. `nil` keeps
     /// the original padding placement below, byte-for-byte: regular
-    /// iPhone, `.closed` (1V, 1H, Split View halves), `.tent`.
+    /// iPhone, `.tent`.
     var placement: CGRect? = nil
     /// `true` only on poses 3/4 (`.openWide`/`.book`), where the row
     /// starts flush at the window's own leading edge and the display's
