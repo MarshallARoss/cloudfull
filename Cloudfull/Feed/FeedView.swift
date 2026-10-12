@@ -779,6 +779,16 @@ struct FeedView: View {
                     DiagnosticsLog.shared.log("Touch", message)
                 }
         )
+        // Other half of the same owner bug: the root logger above shows
+        // a touch reaches this app's view hierarchy at all, but not
+        // WHICH UIKit view actually receives it. `HitTestProbeRecognizer`
+        // answers that, under the same `-cloudfull-log-touches` flag —
+        // see its own header comment in `DebugProbes.swift`. Attaching
+        // it here, on `body`'s own appear, is a no-op after the first
+        // call: `attachIfNeeded()` only ever goes unattached → attached.
+        .onAppear {
+            HitTestProbeRecognizer.attachIfNeeded()
+        }
         #endif
         #if DEBUG
         // Keys this `.task(id:)` off the newest completed job's own id
