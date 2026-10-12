@@ -178,6 +178,28 @@ struct DuoLayout {
                                 debugRawDivision: nil, debugSafeAreaInsets: EdgeInsets(),
                                 isMirrored: false, isUpsideDown: false)
 
+    /// Owner call, relayed (urgent correction): the "Left-handed
+    /// controls" setting must work on every iPhone, not only iOS
+    /// 27.1+ — the owner's own phone runs 27.0.1, the regular-iPhone
+    /// simulator available here runs 27.0, both below `current(...)`'s
+    /// own `@available` gate. This factory is NOT gated: it is `.none`
+    /// in every other respect (no bar, no Duo furniture at all, below
+    /// 27.1 or above it — `toolbarVerticalEdge` is the one genuinely
+    /// 27.1-only signal this type reads, and a bar can never exist
+    /// here regardless of OS version), except `isMirrored`, read from
+    /// the setting directly. Every host (`FeedView`/`PhotoFeedView`/
+    /// `SettingsView`) calls this instead of `.none` once it has read
+    /// `leftHandedControls`, on EVERY OS version — the `#available`
+    /// branch in each host's own `resolvedDuoLayout` only decides
+    /// whether `current(...)`'s own richer (27.1-only) reading is
+    /// also available, never whether the setting itself applies.
+    static func regularPhone(leftHandedControls: Bool) -> DuoLayout {
+        DuoLayout(barEdge: nil, barWidth: 0, occlusion: nil, division: nil,
+                  pose: .regularPhone, hinge: nil, hingeDegrees: nil,
+                  debugRawDivision: nil, debugSafeAreaInsets: EdgeInsets(),
+                  isMirrored: DuoForceMirror.isOn || leftHandedControls, isUpsideDown: false)
+    }
+
     /// Reads this frame's Duo geometry from `proxy` and the
     /// already-resolved `toolbarVerticalEdge` environment value.
     ///
@@ -1136,20 +1158,46 @@ struct DuoLayout {
     /// 5): no bar to defer to at all, so `isMirrored` (the owner's own
     /// `leftHandedControls` setting, this pose's only source for it —
     /// see that property's own comment) decides outright.
+    /// Owner correction (relayed, live pose-5 check): mirrored, this
+    /// used to still read the LIVE `.occlusion` width here — the real
+    /// occlusion never moves off the trailing side just because this
+    /// column did, so a Live Activity pill growing it (134 → 226,
+    /// `openTallNormalOcclusionWidth`'s own doc comment) bled straight
+    /// into the mirrored column's own width too, where there is no
+    /// real ring to even be centring on. "Mirrored must be the exact
+    /// mirror of normal... column width = the normal 134, never the
+    /// pill-grown width." Mirrored now returns that fixed width
+    /// outright — `openTallLiveColumnWidth` (the live formula, factored
+    /// out below) is read only by the UNMIRRORED branch and by
+    /// `ringCenteredColumnX`'s own "what would this be if not
+    /// mirrored" reflection, never by this one.
     func railColumn(containerSize: CGSize, safeAreaTop: CGFloat) -> (edge: HorizontalEdge, width: CGFloat)? {
         let edge: HorizontalEdge = isMirrored ? .leading : .trailing
         if let barEdge, barWidth > 0 {
             return (edge, barWidth)
         }
         guard pose == .openTall else { return nil }
+        if isMirrored {
+            return (edge, Self.openTallNormalOcclusionWidth)
+        }
+        return (edge, openTallLiveColumnWidth(containerSize: containerSize))
+    }
+
+    /// Pose 5's own computed column width, from the live `.occlusion`
+    /// reading — factored out of `railColumn`'s own (unmirrored-only,
+    /// since the correction above) formula so `ringCenteredColumnX`'s
+    /// own mirrored-reflection path can read the SAME "as if not
+    /// mirrored" measurement, rather than the fixed, pill-insensitive
+    /// width `railColumn` itself now returns when mirrored.
+    private func openTallLiveColumnWidth(containerSize: CGSize) -> CGFloat {
         if let occlusion, occlusion.minX > containerSize.width / 2 {
             // A column centred on `occlusion.midX`, so its own centre
             // lands exactly on the ring's real position regardless of
             // how wide the window is — the same goal `openColumnWidth`
             // used to reach with a fixed, sim-measured number.
-            return (edge, max(Rail.hit, (containerSize.width - occlusion.midX) * 2))
+            return max(Rail.hit, (containerSize.width - occlusion.midX) * 2)
         }
-        return (edge, Rail.hit + Self.minStageMargin * 2)
+        return Rail.hit + Self.minStageMargin * 2
     }
 
     /// The rail column's own rectangle this frame, full height — the
@@ -1254,29 +1302,53 @@ struct DuoLayout {
     /// correct one to pick.
     static let wideOcclusionThreshold: CGFloat = 60
 
-    /// Mirrored-layout round: a wide occlusion's own real ring centre
-    /// was always measured inset from its TRAILING edge
-    /// (`openTallRingInsetFromTrailingEdge`'s own comment) — unmeasured
-    /// on a real leading-side reading, since none has existed to
-    /// measure yet, but the construction that produced the trailing
-    /// number (time text then ring, reading toward the display's own
-    /// outer edge) mirrors exactly, so this reads the SAME inset from
-    /// the LEADING edge instead whenever mirrored. Does not change the
-    /// DEBUG `-cloudfull-force-mirror` case on 3/4/4W: the real
-    /// occlusion there stays on the TRAILING half regardless (the
-    /// camera does not move), well outside a now-LEADING `columnRect`'s
-    /// own range check below, so this naturally falls through to the
-    /// no-occlusion-detected answer (`columnRect.midX`) instead of
-    /// guessing at an inset against the wrong occlusion.
+    /// Owner correction (relayed, live 1V + pose-5 check): "General
+    /// rule for ALL mirrored poses: mirrored x = W − (normal x)." The
+    /// earlier version tried to re-derive a mirrored answer from
+    /// `occlusion.minX` directly, on the theory that a real leading-
+    /// side ring would read that way — but the real occlusion this
+    /// file has ever measured stays on the TRAILING side regardless of
+    /// `isMirrored` (hardware-fixed; `-cloudfull-force-mirror` cannot
+    /// move it), so that path only ever fell through to
+    /// `columnRect.midX` (a coarse, unmeasured guess, confirmed live:
+    /// "rail x = 42" instead of the correct 47.7–47.8). This now
+    /// computes the answer the UNMIRRORED formula always has — reading
+    /// the TRAILING-anchored column and the real occlusion exactly as
+    /// before, via `normalRingCenteredColumnX` below — and reflects it
+    /// across the window's own width only at the very end, which is
+    /// what correctly carries a real, live measurement (pill growth
+    /// included) across to the mirrored side instead of guessing.
     func ringCenteredColumnX(containerSize: CGSize, safeAreaTop: CGFloat) -> CGFloat? {
-        guard let columnRect = railColumnRect(containerSize: containerSize, safeAreaTop: safeAreaTop) else { return nil }
+        guard let normalX = normalRingCenteredColumnX(containerSize: containerSize, safeAreaTop: safeAreaTop) else { return nil }
+        return isMirrored ? containerSize.width - normalX : normalX
+    }
+
+    /// The column WIDTH `ringCenteredColumnX`'s own reflection needs —
+    /// "as if not mirrored" — which is `barWidth` for the bar-on case
+    /// (edge-independent already) and `openTallLiveColumnWidth` for
+    /// pose 5 (the live, pill-sensitive formula `railColumn` itself
+    /// only returns when NOT mirrored, since this round's own
+    /// correction). `nil` under the exact same conditions
+    /// `railColumn` returns `nil`.
+    private func normalColumnWidth(containerSize: CGSize, safeAreaTop: CGFloat) -> CGFloat? {
+        if let barEdge, barWidth > 0 { return barWidth }
+        guard pose == .openTall else { return nil }
+        return openTallLiveColumnWidth(containerSize: containerSize)
+    }
+
+    /// `ringCenteredColumnX`'s own pre-reflection answer: the EXACT
+    /// formula this file has always used, computed against the
+    /// TRAILING-anchored column regardless of `isMirrored` — see
+    /// `normalColumnWidth`'s own comment for why this cannot simply
+    /// read `railColumnRect` once `isMirrored` is true.
+    private func normalRingCenteredColumnX(containerSize: CGSize, safeAreaTop: CGFloat) -> CGFloat? {
+        guard let width = normalColumnWidth(containerSize: containerSize, safeAreaTop: safeAreaTop) else { return nil }
+        let columnRect = CGRect(x: containerSize.width - width, y: 0, width: width, height: containerSize.height)
         guard let occlusion, occlusion.midX >= columnRect.minX - 8, occlusion.midX <= columnRect.maxX + 8 else {
             return columnRect.midX
         }
         if occlusion.width >= Self.wideOcclusionThreshold {
-            return isMirrored
-                ? occlusion.minX + Self.openTallRingInsetFromTrailingEdge
-                : occlusion.maxX - Self.openTallRingInsetFromTrailingEdge
+            return occlusion.maxX - Self.openTallRingInsetFromTrailingEdge
         }
         return occlusion.midX
     }
