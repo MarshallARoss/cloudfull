@@ -2310,6 +2310,34 @@ struct DuoLayout {
         return CGRect(x: containerSize.width, y: 0, width: 0, height: safeAreaTop)
     }
 
+    /// Photos tab only: the box the Photos top row (Live, Filter, Bin)
+    /// centres in, in true window space. `nil` keeps `PhotoTopBar`'s own
+    /// original padding placement — regular iPhone, `.closed` (1V, 1H,
+    /// Split View halves), `.tent` — so those stay pixel-identical.
+    /// 5/6: the Videos tab's `pose5TopRow` rule (y = `statusBlock.midY`,
+    /// trailing clamped clear of the real occlusion), with Photos' own
+    /// 12pt margin. 3/4: kept at the top (owner prefers it there on
+    /// Photos), 8pt below the safe-area top like Videos' 1V row, inside
+    /// `availableRect` so Bin ends at the photo's own edge.
+    func photosTopRowRect(containerSize: CGSize, safeAreaTop: CGFloat) -> CGRect? {
+        let rowHeight: CGFloat = 40
+        let margin: CGFloat = 12
+        switch pose {
+        case .openTall, .laptop:
+            let leading = margin
+            let windowBounds = CGRect(origin: .zero, size: containerSize).insetBy(dx: -1, dy: -1)
+            let clamp = occlusion.flatMap { windowBounds.contains($0) && $0.minX > leading ? $0.minX - 8 : nil } ?? .infinity
+            let trailing = min(containerSize.width - margin, clamp)
+            let midY = statusBlock(containerSize: containerSize, safeAreaTop: safeAreaTop).midY
+            return CGRect(x: leading, y: midY - rowHeight / 2, width: max(0, trailing - leading), height: rowHeight)
+        case .openWide, .book:
+            let area = availableRect(containerSize: containerSize, safeAreaTop: safeAreaTop).insetBy(dx: margin, dy: 0)
+            return CGRect(x: area.minX, y: safeAreaTop + 8, width: max(0, area.width), height: rowHeight)
+        default:
+            return nil
+        }
+    }
+
     // MARK: - Laptop bottom deck (build 8b, re-adapted R2, re-adapted R4)
     //
     // Pose 6 only: everything below the fold's bottom edge — the
@@ -2608,6 +2636,31 @@ struct DuoLayout {
     func railAlignedTopClamp(containerSize: CGSize, safeAreaBottom: CGFloat) -> CGFloat? {
         guard pose == .laptop else { return nil }
         return laptopBottomRect(containerSize: containerSize, safeAreaBottom: safeAreaBottom)?.minY
+    }
+
+    /// Photos tab only: the chin centre. Same as `railAlignedChinCenter`
+    /// on every pose except `.laptop`, where Photos has no bottom deck,
+    /// so the chin takes pose 5's own bottom-trailing spot (owner: "on 6
+    /// with photos the tab switcher should stay in the bottom right like
+    /// 1 and 5"). The x/y formulas copy `normalRingCenteredColumnX`
+    /// (wide-occlusion branch) and `railAlignedChinCenter`'s y, so 6
+    /// lands on 5's exact point.
+    func photosChinCenter(safeAreaTop: CGFloat, safeAreaBottom: CGFloat, containerSize: CGSize) -> CGPoint? {
+        guard pose == .laptop else {
+            return railAlignedChinCenter(safeAreaTop: safeAreaTop, safeAreaBottom: safeAreaBottom, containerSize: containerSize)
+        }
+        let windowBounds = CGRect(origin: .zero, size: containerSize).insetBy(dx: -1, dy: -1)
+        let normalX: CGFloat
+        if let occlusion, windowBounds.contains(occlusion), occlusion.minX > containerSize.width / 2 {
+            normalX = occlusion.width >= Self.wideOcclusionThreshold
+                ? occlusion.maxX - Self.openTallRingInsetFromTrailingEdge
+                : occlusion.midX
+        } else {
+            normalX = containerSize.width - Self.openTallRingInsetFromTrailingEdge
+        }
+        let x = isMirrored ? containerSize.width - normalX : normalX
+        let bottom = containerSize.height - max(safeAreaBottom - Self.chinBottomInset, Self.chinBottomInset)
+        return CGPoint(x: x, y: bottom - Rail.hit / 2)
     }
 }
 

@@ -269,6 +269,12 @@ struct PhotoFeedView: View {
                 width: rootProxy.size.width + rootProxy.safeAreaInsets.leading + rootProxy.safeAreaInsets.trailing,
                 height: rootProxy.size.height + safeAreaTop + safeAreaBottom
             )
+            // Photos tab only: non-nil on the Duo poses that place
+            // `PhotoTopBar` themselves (3/4/5/6), `nil` everywhere else
+            // (regular iPhone, 1V, 1H, closed Split View halves, tent),
+            // which keeps those poses on the original padding placement,
+            // pixel-identical. See `DuoLayout.photosTopRowRect`.
+            let topRow = duoLayout.photosTopRowRect(containerSize: windowSize, safeAreaTop: safeAreaTop)
             // The photo itself, its header, actions row, and caption all
             // measure against `rootProxy.size.width` — the full window,
             // including the closed Duo's trailing vertical-bar column.
@@ -294,50 +300,73 @@ struct PhotoFeedView: View {
                     ToolbarVerticalEdgeReader { toolbarVerticalEdge = $0 }
                 }
                 Color.black.ignoresSafeArea()
-                content(containerWidth: rootProxy.size.width, safeAreaTop: safeAreaTop, viewportHeight: rootProxy.size.height, isMirrored: duoLayout.isMirrored)
+                content(containerWidth: rootProxy.size.width, safeAreaTop: safeAreaTop, viewportHeight: rootProxy.size.height, isMirrored: duoLayout.isMirrored, topRow: topRow)
                 // An opaque band that keeps a scrolling post's caption
                 // from showing through behind the status-bar clock and the
                 // top pills. It sits above the scroll content but below
                 // the pills in z-order, drawn before `PhotoTopBar` below.
                 // It never intercepts a touch, so the pills still get
                 // every tap.
-                topChromeBand(safeAreaTop: safeAreaTop)
-                // The two chained `.frame`s below clamp this row to
-                // `duoLayout.availableRect`'s width and then pin it to
-                // the leading edge of the full window, so its trailing
-                // content — the space counter, the bin button — stops
-                // before the closed Duo's vertical bar column instead
-                // of drawing under the system's own time/connectivity
-                // ring that lives there. The photo underneath still
-                // fills that column (see the comment above); only this
-                // row holds back from it. `availableRect` returns the
-                // full window unchanged on a regular iPhone and on the
-                // open Duo, so both chained frames are no-ops there —
-                // `binButton` lands exactly where it always has.
-                PhotoTopBar(
-                    trashService: trashService,
-                    isLiveOn: $isLiveOn,
-                    safeAreaTop: safeAreaTop,
-                    onOpenBinRequested: { Usage.shared.binOpened(); showTrash = true },
-                    isMirrored: duoLayout.isMirrored
-                )
-                // Mirrored-layout round: `availableRect` already
-                // excludes the column from whichever edge it is on —
-                // this outer alignment just needs to match that same
-                // edge, or a mirrored column and this row would land
-                // on the same pixels.
-                .frame(width: duoLayout.availableRect(containerSize: rootProxy.size, safeAreaTop: safeAreaTop).width,
-                       alignment: duoLayout.isMirrored ? .trailing : .leading)
-                .frame(maxWidth: .infinity, alignment: duoLayout.isMirrored ? .trailing : .leading)
+                topChromeBand(safeAreaTop: safeAreaTop, topRow: topRow)
+                // `topRow` non-nil (poses 3/4/5/6): `PhotoTopBar` places
+                // itself with `.position`, in this `ZStack`'s own window
+                // space (it `.ignoresSafeArea()` below, so 0 = true
+                // window top/leading, the same space
+                // `DuoLayout.photosTopRowRect` computed `topRow` in) — no
+                // outer `.frame`s needed.
+                //
+                // `topRow` nil (regular iPhone, 1V, 1H, closed Split View
+                // halves, tent): the two chained `.frame`s below clamp
+                // this row to `duoLayout.availableRect`'s width and then
+                // pin it to the leading edge of the full window, so its
+                // trailing content — the space counter, the bin button —
+                // stops before the closed Duo's vertical bar column
+                // instead of drawing under the system's own time/
+                // connectivity ring that lives there. The photo
+                // underneath still fills that column (see the comment
+                // above); only this row holds back from it.
+                // `availableRect` returns the full window unchanged on a
+                // regular iPhone, so both chained frames are no-ops
+                // there — `binButton` lands exactly where it always has.
+                if let topRow {
+                    PhotoTopBar(
+                        trashService: trashService,
+                        isLiveOn: $isLiveOn,
+                        safeAreaTop: safeAreaTop,
+                        onOpenBinRequested: { Usage.shared.binOpened(); showTrash = true },
+                        isMirrored: duoLayout.isMirrored,
+                        placement: topRow,
+                        clearsCorner: duoLayout.pose == .openWide || duoLayout.pose == .book
+                    )
+                } else {
+                    PhotoTopBar(
+                        trashService: trashService,
+                        isLiveOn: $isLiveOn,
+                        safeAreaTop: safeAreaTop,
+                        onOpenBinRequested: { Usage.shared.binOpened(); showTrash = true },
+                        isMirrored: duoLayout.isMirrored
+                    )
+                    // Mirrored-layout round: `availableRect` already
+                    // excludes the column from whichever edge it is on —
+                    // this outer alignment just needs to match that same
+                    // edge, or a mirrored column and this row would land
+                    // on the same pixels.
+                    .frame(width: duoLayout.availableRect(containerSize: rootProxy.size, safeAreaTop: safeAreaTop).width,
+                           alignment: duoLayout.isMirrored ? .trailing : .leading)
+                    .frame(maxWidth: .infinity, alignment: duoLayout.isMirrored ? .trailing : .leading)
+                }
                 // Every mode mounts exactly one instance. `bottomBand: 0`
-                // because Photos has no 9:16 stage. `railAlignedCenter`/
-                // `railAlignedTopClamp` are `DuoLayout`'s own shared chin
-                // anchor (review follow-up) — `nil` on a regular iPhone,
-                // same as before this change, and the same point
-                // `FeedView` uses on the Duo otherwise.
+                // because Photos has no 9:16 stage. `photosChinCenter` is
+                // `railAlignedChinCenter` on every pose except `.laptop`,
+                // where Photos has no bottom deck and so takes pose 5's
+                // own bottom-trailing spot instead (owner: "on 6 with
+                // photos the tab switcher should stay in the bottom right
+                // like 1 and 5") — `railAlignedTopClamp` is always `nil`
+                // here since Photos never uses the laptop deck spot that
+                // clamp exists for.
                 ChinNavigation(bottomBand: 0,
-                               railAlignedCenter: duoLayout.railAlignedChinCenter(safeAreaTop: safeAreaTop, safeAreaBottom: safeAreaBottom, containerSize: windowSize),
-                               railAlignedTopClamp: duoLayout.railAlignedTopClamp(containerSize: windowSize, safeAreaBottom: safeAreaBottom),
+                               railAlignedCenter: duoLayout.photosChinCenter(safeAreaTop: safeAreaTop, safeAreaBottom: safeAreaBottom, containerSize: windowSize),
+                               railAlignedTopClamp: nil,
                                safeAreaBottom: safeAreaBottom,
                                isMirrored: duoLayout.isMirrored)
                 // Zero-size. Presents and dismisses the system share sheet
@@ -482,7 +511,7 @@ struct PhotoFeedView: View {
     }
 
     @ViewBuilder
-    private func content(containerWidth: CGFloat, safeAreaTop: CGFloat, viewportHeight: CGFloat, isMirrored: Bool) -> some View {
+    private func content(containerWidth: CGFloat, safeAreaTop: CGFloat, viewportHeight: CGFloat, isMirrored: Bool, topRow: CGRect?) -> some View {
         if !deck.hasDealtFirstDeck || deck.isReloadingForFilters {
             // Plain black until the first background enumeration actually
             // returns, mirroring `FeedView.content`'s identical guard,
@@ -502,7 +531,7 @@ struct PhotoFeedView: View {
         } else if deck.entries.isEmpty {
             emptyState
         } else {
-            pager(containerWidth: containerWidth, safeAreaTop: safeAreaTop, viewportHeight: viewportHeight, isMirrored: isMirrored)
+            pager(containerWidth: containerWidth, safeAreaTop: safeAreaTop, viewportHeight: viewportHeight, isMirrored: isMirrored, topRow: topRow)
         }
     }
 
@@ -517,7 +546,7 @@ struct PhotoFeedView: View {
             .accessibilityIdentifier("photos_loading")
     }
 
-    private func pager(containerWidth: CGFloat, safeAreaTop: CGFloat, viewportHeight: CGFloat, isMirrored: Bool) -> some View {
+    private func pager(containerWidth: CGFloat, safeAreaTop: CGFloat, viewportHeight: CGFloat, isMirrored: Bool, topRow: CGRect?) -> some View {
         ScrollViewReader { proxy in
         ScrollView(.vertical) {
             // The near ring is the current post and its immediate
@@ -548,7 +577,7 @@ struct PhotoFeedView: View {
                         // stale body pass. This is a method, not an
                         // inline closure body, so the `ForEach` body stays
                         // inside the type checker's time budget.
-                        offscreenTopHeight: { offscreenTop(of: entry.id, safeAreaTop: safeAreaTop) },
+                        offscreenTopHeight: { offscreenTop(of: entry.id, safeAreaTop: safeAreaTop, topRow: topRow) },
                         collapsedHeight: deck.collapsedHeights[entry.id],
                         onRevealRequested: { revealAbove(by: $0, duration: $1) },
                         isMirrored: isMirrored
@@ -638,7 +667,7 @@ struct PhotoFeedView: View {
         // Every post, not just the first, needs its header clear of the
         // status-bar clock. This is a plain content inset, since there is
         // no snap target to offset instead.
-        .contentMargins(.top, topClearance(safeAreaTop: safeAreaTop), for: .scrollContent)
+        .contentMargins(.top, topClearance(safeAreaTop: safeAreaTop, topRow: topRow), for: .scrollContent)
         // Pull down past the first photo to refresh, the same as the
         // video pager. The deck raises its "Loading photos…" state for
         // the rebuild itself.
@@ -947,10 +976,10 @@ struct PhotoFeedView: View {
 
     /// How much of `entryID`'s row currently sits above the top of the
     /// scroll view. Zero when the row is fully visible.
-    private func offscreenTop(of entryID: String, safeAreaTop: CGFloat) -> CGFloat {
+    private func offscreenTop(of entryID: String, safeAreaTop: CGFloat, topRow: CGRect?) -> CGFloat {
         guard let minY = rowFrames.frames[entryID]?.minY else { return 0 }
         // Both values use the same coordinate space. See `PhotoRowFrameStore.scrollTop`.
-        let visibleTop = rowFrames.scrollTop + topClearance(safeAreaTop: safeAreaTop)
+        let visibleTop = rowFrames.scrollTop + topClearance(safeAreaTop: safeAreaTop, topRow: topRow)
         return max(visibleTop - minY, 0)
     }
 
@@ -987,18 +1016,26 @@ struct PhotoFeedView: View {
         Usage.shared.keepFollowup(result)
     }
 
-    private func topClearance(safeAreaTop: CGFloat) -> CGFloat {
-        StageGeometry.chromeTop(safeAreaTop: safeAreaTop) + StageGeometry.chromeHeight + 12
+    /// `topRow` nil (regular iPhone, 1V, 1H, closed Split View halves,
+    /// tent): today's formula, unchanged. Non-nil (poses 3/4/5/6): the
+    /// post header clears the row's own centre, wherever
+    /// `DuoLayout.photosTopRowRect` put it, instead of the fixed chrome
+    /// band those poses no longer use.
+    private func topClearance(safeAreaTop: CGFloat, topRow: CGRect?) -> CGFloat {
+        guard let topRow else {
+            return StageGeometry.chromeTop(safeAreaTop: safeAreaTop) + StageGeometry.chromeHeight + 12
+        }
+        return max(topRow.midY + StageGeometry.chromeHeight / 2, safeAreaTop) + 12
     }
 
     /// A solid black band covers the status-bar clock and the top pill
     /// row. A scrolling post's header or caption never shows through
     /// behind them. The band is 6 pt shorter than `topClearance` above,
     /// so it ends between the pills and the first content row.
-    private func topChromeBand(safeAreaTop: CGFloat) -> some View {
+    private func topChromeBand(safeAreaTop: CGFloat, topRow: CGRect?) -> some View {
         Color.black
             .frame(maxWidth: .infinity)
-            .frame(height: StageGeometry.chromeTop(safeAreaTop: safeAreaTop) + StageGeometry.chromeHeight + 6)
+            .frame(height: topClearance(safeAreaTop: safeAreaTop, topRow: topRow) - 6)
             .ignoresSafeArea(edges: .top)
             .allowsHitTesting(false)
     }

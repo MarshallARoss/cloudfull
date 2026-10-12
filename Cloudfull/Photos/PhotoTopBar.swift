@@ -25,10 +25,40 @@ struct PhotoTopBar: View {
     /// mirror for the reasoning. Default `false`, pixel-identical to
     /// before this round.
     var isMirrored: Bool = false
+    /// Non-nil on the Duo poses that place this row themselves —
+    /// `DuoLayout.photosTopRowRect` — in true window space. `nil` keeps
+    /// the original padding placement below, byte-for-byte: regular
+    /// iPhone, `.closed` (1V, 1H, Split View halves), `.tent`.
+    var placement: CGRect? = nil
+    /// `true` only on poses 3/4 (`.openWide`/`.book`), where the row
+    /// starts flush at the window's own leading edge and the display's
+    /// rounded top corner is big enough to clip the Live button there.
+    var clearsCorner: Bool = false
 
     @ObservedObject private var photoOptionsStore = PhotoOptionsStore.shared
 
     var body: some View {
+        Group {
+            if let placement {
+                if clearsCorner {
+                    row
+                        .frame(width: placement.width, height: placement.height, alignment: .center)
+                        .containerCornerOffset(.top)
+                        .position(x: placement.midX, y: placement.midY)
+                } else {
+                    row
+                        .frame(width: placement.width, height: placement.height, alignment: .center)
+                        .position(x: placement.midX, y: placement.midY)
+                }
+            } else {
+                row
+                    .padding(.horizontal, 12)
+                    .padding(.top, StageGeometry.chromeTop(safeAreaTop: safeAreaTop))
+            }
+        }
+    }
+
+    private var row: some View {
         HStack(alignment: .top, spacing: 8) {
             // Review fix: Bin is the OUTERMOST control in the mirrored
             // row, same as `FeedView.topChrome`'s own mirrored branch —
@@ -50,8 +80,6 @@ struct PhotoTopBar: View {
                 binButton
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.top, StageGeometry.chromeTop(safeAreaTop: safeAreaTop))
     }
 
     // MARK: - Live toggle
