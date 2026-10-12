@@ -54,73 +54,146 @@ struct SettingsView: View {
     @ObservedObject private var diagnostics = DiagnosticsSwitch.shared
     #endif
 
+    /// The vertical bar's edge on the iPhone Duo's closed screen; `nil`
+    /// on a regular iPhone, on the open Duo, and on anything below iOS
+    /// 27.1 (this plain stored property's default). Mirrors
+    /// `FeedView.toolbarVerticalEdge`/`PhotoFeedView.toolbarVerticalEdge`
+    /// — see `FeedView`'s own comment for why `ToolbarVerticalEdgeReader`,
+    /// not a plain `@Environment(\.toolbarVerticalEdge)` property, is
+    /// what writes this.
+    ///
+    /// Review follow-up (R5 chin pass): added so this screen can read
+    /// `DuoLayout.railAlignedChinCenter`, the same chin anchor `FeedView`
+    /// and `PhotoFeedView` already do — this screen had no `DuoLayout`
+    /// of its own before, which is why its chin used to jump to a
+    /// different spot than the other two tabs on the Duo.
+    @State private var toolbarVerticalEdge: HorizontalEdge?
+    /// Fed to `DuoLayout.current` below, the same as
+    /// `FeedView.horizontalSizeClass`/`verticalSizeClass`.
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
+
+    /// `DuoLayout.current`, behind the `#available` check its own
+    /// declaration requires. Returns `DuoLayout.none` on anything below
+    /// iOS 27.1 — the "no Duo furniture" value, which keeps `body`'s own
+    /// `railAlignedChinCenter`/`railAlignedTopClamp` reads `nil` there,
+    /// same as before this screen had a `DuoLayout` at all. Mirrors
+    /// `FeedView.resolvedDuoLayout`/`PhotoFeedView.resolvedDuoLayout`; no
+    /// `HingeReader` mounted here, the same as `PhotoFeedView` — this
+    /// screen has no tent/nightstand concept either, the one pose that
+    /// needs the hinge (see `DuoLayout.classify`).
+    private func resolvedDuoLayout(rootProxy: GeometryProxy) -> DuoLayout {
+        if #available(iOS 27.1, *) {
+            return DuoLayout.current(
+                proxy: rootProxy,
+                toolbarVerticalEdge: toolbarVerticalEdge,
+                horizontalSizeClass: horizontalSizeClass,
+                verticalSizeClass: verticalSizeClass,
+                hinge: nil,
+                hingeDegrees: nil
+            )
+        }
+        return .none
+    }
+
     var body: some View {
-        ZStack(alignment: .bottomTrailing) {
-            NavigationStack {
-                // Each section is its own computed property. One `body`
-                // holding every `Section` inline was slow enough for
-                // SourceKit to give up type-checking it; splitting the
-                // list this way keeps each piece small for the compiler.
-                List {
-                    appHeaderSection
-                    reminderSection
-                    preferencesSection
-                    storageSection
-                    assistanceSection
-                    tipJarSection
-                    otherProjectsSection
-                    #if DEBUG
-                    diagnosticsSection
-                    #endif
-                    versionSection
+        // Review follow-up (R5 chin pass): wraps the whole screen, the
+        // same root `GeometryReader` pattern `FeedView.body`/
+        // `PhotoFeedView.body` already use, so this screen's own
+        // `ChinNavigation` can read the same live
+        // `safeAreaTop`/`safeAreaBottom`/window-size geometry theirs do
+        // — not a second, parallel measurement of it. `rootProxy` does
+        // not ignore the safe area (neither of those two does either),
+        // so `windowSize` reconstructs the true window from it the same
+        // way `FeedView.body`'s own `windowSize` does.
+        GeometryReader { rootProxy in
+            let safeAreaTop = rootProxy.safeAreaInsets.top
+            let safeAreaBottom = rootProxy.safeAreaInsets.bottom
+            let windowSize = CGSize(
+                width: rootProxy.size.width + rootProxy.safeAreaInsets.leading + rootProxy.safeAreaInsets.trailing,
+                height: rootProxy.size.height + safeAreaTop + safeAreaBottom
+            )
+            let duoLayout = resolvedDuoLayout(rootProxy: rootProxy)
+            ZStack(alignment: .bottomTrailing) {
+                // Zero-size; only ever updates `toolbarVerticalEdge`
+                // above. See `FeedView`'s identical helper for why the
+                // read is confined to this small view instead of a
+                // plain `@Environment` property on this view itself.
+                if #available(iOS 27.1, *) {
+                    ToolbarVerticalEdgeReader { toolbarVerticalEdge = $0 }
                 }
-                .accessibilityIdentifier("settings_root")     // set on the List itself; this identifier must not change
-                // Switches are green by default. The tint makes them
-                // use the accent color, like the buttons and links.
-                .tint(.accentColor)
-                // Catches every `Link` on this screen in one place, so a
-                // new link row needs no new gesture wiring to be counted.
-                // Always lets the system open the URL; this only observes.
-                .environment(\.openURL, OpenURLAction { url in
-                    if let link = SettingsLinks.link(for: url) {
-                        Usage.shared.settingsLinkTapped(link)
+                NavigationStack {
+                    // Each section is its own computed property. One `body`
+                    // holding every `Section` inline was slow enough for
+                    // SourceKit to give up type-checking it; splitting the
+                    // list this way keeps each piece small for the compiler.
+                    List {
+                        appHeaderSection
+                        reminderSection
+                        preferencesSection
+                        storageSection
+                        assistanceSection
+                        tipJarSection
+                        otherProjectsSection
+                        #if DEBUG
+                        diagnosticsSection
+                        #endif
+                        versionSection
                     }
-                    return .systemAction
-                })
-                // `appHeader` already shows the name and icon at the
-                // top. An inline title keeps the name from showing
-                // twice.
-                .navigationBarTitleDisplayMode(.inline)
-                // The switcher stays expanded on Settings and floats
-                // over the bottom 90 points. Without this margin, the
-                // last rows (Version, Diagnostics) sit under it and
-                // cannot be tapped.
-                .contentMargins(.bottom, 96, for: .scrollContent)
+                    .accessibilityIdentifier("settings_root")     // set on the List itself; this identifier must not change
+                    // Switches are green by default. The tint makes them
+                    // use the accent color, like the buttons and links.
+                    .tint(.accentColor)
+                    // Catches every `Link` on this screen in one place, so a
+                    // new link row needs no new gesture wiring to be counted.
+                    // Always lets the system open the URL; this only observes.
+                    .environment(\.openURL, OpenURLAction { url in
+                        if let link = SettingsLinks.link(for: url) {
+                            Usage.shared.settingsLinkTapped(link)
+                        }
+                        return .systemAction
+                    })
+                    // `appHeader` already shows the name and icon at the
+                    // top. An inline title keeps the name from showing
+                    // twice.
+                    .navigationBarTitleDisplayMode(.inline)
+                    // The switcher stays expanded on Settings and floats
+                    // over the bottom 90 points. Without this margin, the
+                    // last rows (Version, Diagnostics) sit under it and
+                    // cannot be tapped.
+                    .contentMargins(.bottom, 96, for: .scrollContent)
+                }
+                // `railAlignedCenter`/`railAlignedTopClamp` are `DuoLayout`'s
+                // own shared chin anchor (review follow-up) — `nil` on a
+                // regular iPhone, same as before this change, and the same
+                // point `FeedView`/`PhotoFeedView` use on the Duo otherwise.
+                ChinNavigation(bottomBand: 0,
+                               railAlignedCenter: duoLayout.railAlignedChinCenter(safeAreaTop: safeAreaTop, safeAreaBottom: safeAreaBottom, containerSize: windowSize),
+                               railAlignedTopClamp: duoLayout.railAlignedTopClamp(containerSize: windowSize, safeAreaBottom: safeAreaBottom))
             }
-            ChinNavigation(bottomBand: 0)
-        }
-        .onAppear {
-            Usage.shared.settingsOpened()
-            appIcon = AppIconChoice.current   // read the actual icon; do not assume the stored choice took effect
-        }
-        .task {
-            let gb = await Task.detached(priority: .utility) { Usage.freeSpaceGB() }.value
-            freeSpaceText = gb == "?" ? "—" : "\(gb) GB"
-        }
-        .task {
-            await tipJar.load()
-        }
-        .onChange(of: openMode) { _, _ in Usage.shared.settingChanged("defaultTab") }
-        .onChange(of: openMuted) { _, _ in Usage.shared.settingChanged("openMuted") }
-        .onChange(of: reminder.isEnabled) { _, _ in Usage.shared.settingChanged("dailyReminder") }
-        .onChange(of: reminder.time) { _, _ in Usage.shared.settingChanged("dailyReminderHour") }
-        .fullScreenCover(isPresented: $showWelcome) {
-            WelcomeScreenView { showWelcome = false }
-        }
-        .alert("Thank you!", isPresented: $showTipThankYou) {
-            Button("OK") {}
-        } message: {
-            Text("Your tip helps keep Cloudfull going.")
+            .onAppear {
+                Usage.shared.settingsOpened()
+                appIcon = AppIconChoice.current   // read the actual icon; do not assume the stored choice took effect
+            }
+            .task {
+                let gb = await Task.detached(priority: .utility) { Usage.freeSpaceGB() }.value
+                freeSpaceText = gb == "?" ? "—" : "\(gb) GB"
+            }
+            .task {
+                await tipJar.load()
+            }
+            .onChange(of: openMode) { _, _ in Usage.shared.settingChanged("defaultTab") }
+            .onChange(of: openMuted) { _, _ in Usage.shared.settingChanged("openMuted") }
+            .onChange(of: reminder.isEnabled) { _, _ in Usage.shared.settingChanged("dailyReminder") }
+            .onChange(of: reminder.time) { _, _ in Usage.shared.settingChanged("dailyReminderHour") }
+            .fullScreenCover(isPresented: $showWelcome) {
+                WelcomeScreenView { showWelcome = false }
+            }
+            .alert("Thank you!", isPresented: $showTipThankYou) {
+                Button("OK") {}
+            } message: {
+                Text("Your tip helps keep Cloudfull going.")
+            }
         }
     }
 

@@ -87,17 +87,20 @@ struct ChinNavigation: View {
     /// springs that animate every other host's trailing/bottom padding
     /// now animate this one's too.
     ///
-    /// `nil` everywhere but three `FeedView` poses: pose 1V (`.closed`),
-    /// the open-tall rail column (`.openTall`, pose 5, bar off) — the
-    /// owner's own review there, "the buttons are too high," and
-    /// separately, "[the chin] should at least be bigger and align
-    /// with the other rail items" — and, since build 8b, the laptop
-    /// pose's own horizontal rail row (`.laptop`, pose 6, §2.6, "chin
-    /// collapsed centre (600, v 236)"). All three ask for this control
-    /// to sit at a specific point near the rail, rather than at the
-    /// fixed bottom-trailing spot every other host still uses
-    /// unconditionally; see `FeedView.railAlignedChinCenter` for which
-    /// point each pose supplies.
+    /// `nil` everywhere but five Duo poses: 1V (`.closed`), pose 3
+    /// (`.openWide`), pose 4/4W (`.book`), pose 5 (`.openTall`, bar
+    /// off) — the owner's own review there, "the buttons are too
+    /// high," and separately, "[the chin] should at least be bigger
+    /// and align with the other rail items" — and, since build 8b,
+    /// the laptop pose's own horizontal rail row (`.laptop`, pose 6,
+    /// §2.6, "chin collapsed centre (600, v 236)"). All five ask for
+    /// this control to sit at a specific point near the rail, rather
+    /// than at the fixed bottom-trailing spot every regular iPhone
+    /// still uses unconditionally; see `DuoLayout.railAlignedChinCenter`
+    /// for which point each pose supplies, and that function's own
+    /// comment for why every host that mounts this control (`FeedView`,
+    /// `PhotoFeedView`, `SettingsView`) reads the SAME one instead of
+    /// each solving its own copy.
     ///
     /// Read while EXPANDED too, not only collapsed (owner report, pose
     /// 6: "when I tap the tab switcher it doesn't expand in place, it

@@ -1336,8 +1336,8 @@ struct DuoLayout {
     /// clamped by the caller to `Rail.itemHeight` tall, "a SHORT
     /// divider only as tall as the rail row," not the whole deck.
     /// `FeedPageContent` renders the five buttons and the hairline
-    /// (per-page, like every other pose's rail); `FeedView
-    /// .railAlignedChinCenter` reads `chinCenter` to anchor
+    /// (per-page, like every other pose's rail); this file's own
+    /// `railAlignedChinCenter` reads `chinCenter` to anchor
     /// `ChinNavigation`'s own collapsed switcher here, the same
     /// position-based path pose 5's rail column already uses.
     func laptopRailRow(containerSize: CGSize, safeAreaBottom: CGFloat) -> (centers: [CGPoint], hairlineX: CGFloat, hairlineY: CGFloat, chinCenter: CGPoint)? {
@@ -1372,6 +1372,86 @@ struct DuoLayout {
             width: width,
             height: height
         )
+    }
+
+    // MARK: - Chin anchor (R5 chin pass; review follow-up: shared by every host)
+    //
+    // `ChinNavigation`'s own `railAlignedCenter`/`railAlignedTopClamp`
+    // parameters used to be solved once, in `FeedView` alone — the only
+    // host with a rail to align against. Review follow-up: `PhotoFeedView`
+    // and `SettingsView` need the SAME point, or the chin jumps between
+    // tabs on the Duo (owner report). Solving it three times, once per
+    // host, is exactly the "parallel copies of the same formula drift
+    // apart" risk this file's own header already warns every new branch
+    // away from — the pose-5 ring-x rounds earlier in this file are a
+    // real instance of that risk, not a hypothetical one. One function
+    // here, read by all three hosts with their own live
+    // `safeAreaTop`/`safeAreaBottom`/`containerSize`, is what keeps the
+    // chin at one point.
+
+    /// The owner's own measured 8pt the Home Screen's Search button sits
+    /// inside the real bottom safe-area inset line, on the closed
+    /// display — `railAlignedChinCenter`'s own `y` is built from this.
+    static let chinBottomInset: CGFloat = 8
+
+    /// This frame's rail-aligned chin centre, or `nil` on every pose —
+    /// and every regular iPhone — that still uses `ChinNavigation`'s own
+    /// plain bottom-trailing anchor instead.
+    ///
+    /// **Pose 6 (`.laptop`)**: `laptopRailRow`'s own `chinCenter` —
+    /// "chin collapsed centre (600, v 236) via `railAlignedCenter`"
+    /// (`design/duo/duo_build_spec.md` §2.6).
+    ///
+    /// **1V (`.closed`), pose 3 (`.openWide`), pose 4/4W (`.book`), and
+    /// pose 5 (`.openTall`)** share one rule (owner, R5 chin pass: "the
+    /// alignment of the tab switcher should be like it is on 1V right
+    /// now … for 3, 5, 1, 4"). `x` is `ringCenteredColumnX` — the SAME x
+    /// the rail items use (3/4's own bar column, when the bar is on; 5's
+    /// own computed column; 1V's own bar column), never a second guess
+    /// at it, so the chin can never drift from the rail/ring it sits
+    /// beside. `y` is 1V's own original rule, applied to all four: the
+    /// COLLAPSED chin's own bottom sits where the Home Screen's own
+    /// Search button sits, `chinBottomInset` inside the real bottom
+    /// safe-area inset line.
+    ///
+    /// Review follow-up: floored at `chinBottomInset` itself, not the
+    /// plain `containerSize.height - safeAreaBottom + chinBottomInset`
+    /// 1V/5 used alone — a pose whose own bottom inset is SMALLER than
+    /// `chinBottomInset` (3/4/4W's own book/wide window, well under the
+    /// closed display's 34pt) would otherwise compute a bottom PAST the
+    /// window's own true edge: at a zero inset, the un-floored formula
+    /// gives `H - 0 + 8`, 8pt off the bottom of the screen.
+    /// `max(safeAreaBottom - chinBottomInset, chinBottomInset)` is never
+    /// less than `chinBottomInset` itself, so the chin's own bottom edge
+    /// stays at least that far inside the real bottom edge at any inset,
+    /// including zero — "it never leaves the screen." This reduces to
+    /// the old, un-floored formula exactly once `safeAreaBottom >= 2 *
+    /// chinBottomInset` (16pt here), which every closed/open-tall
+    /// reading this has been measured against so far already clears —
+    /// so 1V and pose 5 are unaffected by this change.
+    func railAlignedChinCenter(safeAreaTop: CGFloat, safeAreaBottom: CGFloat, containerSize: CGSize) -> CGPoint? {
+        if pose == .laptop {
+            return laptopRailRow(containerSize: containerSize, safeAreaBottom: safeAreaBottom)?.chinCenter
+        }
+        guard pose == .closed || pose == .openWide || pose == .book || pose == .openTall,
+              let centerX = ringCenteredColumnX(containerSize: containerSize, safeAreaTop: safeAreaTop)
+        else { return nil }
+        let bottom = containerSize.height - max(safeAreaBottom - Self.chinBottomInset, Self.chinBottomInset)
+        let centerY = bottom - Rail.hit / 2
+        return CGPoint(x: centerX, y: centerY)
+    }
+
+    /// Pose 6 (`.laptop`) only: the fold's own `y` — `laptopBottomRect`'s
+    /// own `minY` (`division.maxY`) — for `ChinNavigation
+    /// .railAlignedTopClamp`, so the EXPANDED capsule's own top edge can
+    /// never rise above the fold, however little clearance a short
+    /// window leaves between it and `railAlignedChinCenter`'s own `y`.
+    /// `nil` everywhere else — 1V and pose 5 have no fold to clamp
+    /// against, and `ChinNavigation` only ever reads this where
+    /// `railAlignedChinCenter` is also non-nil.
+    func railAlignedTopClamp(containerSize: CGSize, safeAreaBottom: CGFloat) -> CGFloat? {
+        guard pose == .laptop else { return nil }
+        return laptopBottomRect(containerSize: containerSize, safeAreaBottom: safeAreaBottom)?.minY
     }
 }
 

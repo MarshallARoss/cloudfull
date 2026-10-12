@@ -322,84 +322,6 @@ struct FeedView: View {
         pageAllowsLandscape || hingeStatus == .partial
     }
 
-    /// This control's own rail-aligned chin position, for the three
-    /// poses that place it beside (or on) the rail instead of at the
-    /// plain bottom-trailing spot every other host and pose still
-    /// uses: 1V (`.closed`), pose 5 (`.openTall`), and pose 6
-    /// (`.laptop`). `nil` on every other pose and every regular
-    /// iPhone, which leaves `ChinNavigation`'s own ordinary
-    /// bottom-trailing anchor as the only one in play there; see
-    /// `ChinNavigation.railAlignedCenter`'s own comment — read in
-    /// EVERY state now, not only while collapsed, so the chin EXPANDS
-    /// from this same point too.
-    ///
-    /// **Pose 6 (laptop)**, build 8b: `DuoLayout.laptopRailRow`'s own
-    /// `chinCenter` — "chin collapsed centre (600, v 236) via
-    /// `railAlignedCenter`" (`design/duo/duo_build_spec.md` §2.6).
-    ///
-    /// **1V (`.closed`) and pose 5 (`.openTall`)** now share one rule
-    /// — the owner's own correction: "the chin should be in the same
-    /// position and alignment and closed like 1V" (pose 5 used to stay
-    /// always open in its own column of three tabs; see the removed
-    /// `columnTabsAnchor`/`ChinNavigation.columnTabs` this round).
-    /// `x` is `DuoLayout.ringCenteredColumnX` — the ring's own real
-    /// centre, not the column rect's naive `midX`; see that function's
-    /// own comment for why, and `actionRailColumn`'s identical switch
-    /// for the rail itself. `y` is 1V's own rule, applied to both
-    /// poses: "the COLLAPSED chin must sit exactly where the Home
-    /// Screen's own Search button sits … the bottom of the bar
-    /// column," not `extent.bottom + Rail.spacing` (under Delete),
-    /// which the owner measured as "about 70pt too high" on 1V. The
-    /// owner's own screenshot measurements (closed, 466×678pt): Search
-    /// button bottom ≈ 652pt, 26pt above the window's own true bottom
-    /// edge, against a 34pt bottom safe-area inset there — 8pt inside
-    /// that inset line, not on it exactly. `closedCollapsedChinBottomOffset`
-    /// is that 8pt, applied to the REAL, live `safeAreaBottom` rather
-    /// than a flat 628/652: `containerSize.height - safeAreaBottom +
-    /// closedCollapsedChinBottomOffset` reproduces the owner's own
-    /// 652pt exactly at the measured 34pt inset, and stays correct at
-    /// any other inset this app ever sees — including pose 5's own
-    /// real bottom inset, which is `fullscreenSafeArea.bottom` the
-    /// same way 1V's is: both poses are handed the same live value
-    /// from `body`, never a flat constant, so this formula needs no
-    /// per-pose number to stay correct on either one.
-    ///
-    /// Deliberately still scoped to `.openTall`/`.closed`, not every
-    /// closed-bar pose: pose 3/4/4W's own chin is untouched this
-    /// round — it has no `railAlignedCenter` of its own at all, and
-    /// already expands in place through `ChinNavigation`'s own plain
-    /// bottom-trailing path (see that type's own comment), unverified
-    /// against this change beyond that.
-    private func railAlignedChinCenter(duoLayout: DuoLayout, safeAreaTop: CGFloat, safeAreaBottom: CGFloat, containerSize: CGSize) -> CGPoint? {
-        if duoLayout.pose == .laptop {
-            return duoLayout.laptopRailRow(containerSize: containerSize, safeAreaBottom: safeAreaBottom)?.chinCenter
-        }
-        guard duoLayout.pose == .openTall || duoLayout.pose == .closed,
-              let centerX = duoLayout.ringCenteredColumnX(containerSize: containerSize, safeAreaTop: safeAreaTop)
-        else { return nil }
-        let bottom = containerSize.height - safeAreaBottom + Self.closedCollapsedChinBottomOffset
-        let centerY = bottom - Rail.hit / 2
-        return CGPoint(x: centerX, y: centerY)
-    }
-
-    /// See `railAlignedChinCenter`'s own comment: the owner's measured
-    /// 8pt the Home Screen's Search button sits inside the real
-    /// bottom safe-area inset line, on the closed display.
-    private static let closedCollapsedChinBottomOffset: CGFloat = 8
-
-    /// Pose 6 (laptop) only: the fold's own `y` — `DuoLayout
-    /// .laptopBottomRect`'s own `minY` (`division.maxY`) — handed to
-    /// `ChinNavigation.railAlignedTopClamp` so the EXPANDED capsule's
-    /// own top edge can never rise above the fold, however little
-    /// clearance a short window leaves between it and
-    /// `railAlignedChinCenter`'s own `y`. `nil` on every other pose —
-    /// 1V and pose 5 have no fold to clamp against, and `ChinNavigation`
-    /// only ever reads this where `railAlignedCenter` is also non-nil.
-    private func railAlignedTopClamp(duoLayout: DuoLayout, containerSize: CGSize, safeAreaBottom: CGFloat) -> CGFloat? {
-        guard duoLayout.pose == .laptop else { return nil }
-        return duoLayout.laptopBottomRect(containerSize: containerSize, safeAreaBottom: safeAreaBottom)?.minY
-    }
-
     /// `DuoLayout.current`, behind the `#available` check its own
     /// declaration requires. Returns `DuoLayout.none` on anything below
     /// iOS 27.1, so every caller downstream — today, `PlayerPageView` —
@@ -521,8 +443,8 @@ struct FeedView: View {
             ChinNavigation(bottomBand: StageGeometry.bottomBand(safeAreaTop: safeAreaTop,
                                                                containerSize: rootProxy.size),
                            railBottom: duoLayout.railBottom(safeAreaTop: safeAreaTop, containerSize: rootProxy.size),
-                           railAlignedCenter: railAlignedChinCenter(duoLayout: duoLayout, safeAreaTop: safeAreaTop, safeAreaBottom: fullscreenSafeArea.bottom, containerSize: windowSize),
-                           railAlignedTopClamp: railAlignedTopClamp(duoLayout: duoLayout, containerSize: windowSize, safeAreaBottom: fullscreenSafeArea.bottom))
+                           railAlignedCenter: duoLayout.railAlignedChinCenter(safeAreaTop: safeAreaTop, safeAreaBottom: fullscreenSafeArea.bottom, containerSize: windowSize),
+                           railAlignedTopClamp: duoLayout.railAlignedTopClamp(containerSize: windowSize, safeAreaBottom: fullscreenSafeArea.bottom))
                 .opacity(hidesGlobalChrome ? 0 : 1)
                 .allowsHitTesting(!hidesGlobalChrome)
                 .accessibilityHidden(hidesGlobalChrome)

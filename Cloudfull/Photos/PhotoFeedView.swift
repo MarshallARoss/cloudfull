@@ -249,6 +249,21 @@ struct PhotoFeedView: View {
         GeometryReader { rootProxy in
             let safeAreaTop = rootProxy.safeAreaInsets.top
             let duoLayout = resolvedDuoLayout(rootProxy: rootProxy)
+            // Review follow-up: the chin used to sit at its plain
+            // bottom-trailing spot on every pose here, while `FeedView`
+            // gave it a rail-aligned one on 1V/3/4/4W/5/6 — a jump
+            // between tabs on the Duo (owner report). `windowSize`
+            // reconstructs the same true window-space size `FeedView
+            // .body` already builds (`rootProxy` does not ignore the
+            // safe area here either, so its own `.size` alone is the
+            // safe-area-content rect, not the window), so
+            // `DuoLayout.railAlignedChinCenter` below reads the same
+            // geometry on this screen that it does on `FeedView`'s.
+            let safeAreaBottom = rootProxy.safeAreaInsets.bottom
+            let windowSize = CGSize(
+                width: rootProxy.size.width + rootProxy.safeAreaInsets.leading + rootProxy.safeAreaInsets.trailing,
+                height: rootProxy.size.height + safeAreaTop + safeAreaBottom
+            )
             // The photo itself, its header, actions row, and caption all
             // measure against `rootProxy.size.width` — the full window,
             // including the closed Duo's trailing vertical-bar column.
@@ -304,8 +319,14 @@ struct PhotoFeedView: View {
                        alignment: .leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 // Every mode mounts exactly one instance. `bottomBand: 0`
-                // because Photos has no 9:16 stage.
-                ChinNavigation(bottomBand: 0)
+                // because Photos has no 9:16 stage. `railAlignedCenter`/
+                // `railAlignedTopClamp` are `DuoLayout`'s own shared chin
+                // anchor (review follow-up) — `nil` on a regular iPhone,
+                // same as before this change, and the same point
+                // `FeedView` uses on the Duo otherwise.
+                ChinNavigation(bottomBand: 0,
+                               railAlignedCenter: duoLayout.railAlignedChinCenter(safeAreaTop: safeAreaTop, safeAreaBottom: safeAreaBottom, containerSize: windowSize),
+                               railAlignedTopClamp: duoLayout.railAlignedTopClamp(containerSize: windowSize, safeAreaBottom: safeAreaBottom))
                 // Zero-size. Presents and dismisses the system share sheet
                 // imperatively. Mirrors `FeedView`'s identical host.
                 ActivityViewControllerHost(coordinator: shareCoordinator)
