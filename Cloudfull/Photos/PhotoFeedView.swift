@@ -361,15 +361,27 @@ struct PhotoFeedView: View {
             // `-cloudfull-log-rotation`: see `photosLayoutProbeLine`'s own
             // comment. Built here, from this `GeometryReader`'s own
             // locals, rather than inside the helper itself.
-            let photosLayoutProbeLine = Self.photosLayoutProbeLine(
-                rootProxy: rootProxy,
-                duoLayout: duoLayout,
-                safeAreaTop: safeAreaTop,
-                safeAreaBottom: safeAreaBottom,
-                windowSize: windowSize,
-                toolbarVerticalEdge: toolbarVerticalEdge,
-                topRow: topRow
-            )
+            // NIT (review fix): this used to build the string on every
+            // body pass regardless of the flag — `logPhotosLayout`
+            // already no-ops without it, but the formatting itself
+            // (several `Int(...)` conversions and string concatenations)
+            // ran anyway on a feed that invalidates `body` on nearly
+            // every scroll frame. Gating the build itself on the same
+            // flag `logPhotosLayout` checks skips that work when the
+            // flag is off; `""` keeps `.onChange` below a stable,
+            // harmless value in that case (one no-op fire, never again,
+            // since it never changes).
+            let photosLayoutProbeLine = DiagnosticsGate.isOn("-cloudfull-log-rotation")
+                ? Self.photosLayoutProbeLine(
+                    rootProxy: rootProxy,
+                    duoLayout: duoLayout,
+                    safeAreaTop: safeAreaTop,
+                    safeAreaBottom: safeAreaBottom,
+                    windowSize: windowSize,
+                    toolbarVerticalEdge: toolbarVerticalEdge,
+                    topRow: topRow
+                )
+                : ""
             #endif
             // The photo itself, its header, actions row, and caption all
             // measure against `rootProxy.size.width` — the full window,
@@ -495,11 +507,18 @@ struct PhotoFeedView: View {
                 // like 1 and 5") — `railAlignedTopClamp` is always `nil`
                 // here since Photos never uses the laptop deck spot that
                 // clamp exists for.
+                // Review fix (fold-on-bottom): `isMirrored` straight
+                // through used to anchor the switcher on the WRONG side
+                // in the 1H closed-landscape sub-pose, the same
+                // `toolbarVerticalEdge` misreport `photosChinCenter`'s
+                // own `x` already corrects for — `photosChinIsMirrored`
+                // is that same correction, for the switcher's own
+                // anchor/growth side. See its own comment.
                 ChinNavigation(bottomBand: 0,
                                railAlignedCenter: duoLayout.photosChinCenter(safeAreaTop: safeAreaTop, safeAreaBottom: safeAreaBottom, containerSize: windowSize),
                                railAlignedTopClamp: nil,
                                safeAreaBottom: safeAreaBottom,
-                               isMirrored: duoLayout.isMirrored)
+                               isMirrored: duoLayout.photosChinIsMirrored(containerSize: windowSize))
                 // Zero-size. Presents and dismisses the system share sheet
                 // imperatively. Mirrors `FeedView`'s identical host.
                 ActivityViewControllerHost(coordinator: shareCoordinator)

@@ -186,11 +186,18 @@ struct SettingsView: View {
                 // as on Photos. `railAlignedTopClamp` is `nil` to match —
                 // that clamp exists only for the laptop deck's own fold,
                 // which Settings never uses either.
+                // Review fix (fold-on-bottom): `isMirrored` straight
+                // through used to anchor the switcher on the WRONG side
+                // in the 1H closed-landscape sub-pose, the same
+                // `toolbarVerticalEdge` misreport `photosChinCenter`'s
+                // own `x` already corrects for — `photosChinIsMirrored`
+                // is that same correction, for the switcher's own
+                // anchor/growth side. See its own comment.
                 ChinNavigation(bottomBand: 0,
                                railAlignedCenter: duoLayout.photosChinCenter(safeAreaTop: safeAreaTop, safeAreaBottom: safeAreaBottom, containerSize: windowSize),
                                railAlignedTopClamp: nil,
                                safeAreaBottom: safeAreaBottom,
-                               isMirrored: duoLayout.isMirrored)
+                               isMirrored: duoLayout.photosChinIsMirrored(containerSize: windowSize))
             }
             .onAppear {
                 Usage.shared.settingsOpened()
