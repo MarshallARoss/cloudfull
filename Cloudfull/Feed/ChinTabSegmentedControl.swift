@@ -496,6 +496,41 @@ final class ChinSegmentedControl: UISegmentedControl {
         originalIndex = nil
         super.touchesCancelled(touches, with: event)
     }
+
+    /// Refuses every gesture recognizer that belongs to a view outside this
+    /// control, except a scroll view's own recognizers. A touch that starts
+    /// on a segment belongs to the control alone.
+    ///
+    /// The reason (owner bug, Duo pose 5, Videos tab): a tap on "Photos" or
+    /// "Settings" in the expanded capsule did nothing. UIKit hit-testing
+    /// delivered the touch to this control, but `FeedView`'s DEBUG root
+    /// touch logger, a `.simultaneousGesture(DragGesture(minimumDistance:
+    /// 0))` on `body`'s outer `GeometryReader`, also saw the touch and
+    /// recognized it. "Simultaneous" applies only between SwiftUI gestures.
+    /// To UIKit it is one more recognizer above this control, and a
+    /// recognizer that begins cancels the touches of the view under the
+    /// finger. This control then got `touchesCancelled` instead of
+    /// `touchesEnded`, put the lens back on `originalIndex`, and sent
+    /// nothing. The tab stayed on Videos and the capsule stayed open.
+    /// `SettingsView` mounts no such gesture, so the same control worked
+    /// there.
+    ///
+    /// UIKit asks the touched view this question for each recognizer that
+    /// tries to begin, also for recognizers on its superviews. This is the
+    /// documented way a `UIControl` keeps its own touches. `UISlider` uses
+    /// it for the same reason. Returning `false` fails the outside
+    /// recognizer and leaves the touch with the control. This control has
+    /// no gesture of its own to protect, so the rule is simple. The
+    /// control's own recognizers (the system pointer interaction) still
+    /// go to `super`. A scroll view's recognizers also go to `super`, so a
+    /// pager that contains this control (the photo Share picker) keeps its
+    /// current behavior.
+    override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        if let owner = gestureRecognizer.view, owner.isDescendant(of: self) || owner is UIScrollView {
+            return super.gestureRecognizerShouldBegin(gestureRecognizer)
+        }
+        return false
+    }
 }
 
 /// A plain `UIView` that pins the control to its own four edges.
