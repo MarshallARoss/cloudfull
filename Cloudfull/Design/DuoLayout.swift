@@ -156,12 +156,15 @@ struct DuoLayout {
     /// unfold-transition frames (`pose-openTall … hinge-full-180 …
     /// rawdiv-none`), where `hasInnerDisplayDivision(proxy:)` alone
     /// still read `false` though the device plainly has a hinge. Once
-    /// any one of those three signals reads true for a single frame,
+    /// `hinge` or that division reads true for a single frame,
     /// `seenFoldable` latches it in `UserDefaults` for the rest of
     /// this install's life, closed pose included — the one exception
     /// among this struct's fields to "no `UserDefaults`/`AppStorage`
     /// read of its own," since nothing else here needs a value that
-    /// must outlive a single launch.
+    /// must outlive a single launch. `toolbarVerticalEdge` still feeds
+    /// `isFoldable` itself every frame, same as always, but — unlike
+    /// the other two — never sets this latch on its own: see
+    /// `current(...)`'s own comment on that exact line for why.
     ///
     /// Owner decision: "the Duo follows the system bar; the
     /// Left-handed controls setting is for regular iPhones only" —
@@ -323,18 +326,34 @@ struct DuoLayout {
         // … hinge-full-180 … rawdiv-none`, `insets-82,0,34,0`). Those
         // frames still need `leftHandedControls` to stay OFF — the Duo
         // always follows the bar, never the setting — so `isFoldable`
-        // below also latches: once ANY foldable signal this frame —
-        // `hinge`, `toolbarVerticalEdge`, or a real division — reads
+        // below also latches: once `hinge` or a real division reads
         // non-nil/non-empty, `Self.seenFoldable` persists that for
         // every frame this install ever renders again, including the
         // very next cold launch straight into the closed pose (often
         // the first frame `current(...)` ever sees, with nothing
         // earlier this launch to have caught a real signal on).
-        // `seenFoldable`'s own setter only ever moves `false` → `true`,
-        // once, so an already-latched install never re-writes
-        // `UserDefaults` here.
+        //
+        // Round 2 (owner catch): `toolbarVerticalEdge` itself does NOT
+        // set this latch, though it still joins the per-frame
+        // `isFoldable` OR just below exactly as before. Nothing in the
+        // SDK's own headers (`hasInnerDisplayDivision(proxy:)`'s own
+        // comment, below, has the full search) documents that a bar
+        // can only ever appear on a genuine foldable — an iPhone app
+        // running on a Mac, say, is one configuration this file cannot
+        // rule out reporting a non-nil `toolbarVerticalEdge` of its
+        // own for reasons that have nothing to do with a real hinge.
+        // `hinge` and a real division have no such doubt: neither one
+        // has anywhere else to come from. A single misread frame
+        // feeding `isFoldable` is one frame's own layout wrong at
+        // worst; feeding this LATCH instead would misclassify that
+        // device/model as a foldable forever, on every later launch —
+        // not a trade worth making for a signal the SDK does not
+        // actually promise is foldable-only.
+        // `seenFoldable`'s own setter only ever writes once per model
+        // per install — see its own comment below for why a model id,
+        // not a plain `Bool`, is what gets persisted.
         let hasDivision = Self.hasInnerDisplayDivision(proxy: proxy)
-        if hinge != nil || toolbarVerticalEdge != nil || hasDivision {
+        if hinge != nil || hasDivision {
             Self.seenFoldable = true
         }
         let isFoldable = hinge != nil || toolbarVerticalEdge != nil || hasDivision || Self.seenFoldable
@@ -367,7 +386,14 @@ struct DuoLayout {
         // the closed-pose/unfold-transition frames above that
         // `hasInnerDisplayDivision(proxy:)` alone still misses. A
         // regular iPhone is still the one case the setting actually
-        // controls, since it never latches `seenFoldable` at all.
+        // controls — not simply because nothing on that device ever
+        // calls the setter (a Duo backup restored onto one can seed
+        // `UserDefaults` with a value before this code ever runs
+        // there at all), but because `seenFoldable`'s own getter
+        // checks that stored value against THIS launch's own hardware
+        // model id (see its own comment below): a regular iPhone's
+        // model id never matches a Duo's, so the getter still reads
+        // false for it no matter what a restore carried over.
         // `DuoForceMirror.isOn` (`-cloudfull-force-mirror`, DEBUG only)
         // still forces this `true` regardless of every other signal,
         // for testing every pose's own mirrored geometry on the Duo
@@ -547,35 +573,103 @@ struct DuoLayout {
     }
 
     /// Review fix (BLOCKER, finding 1, live logs 2026-10-12): a
-    /// persisted, per-install latch for "has this device ever, on any
+    /// persisted, per-install latch for "has THIS device ever, on any
     /// launch, shown a real foldable signal." `hasInnerDisplayDivision
     /// (proxy:)` below still reads `false` on frames the Duo itself
     /// produces with no division and no bar at all — its own closed
     /// pose, and many of its own unfold-transition frames — see that
     /// function's own doc for the exact log lines this fix is built
-    /// from. Backed by `UserDefaults.standard` under `"duo.seenFoldable"`
-    /// rather than kept only in memory: the closed pose is often the
-    /// very FIRST frame a cold launch ever renders, with no earlier
-    /// frame this launch to have caught a real signal on, so only a
-    /// value that survives ACROSS launches closes that gap.
+    /// from. The closed pose is often the very FIRST frame a cold
+    /// launch ever renders, with no earlier frame this launch to have
+    /// caught a real signal on, so only a value that survives ACROSS
+    /// launches closes that gap — kept in `UserDefaults.standard`,
+    /// not only in memory, for exactly that reason.
     ///
-    /// The setter only ever moves `false` → `true`, and only writes
-    /// when the value actually changes — once per install — so an
-    /// already-latched frame never re-writes `UserDefaults`, and
-    /// nothing here is `@AppStorage`/`@State`, so this write never
-    /// triggers a SwiftUI body re-evaluation of its own the way a
-    /// state mutation during `body` would. Read and written only from
-    /// `current(...)`, itself only ever called from a view's own
-    /// `body` — the same main-actor context every other stored read in
-    /// this file already assumes, so no further isolation is needed
-    /// here.
+    /// Round 2 (owner catch): a Duo backup restored onto a REGULAR
+    /// iPhone carries this latch's own stored value along in the
+    /// backup. A plain `Bool` (the original `"duo.seenFoldable"` key
+    /// just below, left in place but no longer read — see its own
+    /// comment) cannot tell "this device saw a hinge" apart from "a
+    /// DIFFERENT device, in a backup this one inherited, saw a hinge":
+    /// once restored `true`, that Bool would latch `isFoldable` for a
+    /// regular iPhone forever, killing the Left-handed controls
+    /// setting there for good (`current(...)`'s own `isMirrored`
+    /// comment, just above, has the full "which case the setting
+    /// actually controls" reasoning this bug breaks). This round
+    /// stores the hardware MODEL identifier itself instead, under its
+    /// own new key, so the getter can ask "does the stored model match
+    /// THIS launch's own model" rather than a bare yes/no: a restore
+    /// onto a different model (a regular iPhone, say) then reads
+    /// false regardless of what the backup carried over, while a
+    /// restore onto the SAME model (Duo to Duo) still correctly reads
+    /// true.
+    ///
+    /// The setter only ever writes when a launch's own model id is not
+    /// already stored — once per install per device, the same
+    /// "write at most once" shape the old Bool setter already had —
+    /// so an already-latched install never re-writes `UserDefaults`
+    /// on every frame. Nothing here is `@AppStorage`/`@State`, so this
+    /// write never triggers a SwiftUI body re-evaluation of its own
+    /// the way a state mutation during `body` would. `seenFoldableCache`
+    /// below is this type's own in-memory mirror of the getter's
+    /// answer — `UserDefaults` is read at most once per launch, the
+    /// first time `body` asks, rather than on every single `body`
+    /// pass after that; the setter keeps it in sync the moment it
+    /// writes. Read and written only from `current(...)`, itself only
+    /// ever called from a view's own `body` — the same main-actor
+    /// context every other stored read in this file already assumes,
+    /// so no further isolation is needed here.
     private static let seenFoldableDefaultsKey = "duo.seenFoldable"
 
+    /// This round's own key — a `String` (the device model id), not a
+    /// `Bool` — see the comment above for why. The old key above is
+    /// left exactly as it is: unread, not deleted, so an existing
+    /// install's own stored `true` there simply stops mattering rather
+    /// than needing a migration path of its own.
+    private static let seenFoldableModelDefaultsKey = "duo.seenFoldableModel"
+
+    /// This launch's own hardware model identifier, computed once:
+    /// `ProcessInfo.processInfo.environment["SIMULATOR_MODEL_IDENTIFIER"]`
+    /// when running on the simulator (a real device never sets this;
+    /// a simulator process's own `uname(2)` otherwise always reports
+    /// the Mac's own machine, such as `arm64`, never the simulated
+    /// iPhone's model), else `utsname().machine` read through
+    /// `uname(2)` directly — the same call `Analytics/Usage.swift`'s
+    /// own `freshSession(install:cold:)` already makes for its own
+    /// `device` field. A `static let`, not recomputed each call: this
+    /// value cannot change within a single launch, unlike `seenFoldable`
+    /// itself, which must still re-check `UserDefaults` (or its own
+    /// cache) every time, since a LATER frame in the same launch is
+    /// exactly how the latch is meant to take effect.
+    private static let currentModelIdentifier: String = {
+        if let simulatorModel = ProcessInfo.processInfo.environment["SIMULATOR_MODEL_IDENTIFIER"] {
+            return simulatorModel
+        }
+        var systemInfo = utsname()
+        uname(&systemInfo)
+        return withUnsafePointer(to: &systemInfo.machine) {
+            $0.withMemoryRebound(to: CChar.self, capacity: 1) { String(validatingCString: $0) ?? "?" }
+        }
+    }()
+
+    /// In-memory cache of `seenFoldable`'s own answer for this launch
+    /// — see that property's own comment above for why. `nil` means
+    /// "not read this launch yet"; the getter fills it on its own
+    /// first call, and the setter updates it directly the moment it
+    /// writes, so the two never disagree.
+    private static var seenFoldableCache: Bool?
+
     static var seenFoldable: Bool {
-        get { UserDefaults.standard.bool(forKey: seenFoldableDefaultsKey) }
+        get {
+            if let cached = seenFoldableCache { return cached }
+            let value = UserDefaults.standard.string(forKey: seenFoldableModelDefaultsKey) == currentModelIdentifier
+            seenFoldableCache = value
+            return value
+        }
         set {
-            guard newValue, !UserDefaults.standard.bool(forKey: seenFoldableDefaultsKey) else { return }
-            UserDefaults.standard.set(true, forKey: seenFoldableDefaultsKey)
+            guard newValue, UserDefaults.standard.string(forKey: seenFoldableModelDefaultsKey) == nil else { return }
+            UserDefaults.standard.set(currentModelIdentifier, forKey: seenFoldableModelDefaultsKey)
+            seenFoldableCache = true
         }
     }
 
@@ -598,10 +692,12 @@ struct DuoLayout {
     /// hinge; this frame just caught it between fold-geometry updates.
     /// `current(...)`'s own `seenFoldable` latch above exists because
     /// of exactly these frames: one frame, this launch or a previous
-    /// one, where THIS function (or `hinge`, or `toolbarVerticalEdge`)
-    /// reads true is enough to latch "foldable" for every later frame,
-    /// closed pose included — see `current(...)`'s own `isFoldable`
-    /// comment.
+    /// one, where THIS function (or `hinge`) reads true is enough to
+    /// latch "foldable" for every later frame, closed pose included.
+    /// `toolbarVerticalEdge` still joins the per-frame `isFoldable`
+    /// check right alongside this latch, but no longer SETS it on its
+    /// own — see `current(...)`'s own comment on that exact line for
+    /// why.
     ///
     /// SDK search (this fix's own build spec, confirmed against the
     /// iOS 27.1 SDK headers): neither `UIKit.framework/Headers/
