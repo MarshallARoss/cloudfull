@@ -456,36 +456,41 @@ struct DuoLayout {
             // it), so it is unaffected — "tall videos stay as they
             // are."
             //
-            // Owner re-adapt: "the video should go all the way to the
-            // top" — the box's own top is now the window's own top
-            // edge (`0`), not `safeAreaTop + 10`, the same full-bleed
-            // rule 1V/5 already follow (system status draws OVER the
-            // video there too, not beside it). Nothing interactive
-            // mounts above the fold in this pose, so there is nothing
-            // under that status area for a tap to miss. `bottom` is
-            // unchanged — only the top edge moved.
+            // Owner re-adapt: the video should go all the way to the
+            // top of the window — the box's own top is `0`, not
+            // `safeAreaTop + 10`, the same full-bleed rule 1V/5 already
+            // follow (system status draws OVER the video there too,
+            // not beside it). Nothing interactive mounts above the
+            // fold in this pose, so there is nothing under that status
+            // area for a tap to miss.
             //
-            // Owner re-adapt (live check, laptop, 16:9): `fitRect`
-            // itself still CENTRES a width-bound video vertically in
-            // the box, leaving an equal gap above and below —
-            // confirmed live at `stage 0,32,669,376`, a 32pt gap on
-            // each side. The owner's own ask was the top edge
-            // specifically, not just "somewhere near it": pin a
-            // width-bound result's own top back to `top` (`0`), same
-            // as a height-bound (tall) video already reads, and let
-            // the whole leftover gap fall BELOW the video, between it
-            // and the fold, instead of splitting it. `fitted.height <
-            // box.height` (with a small tolerance) is exactly
-            // `fitRect`'s own width-bound case — a height-bound video
-            // already has `fitted.minY == top` by construction (FIT
-            // fills the box's own full height then), so this is a
-            // no-op for it, never double-anchoring the same edge.
+            // Owner re-adapt (two corrections this round, own words:
+            // "the video can go lower," then "I misread — anchored to
+            // the BOTTOM"): the video anchors to the BOTTOM of this
+            // upright half, sitting ON the fold, not floating inside
+            // it with a gap on both sides. The box's own bottom is now
+            // `division.minY` itself — flush with the fold's own top
+            // edge, the old 14pt clearance removed. Checked nothing
+            // else reads that 14pt: `laptopBottomRect`, and everything
+            // below the fold it anchors (scrubber, caption, rail row,
+            // pager), starts at `division.maxY`, the fold's own OTHER
+            // edge, never this one; the iCloud ring mounted inside
+            // this stage positions itself off the stage's own rect,
+            // not a hand-measured number, so it rides along with this
+            // box with nothing further to fix. A height-bound (tall)
+            // video already FITs the box's own full height, nothing
+            // more to anchor. A width-bound (wide) video no longer
+            // centres vertically — pinned to the box's own BOTTOM
+            // instead (`fitted.height < box.height`, `fitRect`'s own
+            // width-bound case, with a small tolerance), so it sits on
+            // the fold with the whole leftover gap pushed to the TOP,
+            // above the video, never splitting it front and back.
             let top: CGFloat = 0
-            let bottom = max(top, division.minY - 14)
+            let bottom = max(top, division.minY)
             let box = CGRect(x: 0, y: top, width: containerSize.width, height: bottom - top)
             let fitted = fitRect(in: box, aspectRatio: aspectRatio)
             guard fitted.height < box.height - 0.5 else { return fitted }
-            return CGRect(x: fitted.minX, y: top, width: fitted.width, height: fitted.height)
+            return CGRect(x: fitted.minX, y: box.maxY - fitted.height, width: fitted.width, height: fitted.height)
         }
         let avail = availableRect(containerSize: containerSize, safeAreaTop: safeAreaTop)
         let fitted = fitRect(in: avail, aspectRatio: aspectRatio)
