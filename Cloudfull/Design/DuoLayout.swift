@@ -143,6 +143,22 @@ struct DuoLayout {
     /// back to the team rather than guessed at here.
     let isMirrored: Bool
 
+    /// Item E (owner call, relayed and logged for his own morning
+    /// review — unverified, see `current(...)`'s own comment): true
+    /// only on pose `.closed` (1V), when the active `.occlusion`
+    /// region — the system's own time + connectivity ring — reports
+    /// itself in the BOTTOM half of this frame's own window instead of
+    /// the top. A real, geometry-only signal, never a device-
+    /// orientation read (this file's own header rule): if the window's
+    /// content is genuinely rendered rotated 180°, the system's own
+    /// reserved regions report themselves whichever way is actually
+    /// true for THIS frame, same as every other field this type reads.
+    /// `railAlignedChinCenter`/`railVerticalExtent` are the two
+    /// readers — "chin at the top, rail builds downward from it."
+    /// `false` on every other pose: "upside down" has only ever been
+    /// asked for on the closed, single-display pose.
+    let isUpsideDown: Bool
+
     /// `barEdge != nil`. The spelling most call sites reach for when all
     /// they need is the yes/no, not which edge.
     var isClosedBar: Bool { barEdge != nil }
@@ -152,15 +168,15 @@ struct DuoLayout {
     /// straight to a child that expects a `DuoLayout` without ever
     /// calling `current(proxy:toolbarVerticalEdge:horizontalSizeClass:verticalSizeClass:hinge:hingeDegrees:leftHandedControls:)`.
     /// `pose` is `.regularPhone` here — the hard rule every new branch
-    /// gates on. `isMirrored` is `false` — a regular iPhone with the
-    /// setting off (the default) must stay pixel-identical, and this
-    /// value is only ever handed out before `current(...)` has had a
-    /// chance to read the setting at all (the very first frame, on an
-    /// OS below iOS 27.1).
+    /// gates on. `isMirrored`/`isUpsideDown` are both `false` — a
+    /// regular iPhone with the setting off (the default) must stay
+    /// pixel-identical, and this value is only ever handed out before
+    /// `current(...)` has had a chance to read anything at all (the
+    /// very first frame, on an OS below iOS 27.1).
     static let none = DuoLayout(barEdge: nil, barWidth: 0, occlusion: nil, division: nil,
                                 pose: .regularPhone, hinge: nil, hingeDegrees: nil,
                                 debugRawDivision: nil, debugSafeAreaInsets: EdgeInsets(),
-                                isMirrored: false)
+                                isMirrored: false, isUpsideDown: false)
 
     /// Reads this frame's Duo geometry from `proxy` and the
     /// already-resolved `toolbarVerticalEdge` environment value.
@@ -304,6 +320,15 @@ struct DuoLayout {
             barEdge: toolbarVerticalEdge,
             hinge: hinge
         )
+        // Item E (owner call, relayed — unverified, see `isUpsideDown`'s
+        // own doc comment): geometry only, never a device-orientation
+        // read — the active occlusion's own `midY` against the
+        // window's own vertical centre. `DuoForceUpsideDown.isOn`
+        // (`-cloudfull-force-upside-down`, DEBUG only) forces it, the
+        // same testing role `DuoForceMirror` already plays for
+        // `isMirrored`.
+        let isUpsideDown = pose == .closed
+            && (DuoForceUpsideDown.isOn || (occlusionFrame.map { $0.midY > windowSize.height / 2 } ?? false))
         // Round 2 debug probe only (`debugRawDivision`'s own comment):
         // the SAME raw query, but `.includeInactive` and left in
         // `proxy`'s own un-offset local space — a diagnostic snapshot
@@ -321,7 +346,8 @@ struct DuoLayout {
             hingeDegrees: hingeDegrees,
             debugRawDivision: debugRawDivision,
             debugSafeAreaInsets: insets,
-            isMirrored: isMirrored
+            isMirrored: isMirrored,
+            isUpsideDown: isUpsideDown
         )
     }
 
@@ -1327,6 +1353,9 @@ struct DuoLayout {
             let top = max(minTop, centeredTop)
             return (top, top + Rail.columnHeight, Rail.spacing)
         }
+        if pose == .closed, isUpsideDown {
+            return upsideDownRailVerticalExtent(chinCenter: chinCenter, containerSize: containerSize, safeAreaBottom: safeAreaBottom)
+        }
         let chinTop = chinCenter.y - Rail.hit / 2
         let bottom = chinTop - Self.railChinGap
         // Owner re-adapt (live check, pose 1V, pill running with
@@ -1367,6 +1396,60 @@ struct DuoLayout {
         let compressedHeight = max(Rail.itemHeight * 5, bottom - minTop)
         let compressedSpacing = max(0, (compressedHeight - Rail.itemHeight * 5) / 4)
         return (bottom - compressedHeight, compressedSpacing, Rail.itemHeight + compressedSpacing)
+    }
+
+    /// Item E (owner call, relayed — unverified, see `isUpsideDown`'s
+    /// own doc comment): the exact mirror of `railVerticalExtent`'s own
+    /// normal (bottom-up) branch, top-down instead. Keep's own top sits
+    /// `gap` below the chin's own BOTTOM edge (the chin is at the top
+    /// now); the status cluster — reporting itself near the window's
+    /// own BOTTOM edge — clamps Delete's own bottom instead of Keep's
+    /// own top, using the same `liveActivityStatusGrowth`/
+    /// `railKeepClearance` margins, grown upward from the cluster's own
+    /// top edge instead of down from it
+    /// (`closedStatusWorstCaseTop`). Unverified claim, same as that
+    /// function's own: that a Live Activity's pill, if it shows at all
+    /// here, grows the SAME amount, upward — there is no report yet
+    /// either way.
+    private func upsideDownRailVerticalExtent(chinCenter: CGPoint, containerSize: CGSize, safeAreaBottom: CGFloat) -> (top: CGFloat, bottom: CGFloat, spacing: CGFloat) {
+        let chinBottom = chinCenter.y + Rail.hit / 2
+        let top = chinBottom + Self.railChinGap
+        let maxBottom = closedStatusWorstCaseTop(containerSize: containerSize, safeAreaBottom: safeAreaBottom) - Self.railKeepClearance
+        let naiveBottom = top + Rail.columnHeight
+        guard naiveBottom > maxBottom else {
+            return (top, naiveBottom, Rail.spacing)
+        }
+        let compressed = Self.compressedRailLayoutUpsideDown(top: top, maxBottom: maxBottom)
+        guard compressed.pitch < Self.railMinPitch else {
+            return (top, compressed.bottom, compressed.spacing)
+        }
+        let tighterGap = Self.railChinGapCompressed
+        let tighterTop = chinBottom + tighterGap
+        let tighterCompressed = Self.compressedRailLayoutUpsideDown(top: tighterTop, maxBottom: maxBottom)
+        return (tighterTop, tighterCompressed.bottom, tighterCompressed.spacing)
+    }
+
+    /// `upsideDownRailVerticalExtent`'s own mirror of `compressedRailLayout`.
+    private static func compressedRailLayoutUpsideDown(top: CGFloat, maxBottom: CGFloat) -> (bottom: CGFloat, spacing: CGFloat, pitch: CGFloat) {
+        let compressedHeight = max(Rail.itemHeight * 5, maxBottom - top)
+        let compressedSpacing = max(0, (compressedHeight - Rail.itemHeight * 5) / 4)
+        return (top + compressedHeight, compressedSpacing, Rail.itemHeight + compressedSpacing)
+    }
+
+    /// `closedStatusWorstCaseBottom`'s own mirror, for
+    /// `upsideDownRailVerticalExtent`: the worst-case TOP edge of the
+    /// status cluster, once it reports itself near the window's own
+    /// bottom edge — `occlusion.maxY` (its own real bottom edge) minus
+    /// the same growth margin, grown upward instead of down.
+    /// `safeAreaBottom`, not `safeAreaTop`, for the same reason
+    /// `railAlignedChinCenter`'s own upside-down branch reads
+    /// `safeAreaTop` — the window's real insets name the camera's own
+    /// (larger) one wherever it actually now sits.
+    private func closedStatusWorstCaseTop(containerSize: CGSize, safeAreaBottom: CGFloat) -> CGFloat {
+        guard let occlusion, CGRect(origin: .zero, size: containerSize).contains(occlusion) else {
+            return containerSize.height - safeAreaBottom - Self.liveActivityStatusGrowth
+        }
+        return occlusion.maxY - Self.liveActivityStatusGrowth
     }
 
     /// See `railVerticalExtent`'s own doc comment.
@@ -2003,6 +2086,18 @@ struct DuoLayout {
         guard pose == .closed || pose == .openWide || pose == .book || pose == .openTall,
               let centerX = ringCenteredColumnX(containerSize: containerSize, safeAreaTop: safeAreaTop)
         else { return nil }
+        // Item E (owner call, relayed — unverified, see `isUpsideDown`'s
+        // own doc comment): "chin at the TOP of the column." The SAME
+        // formula as the normal case below, reflected across the
+        // window's own vertical centre, with `safeAreaTop` standing in
+        // for `safeAreaBottom`'s own role — the window's real top
+        // inset is what actually clears the Home Screen's own Search
+        // spot once that spot is genuinely at the top.
+        if pose == .closed, isUpsideDown {
+            let top = max(safeAreaTop - Self.chinBottomInset, Self.chinBottomInset)
+            let centerY = top + Rail.hit / 2
+            return CGPoint(x: centerX, y: centerY)
+        }
         let bottom = containerSize.height - max(safeAreaBottom - Self.chinBottomInset, Self.chinBottomInset)
         let centerY = bottom - Rail.hit / 2
         return CGPoint(x: centerX, y: centerY)
@@ -2160,6 +2255,20 @@ enum DuoGuideColours {
 enum DuoForceMirror {
     #if DEBUG
     static let isOn = ProcessInfo.processInfo.arguments.contains("-cloudfull-force-mirror")
+    #else
+    static let isOn = false
+    #endif
+}
+
+/// True only behind `-cloudfull-force-upside-down`, and only in a
+/// DEBUG build — same reasoning as `DuoForceMirror`. Item E: forces
+/// `DuoLayout.isUpsideDown` on for pose 1V, regardless of the real
+/// occlusion reading, since there is no known way to reach a real
+/// upside-down 1V on the simulator at all. `false`, unconditionally,
+/// outside DEBUG.
+enum DuoForceUpsideDown {
+    #if DEBUG
+    static let isOn = ProcessInfo.processInfo.arguments.contains("-cloudfull-force-upside-down")
     #else
     static let isOn = false
     #endif
