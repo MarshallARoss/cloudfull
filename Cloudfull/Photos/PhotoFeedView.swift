@@ -239,7 +239,7 @@ struct PhotoFeedView: View {
                 leftHandedControls: leftHandedControls
             )
         }
-        return .none
+        return .regularPhone(leftHandedControls: leftHandedControls)
     }
 
     var body: some View {
@@ -294,7 +294,7 @@ struct PhotoFeedView: View {
                     ToolbarVerticalEdgeReader { toolbarVerticalEdge = $0 }
                 }
                 Color.black.ignoresSafeArea()
-                content(containerWidth: rootProxy.size.width, safeAreaTop: safeAreaTop, viewportHeight: rootProxy.size.height)
+                content(containerWidth: rootProxy.size.width, safeAreaTop: safeAreaTop, viewportHeight: rootProxy.size.height, isMirrored: duoLayout.isMirrored)
                 // An opaque band that keeps a scrolling post's caption
                 // from showing through behind the status-bar clock and the
                 // top pills. It sits above the scroll content but below
@@ -482,7 +482,7 @@ struct PhotoFeedView: View {
     }
 
     @ViewBuilder
-    private func content(containerWidth: CGFloat, safeAreaTop: CGFloat, viewportHeight: CGFloat) -> some View {
+    private func content(containerWidth: CGFloat, safeAreaTop: CGFloat, viewportHeight: CGFloat, isMirrored: Bool) -> some View {
         if !deck.hasDealtFirstDeck || deck.isReloadingForFilters {
             // Plain black until the first background enumeration actually
             // returns, mirroring `FeedView.content`'s identical guard,
@@ -502,7 +502,7 @@ struct PhotoFeedView: View {
         } else if deck.entries.isEmpty {
             emptyState
         } else {
-            pager(containerWidth: containerWidth, safeAreaTop: safeAreaTop, viewportHeight: viewportHeight)
+            pager(containerWidth: containerWidth, safeAreaTop: safeAreaTop, viewportHeight: viewportHeight, isMirrored: isMirrored)
         }
     }
 
@@ -517,7 +517,7 @@ struct PhotoFeedView: View {
             .accessibilityIdentifier("photos_loading")
     }
 
-    private func pager(containerWidth: CGFloat, safeAreaTop: CGFloat, viewportHeight: CGFloat) -> some View {
+    private func pager(containerWidth: CGFloat, safeAreaTop: CGFloat, viewportHeight: CGFloat, isMirrored: Bool) -> some View {
         ScrollViewReader { proxy in
         ScrollView(.vertical) {
             // The near ring is the current post and its immediate
@@ -550,7 +550,8 @@ struct PhotoFeedView: View {
                         // inside the type checker's time budget.
                         offscreenTopHeight: { offscreenTop(of: entry.id, safeAreaTop: safeAreaTop) },
                         collapsedHeight: deck.collapsedHeights[entry.id],
-                        onRevealRequested: { revealAbove(by: $0, duration: $1) }
+                        onRevealRequested: { revealAbove(by: $0, duration: $1) },
+                        isMirrored: isMirrored
                     )
                     .id(entry.id)
                     // The pinched row outranks every other row for as

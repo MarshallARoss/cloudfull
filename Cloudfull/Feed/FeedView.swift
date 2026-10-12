@@ -362,7 +362,7 @@ struct FeedView: View {
                 leftHandedControls: leftHandedControls
             )
         }
-        return .none
+        return .regularPhone(leftHandedControls: leftHandedControls)
     }
 
     var body: some View {
@@ -3421,15 +3421,35 @@ private struct FeedPageContent: View {
                         }()
                         captionZone(leadingClearance: leadingClearance, trailingClearance: railColumnRect.width + 16, hidden: false, bandHeight: realBottomBand)
                     } else {
-                        HStack(alignment: .bottom, spacing: 0) {
-                            captionZone(trailingClearance: 16, hidden: false, bandHeight: realBottomBand)
-                            VStack(alignment: .trailing, spacing: 0) {
-                                if isActive, let calloutMessage = shareCoordinator.calloutMessage {
-                                    railCallout(calloutMessage)
-                                }
-                                actionRail(bottomBand: bottomBand)
+                        // Mirrored-layout round: this HStack is a true
+                        // two-pane layout, caption and rail each their
+                        // own side-by-side child — not one row whose
+                        // own internal padding/alignment can flip in
+                        // place, the way every other mirrored piece in
+                        // this file works. Mirrored, the PANES
+                        // themselves swap order, and the rail's own
+                        // `VStack` alignment swaps with them (leading,
+                        // hugging the screen's own true left bezel,
+                        // instead of trailing). `captionZone`'s own
+                        // call is UNCHANGED either way — its own
+                        // internal mirror logic (that function's own
+                        // comment) already reads correctly once it is
+                        // simply the HStack's other child.
+                        let railColumn = VStack(alignment: duoLayout.isMirrored ? .leading : .trailing, spacing: 0) {
+                            if isActive, let calloutMessage = shareCoordinator.calloutMessage {
+                                railCallout(calloutMessage)
                             }
-                            .animation(.easeInOut(duration: 0.2), value: shareCoordinator.calloutMessage)
+                            actionRail(bottomBand: bottomBand)
+                        }
+                        .animation(.easeInOut(duration: 0.2), value: shareCoordinator.calloutMessage)
+                        HStack(alignment: .bottom, spacing: 0) {
+                            if duoLayout.isMirrored {
+                                railColumn
+                                captionZone(trailingClearance: 16, hidden: false, bandHeight: realBottomBand)
+                            } else {
+                                captionZone(trailingClearance: 16, hidden: false, bandHeight: realBottomBand)
+                                railColumn
+                            }
                         }
                     }
                 }

@@ -100,7 +100,7 @@ struct SettingsView: View {
                 leftHandedControls: leftHandedControls
             )
         }
-        return .none
+        return .regularPhone(leftHandedControls: leftHandedControls)
     }
 
     var body: some View {

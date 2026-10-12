@@ -63,6 +63,10 @@ struct PhotoPostView: View {
     /// top is on screen before it crushes. See
     /// `PhotoFeedView.revealAbove(by:duration:)`.
     let onRevealRequested: (CGFloat, TimeInterval) -> Void
+    /// Mirrored-layout round: the host's own `DuoLayout.isMirrored` —
+    /// see `actionsRow`'s own comment. Default `false`, pixel-identical
+    /// to before this round.
+    var isMirrored: Bool = false
 
     /// Free properties plus one resource fetch, loaded once at mount.
     /// `nil` only for the brief span before the first `.task(id:)`
@@ -1449,13 +1453,31 @@ struct PhotoPostView: View {
         // of usable width. `.fixedSize` on each label prevents
         // wrapping. A label that is too long crowds the row instead
         // of wrapping to a second line.
+        //
+        // Mirrored-layout round (owner call, relayed: "mirror it too,
+        // consistency for left-handed users"): the group reads in the
+        // other direction and sits flush against the trailing edge
+        // instead of the leading one. The old `Spacer(minLength: 0)`
+        // was already a no-op — this row never expanded to fill its
+        // own width on its own (`postBody`'s own `VStack(alignment:
+        // .leading)` only ever gave it its tight content width) — so
+        // it is dropped here rather than conditionally repositioned;
+        // the `.frame(maxWidth: .infinity, alignment:)` below is what
+        // actually moves the group now.
         HStack(spacing: 14) {
-            keepButton
-            albumButton
-            shareButton
-            trashButton
-            Spacer(minLength: 0)
+            if isMirrored {
+                trashButton
+                shareButton
+                albumButton
+                keepButton
+            } else {
+                keepButton
+                albumButton
+                shareButton
+                trashButton
+            }
         }
+        .frame(maxWidth: .infinity, alignment: isMirrored ? .trailing : .leading)
         .frame(height: 44)
         .padding(.horizontal, 16)
     }
