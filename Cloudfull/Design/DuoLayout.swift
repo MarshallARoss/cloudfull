@@ -472,13 +472,41 @@ struct DuoLayout {
         // own fitted width already equals `avail.width` (bound by
         // WIDTH there, not height, with nothing left over to shift),
         // so this is a no-op for it — "a 9:16 video already spans
-        // 0…535, so it doesn't move" — and a WIDE video reads the
-        // same `fitted.width == avail.width` either way, so it never
-        // reaches this branch at all. Pose 5 only: every other pose's
-        // own stage (regular iPhone, closed, laptop, open-wide, book)
-        // is untouched.
-        if pose == .openTall, fitted.width < avail.width {
-            return CGRect(x: avail.maxX - fitted.width, y: fitted.minY, width: fitted.width, height: fitted.height)
+        // 0…535, so it doesn't move."
+        //
+        // Owner re-adapt (pose 5, follow-up): a WIDTH-bound (wide)
+        // video — "touch the left bezel and the right side should be
+        // closer to the rail" — gets its OWN, wider box instead:
+        // `avail.maxX` (535 today) is the rail COLUMN's own
+        // STRUCTURAL edge, the full status-block width, not where the
+        // rail's own real pixels start — the same distinction
+        // `railVisualEdge`/`chromeColumnRect` already draw for the
+        // chrome column. Re-FITting into `[0, railVisualEdge.x −
+        // minChromeRailClearance]` instead of `avail` lands the
+        // video's own right edge at the rail's real glyph/label edge
+        // minus the same 8pt floor the chrome column already respects
+        // — never touching the rail's own icons or labels, by the
+        // same measured boundary, not a second guess at it. `max`
+        // against `avail.maxX` is a floor: this box is never NARROWER
+        // than the old one, only ever wider.
+        //
+        // A height-bound (narrow) video deliberately does NOT also
+        // read this tighter edge: it spans this stage's own FULL
+        // height, including the very top row where the status
+        // block/ring actually sits (`avail.maxX` already excludes
+        // that block's own full width for exactly this reason) — the
+        // wider, rail-only edge is a safe bound for the far SHORTER
+        // width-bound box (vertically centred well clear of that top
+        // row), not for one that reaches the top of the screen.
+        if pose == .openTall {
+            if fitted.width < avail.width {
+                return CGRect(x: avail.maxX - fitted.width, y: fitted.minY, width: fitted.width, height: fitted.height)
+            }
+            if let visual = railVisualEdge(containerSize: containerSize, safeAreaTop: safeAreaTop) {
+                let rightEdge = max(avail.maxX, visual.x - Self.minChromeRailClearance)
+                let widerBox = CGRect(x: 0, y: avail.minY, width: rightEdge, height: avail.height)
+                return fitRect(in: widerBox, aspectRatio: aspectRatio)
+            }
         }
         return fitted
     }
