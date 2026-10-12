@@ -287,27 +287,25 @@ struct SettingsView: View {
     // preference that moves the rail, the chin, and the stage's own
     // alignment to the LEADING edge wherever `DuoLayout.isMirrored`
     // reads it — see that property's own comment for the full rule.
-    // Shown on every iPhone, default OFF; the Duo gets its own footer
-    // explaining the one case this toggle does not control (a real
-    // system bar's own side always wins).
+    // Shown on every regular iPhone, default OFF.
+    //
+    // Owner 2026-10-12: hide the left handed control toggle on the
+    // duo instead of saying it does nothing. The same foldable signal
+    // the mirror rule itself uses (current pose, or the `seenFoldable`
+    // latch for a frame that has not classified yet) now hides the
+    // whole row — and its "Layout" header — on the Duo, instead of
+    // showing the toggle beside a footer explaining it has no effect.
     private func layoutSection(duoLayout: DuoLayout) -> some View {
-        Section {
-            Toggle("Left-handed controls", isOn: $leftHandedControls)
-                .accessibilityIdentifier("settings_left_handed_controls")
-                .onChange(of: leftHandedControls) { _, _ in Usage.shared.settingChanged("leftHandedControls") }
-        } header: {
-            Text("Layout")
-        } footer: {
-            // Review fix (owner decision: "the Duo follows the system
-            // bar; the Left-handed controls setting is for regular
-            // iPhones only"): the old footer said this setting applies
-            // with no bar showing — no longer true. `DuoLayout
-            // .isMirrored`'s own comment has the full rule: on the
-            // Duo, this toggle now has no effect at all.
-            if duoLayout.pose != .regularPhone {
-                Text("On an iPhone Duo, the controls always follow the system bar's side. This setting has no effect here.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+        let isDuo = duoLayout.pose != .regularPhone || DuoLayout.seenFoldable
+        return Group {
+            if !isDuo {
+                Section {
+                    Toggle("Left-handed controls", isOn: $leftHandedControls)
+                        .accessibilityIdentifier("settings_left_handed_controls")
+                        .onChange(of: leftHandedControls) { _, _ in Usage.shared.settingChanged("leftHandedControls") }
+                } header: {
+                    Text("Layout")
+                }
             }
         }
     }
