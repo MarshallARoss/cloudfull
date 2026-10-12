@@ -90,6 +90,25 @@ struct FeedView: View {
     /// is itself `@available`-marked, mounted only inside an
     /// `if #available` branch in `body`, which writes into this plain,
     /// always-available property instead.
+    ///
+    /// Review follow-up (SHOULD-FIX): because of the limitation above,
+    /// this value still starts `nil` for `body`'s own first pass on a
+    /// closed Duo — `ToolbarVerticalEdgeReader`'s `onChange(of:
+    /// initial: true)` (`DuoLayout.swift`) only updates this property
+    /// one render cycle later, not within that same first `body` call.
+    /// A true zero-lag fix needs the content that reads `duoLayout`
+    /// (effectively this whole view) to live INSIDE a child view that
+    /// itself declares `@Environment(\.toolbarVerticalEdge)` — the
+    /// only place SwiftUI actually injects the live value — since a
+    /// value a child reads can never flow back into a `let` the parent
+    /// already computed earlier in that same `body` call, state copy
+    /// or not. That is a real restructuring of this file's `body`, not
+    /// a local change, with no simulator available this pass to verify
+    /// it keeps a regular iPhone pixel-identical, so it is deferred
+    /// rather than risked here. `DuoLayout.seenFoldable` (review fix,
+    /// BLOCKER finding 1) already closes the one case this lag could
+    /// actually mis-mirror — the closed Duo's first-ever frame with
+    /// `leftHandedControls` on — for every launch after the first.
     @State private var toolbarVerticalEdge: HorizontalEdge?
     /// Mirrored-layout round: the owner's own "Left-handed controls"
     /// setting (`SettingsView`'s own toggle) — fed to `DuoLayout.current`
@@ -1568,7 +1587,18 @@ struct FeedView: View {
         // the clamp when `occlusion.minX > leading` keeps that
         // unrelated, near-leading-edge occlusion from ever touching
         // this row's own trailing edge.
-        let occlusionClamp = duoLayout.occlusion.map { $0.minX > leading ? $0.minX - 8 : .infinity } ?? .infinity
+        //
+        // NIT: a stale cross-display occlusion reading — same failure
+        // mode `DuoLayout.current`'s own `windowBounds.contains(frame)`
+        // filter already guards `occlusionFrame`/`divisionFrame`
+        // against, but this call site reads `duoLayout.occlusion`
+        // directly (the comment above already explains why), so it
+        // needs its own containment check. `containerSize` here is
+        // `fullWindow` (this function's own caller passes it), the
+        // same true window-space rect `occlusion` is itself already
+        // reported in, with the same 1pt rounding tolerance.
+        let windowOcclusion = duoLayout.occlusion.flatMap { CGRect(origin: .zero, size: containerSize).insetBy(dx: -1, dy: -1).contains($0) ? $0 : nil }
+        let occlusionClamp = windowOcclusion.map { $0.minX > leading ? $0.minX - 8 : .infinity } ?? .infinity
         let trailing = min(stageRect.maxX - 16, occlusionClamp)
         let width = max(0, trailing - leading)
         let rowHeight: CGFloat = 40
