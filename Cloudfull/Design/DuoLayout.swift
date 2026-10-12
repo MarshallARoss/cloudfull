@@ -464,10 +464,28 @@ struct DuoLayout {
             // mounts above the fold in this pose, so there is nothing
             // under that status area for a tap to miss. `bottom` is
             // unchanged — only the top edge moved.
+            //
+            // Owner re-adapt (live check, laptop, 16:9): `fitRect`
+            // itself still CENTRES a width-bound video vertically in
+            // the box, leaving an equal gap above and below —
+            // confirmed live at `stage 0,32,669,376`, a 32pt gap on
+            // each side. The owner's own ask was the top edge
+            // specifically, not just "somewhere near it": pin a
+            // width-bound result's own top back to `top` (`0`), same
+            // as a height-bound (tall) video already reads, and let
+            // the whole leftover gap fall BELOW the video, between it
+            // and the fold, instead of splitting it. `fitted.height <
+            // box.height` (with a small tolerance) is exactly
+            // `fitRect`'s own width-bound case — a height-bound video
+            // already has `fitted.minY == top` by construction (FIT
+            // fills the box's own full height then), so this is a
+            // no-op for it, never double-anchoring the same edge.
             let top: CGFloat = 0
             let bottom = max(top, division.minY - 14)
             let box = CGRect(x: 0, y: top, width: containerSize.width, height: bottom - top)
-            return fitRect(in: box, aspectRatio: aspectRatio)
+            let fitted = fitRect(in: box, aspectRatio: aspectRatio)
+            guard fitted.height < box.height - 0.5 else { return fitted }
+            return CGRect(x: fitted.minX, y: top, width: fitted.width, height: fitted.height)
         }
         let avail = availableRect(containerSize: containerSize, safeAreaTop: safeAreaTop)
         let fitted = fitRect(in: avail, aspectRatio: aspectRatio)
