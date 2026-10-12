@@ -363,8 +363,20 @@ struct PlayerPageView: View {
     /// already uses at the 9:16 default — so this needs no new branch
     /// there, only this property passing the video's own real shape
     /// through on pose 5 too, same as pose 3 already does.
+    ///
+    /// Owner re-adapt (pose pass): `.laptop` joins them — "widescreens
+    /// don't take up the whole top half. they should." `DuoLayout
+    /// .stageRect`'s own `.laptop` branch already FITs whatever
+    /// `aspectRatio` it is given inside the real upright-half box
+    /// (`[0, W] × [safeAreaTop + 10, division.minY − 14]`, that
+    /// function's own comment); it only ever received the 9:16
+    /// default before this, so a 16:9 video FIT into a 9:16-shaped box
+    /// bound on HEIGHT, landing well short of the box's own full
+    /// width — the owner's own "small box, ~190pt wide" report. A
+    /// TALL video still reads `videoIsLandscape == false`, so it is
+    /// unaffected either way — "tall videos stay as they are."
     private var useVideoAspect: Bool {
-        videoIsLandscape && (duoLayout.pose == .openWide || duoLayout.pose == .book || duoLayout.pose == .openTall)
+        videoIsLandscape && (duoLayout.pose == .openWide || duoLayout.pose == .book || duoLayout.pose == .openTall || duoLayout.pose == .laptop)
     }
 
     /// True at pose 3 (any video shape) and pose 4W (book with a

@@ -437,14 +437,24 @@ struct DuoLayout {
         if pose == .laptop, let division {
             // Build 8b: "FIT 9:16 in `[0, W] × [safeAreaTop + 10,
             // division.minY − 14]`, centred x" (the per-pose table's own
-            // words for pose 6). `useVideoAspect` (`PlayerPageView`)
-            // never passes a non-default `aspectRatio` for this pose —
-            // unlike `.openWide`/`.book`, the per-pose table gives
-            // pose 6 no wide-video sub-case of its own, "media on top"
-            // either way — so this always FITs the default 9:16 box,
-            // same as `fitRect`'s height-first binding gives everywhere
-            // else on a window this narrow relative to the box above
-            // the fold.
+            // words for pose 6).
+            //
+            // Owner re-adapt (pose pass): "widescreens don't take up
+            // the whole top half. they should." `useVideoAspect`
+            // (`PlayerPageView`) now passes the video's own real
+            // aspect for a landscape video here too, the same way it
+            // already does for `.openWide`/`.book`/`.openTall` — this
+            // box (`[0, W] × [safeAreaTop + 10, division.minY − 14]`)
+            // is unchanged, still the full upright half, small-gap
+            // inset; only the `aspectRatio` `fitRect` below now FITs
+            // correctly reflects the video's own real shape, so a
+            // 16:9 video binds on WIDTH (runs edge to edge) instead of
+            // height (pillarboxed to a ~190pt-wide sliver, the owner's
+            // own report, from FITting a wide video's real pixels
+            // against the WRONG, default 9:16 box). A tall video still
+            // reads the 9:16 default (`useVideoAspect` is `false` for
+            // it), so it is unaffected — "tall videos stay as they
+            // are."
             let top = safeAreaTop + 10
             let bottom = max(top, division.minY - 14)
             let box = CGRect(x: 0, y: top, width: containerSize.width, height: bottom - top)
