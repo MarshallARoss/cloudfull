@@ -1345,6 +1345,17 @@ struct DuoLayout {
         guard let width = normalColumnWidth(containerSize: containerSize, safeAreaTop: safeAreaTop) else { return nil }
         let columnRect = CGRect(x: containerSize.width - width, y: 0, width: width, height: containerSize.height)
         guard let occlusion, occlusion.midX >= columnRect.minX - 8, occlusion.midX <= columnRect.maxX + 8 else {
+            // Split View, Cloudfull on the LEFT half (real leading bar, live
+            // sim 2026-10-11): the app's own window has no occlusion at all
+            // (the camera sits in the OTHER app's half), so the old
+            // `columnRect.midX` fallback put the rail at 42pt from the
+            // leading edge — 6pt off the 47.7pt every real ring reading
+            // measures from the bar's outer edge (1V 47.8, pose 3/4 47.7,
+            // pose 5 47.7) and off the split wireframe's own `x0 + 48`. The
+            // reflected answer is now W − (W − 47.7) = 47.7.
+            if barEdge != nil, barWidth > 0 {
+                return containerSize.width - Self.openTallRingInsetFromTrailingEdge
+            }
             return columnRect.midX
         }
         if occlusion.width >= Self.wideOcclusionThreshold {
