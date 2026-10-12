@@ -1619,16 +1619,28 @@ struct FeedView: View {
                 // LEADING edge, not trailing, once mirrored — the box
                 // spans `[nearX, containerWidth]` instead of `[0,
                 // nearX]`, content leading-aligned, growing rightward.
-                // Order within the `HStack` is unchanged either way —
-                // "inner side of the rail," not its own mirror — since
-                // only ITS POSITION, not its own internal reading
-                // order, was ever asked to flip.
+                //
+                // Owner correction (relayed, pose pass): the ORDER
+                // inside the `HStack` flips too — "Bin outermost, same
+                // as the mirrored top row." Unmirrored reads Mute,
+                // Filter, Bin left to right (Bin innermost, next to
+                // the group's own trailing edge); mirrored reads Bin,
+                // Filter, Mute (Bin now innermost on the LEADING side
+                // instead — still the edge closest to the rail, just
+                // the other one).
                 let width = duoLayout.isMirrored ? containerSize.width - nearX : nearX
                 HStack(spacing: 12) {
-                    muteButton
-                    FilterMenuView(store: optionsStore, hidesChrome: hidesGlobalChrome)
-                        .duoGuideMark("top.filter", color: .teal)
-                    binButton()
+                    if duoLayout.isMirrored {
+                        binButton()
+                        FilterMenuView(store: optionsStore, hidesChrome: hidesGlobalChrome)
+                            .duoGuideMark("top.filter", color: .teal)
+                        muteButton
+                    } else {
+                        muteButton
+                        FilterMenuView(store: optionsStore, hidesChrome: hidesGlobalChrome)
+                            .duoGuideMark("top.filter", color: .teal)
+                        binButton()
+                    }
                     // Owner re-adapt: this used to ALSO repeat the
                     // count/size trailing of Bin, inside the deck's
                     // own margin — the same doubled-badge bug
