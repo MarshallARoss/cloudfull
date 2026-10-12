@@ -138,18 +138,26 @@ struct DuoLayout {
     /// configuration to switch into); the SYSTEM's own
     /// `toolbarVerticalEdge == .leading` (never overridden by the
     /// setting below — the bar's own real side always wins when there
-    /// IS one); and, only with no bar at all AND no `hinge` either
-    /// (`toolbarVerticalEdge == nil && hinge == nil` — a regular
-    /// iPhone; NOT a bar-off Duo pose reached by unfolding, like 5 or
-    /// 6, since `hinge` there is non-nil), the owner's manual
-    /// `leftHandedControls` setting (`SettingsView`'s own "Left-handed
-    /// controls" toggle, read live the same way every other `current(...)`
-    /// parameter already is — this struct itself stays a pure value
-    /// with no `UserDefaults`/`AppStorage` read of its own). Owner
-    /// decision: "the Duo follows the system bar; the Left-handed
-    /// controls setting is for regular iPhones only" — see
-    /// `current(...)`'s own comment on this exact line for the full
-    /// reasoning and the unfold-from-pose-3 bug it fixes.
+    /// IS one); and, only with no bar at all AND this device is not a
+    /// foldable at all (`toolbarVerticalEdge == nil &&
+    /// !isFoldableDevice(proxy:)` — a regular iPhone; NOT a bar-off
+    /// Duo pose reached by unfolding, like 5 or 6, where
+    /// `isFoldableDevice(proxy:)` still reads `true`), the owner's
+    /// manual `leftHandedControls` setting (`SettingsView`'s own
+    /// "Left-handed controls" toggle, read live the same way every
+    /// other `current(...)` parameter already is — this struct itself
+    /// stays a pure value with no `UserDefaults`/`AppStorage` read of
+    /// its own). Owner decision: "the Duo follows the system bar; the
+    /// Left-handed controls setting is for regular iPhones only" —
+    /// see `current(...)`'s own comment on this exact line, and
+    /// `isFoldableDevice(proxy:)`'s own comment, for the full
+    /// reasoning, the unfold-from-pose-3 bug it fixes, and why this
+    /// reads a device signal instead of `hinge` (review fix: `hinge`
+    /// is `nil` on every `PhotoFeedView`/`SettingsView` frame — no
+    /// `HingeReader` mounted there — and on a real Duo's own first
+    /// frame or two, before `HingeReader`'s first delivery, which used
+    /// to mirror both those screens, and show one mirrored frame even
+    /// in `FeedView`, whenever the setting was on).
     ///
     /// Every function below that hardcodes a `.trailing`-only formula —
     /// `railColumn`'s own open (pose 5) branch, `ringCenteredColumnX`'s
@@ -296,29 +304,36 @@ struct DuoLayout {
         // setting is for regular iPhones only." The bar's own real
         // side still always wins when there IS one
         // (`toolbarVerticalEdge == .leading`) — unchanged. The manual
-        // `leftHandedControls` setting now also requires `hinge` to be
-        // `nil` — `hinge` (this function's own parameter) reads
-        // non-nil only on a foldable device (`DuoHingeStatus`'s own
-        // comment), so a bar-off Duo pose reached by unfolding (5,
-        // open-tall; 6, laptop) no longer mirrors from the setting.
-        // Before this fix, unfolding from pose 3 (bar trailing,
-        // right-handed) to pose 5 (no bar) flipped the whole layout to
-        // the owner's own `leftHandedControls` reading, even though
-        // nothing about the setting changed — only the bar going away.
-        // A regular iPhone's own `hinge` is always `nil` (no hinge to
-        // read), so this is still the one case the setting actually
-        // controls. `hinge` can itself read `nil` for the very first
-        // frame on a real Duo, before `HingeReader`'s first
-        // `onHingeChange` delivery — a transient one-frame gap, not a
-        // device check, and not worth guarding here: the next frame's
-        // real hinge reading corrects it on its own.
+        // `leftHandedControls` setting now also requires this frame's
+        // own device NOT to be a foldable at all —
+        // `isFoldableDevice(proxy:)` below, not `hinge == nil` (review
+        // fix, BLOCKER, findings 1/2): `hinge` reads `nil` on three
+        // different occasions, only one of which is "a regular
+        // iPhone, apply the setting." `PhotoFeedView` and
+        // `SettingsView` mount no `HingeReader` at all (see each
+        // view's own `resolvedDuoLayout` comment) and always pass
+        // `hinge: nil`, so the old `hinge == nil` test read `true` for
+        // them on a Duo in pose 5/6 too, mirroring both screens
+        // whenever the setting was on even though the Duo's own bar
+        // had simply gone away. And even `FeedView`, which does mount
+        // `HingeReader`, can show one mirrored first frame: `hinge`
+        // there is `nil` until `HingeReader`'s first `onHingeChange`
+        // delivery, which has no `initial:` and so may land after
+        // this view's first frame (`HingeReader`'s own comment).
+        // `isFoldableDevice(proxy:)` fixes both: it reads a
+        // synchronous signal straight off THIS frame's own `proxy`,
+        // the same one every host already hands `current(...)`, so
+        // every host gets the same answer with no event callback to
+        // wait on and no `HingeReader` of its own to mount. A regular
+        // iPhone is still the one case the setting actually controls,
+        // since it is never a foldable device at all.
         // `DuoForceMirror.isOn` (`-cloudfull-force-mirror`, DEBUG only)
         // still forces this `true` regardless of every other signal,
         // for testing every pose's own mirrored geometry on the Duo
         // sim without a real leading-bar configuration to switch into.
         let isMirrored = DuoForceMirror.isOn
             || toolbarVerticalEdge == .leading
-            || (toolbarVerticalEdge == nil && hinge == nil && leftHandedControls)
+            || (toolbarVerticalEdge == nil && !Self.isFoldableDevice(proxy: proxy) && leftHandedControls)
         // Round 2 (Opus diagnosis): `reservedRegions` reports each
         // frame relative to THIS view's own local origin — `proxy`'s
         // own (0, 0), which sits `insets.top`/`insets.leading` below
@@ -395,6 +410,21 @@ struct DuoLayout {
         // same `width` this function already computed above for
         // `barWidth` itself, so there is no second measurement to
         // drift out of sync with it.
+        //
+        // Review fix (finding 5): the flat `minFoldPageExtent` (120pt)
+        // test alone still let a non-50/50 Split View through as
+        // `.book`/`.laptop` — live sim, Cloudfull given ~620pt of a
+        // wider multitasking layout with the fold sitting close to
+        // one edge, left that side a ~150pt page: past 120pt, so the
+        // old test alone called it a real page, but still far too
+        // narrow a column to read as one. Each side's own extent must
+        // now ALSO clear 35% of THIS frame's own window width/height —
+        // a proportional floor a flat point count can never give,
+        // since "too narrow a page" scales with how wide Cloudfull's
+        // own window happens to be this frame, not a fixed number of
+        // points. A real fold (the physical hinge, or a genuinely
+        // 50/50-ish Split View) always leaves both sides well past
+        // 35%, so this never rejects a real book/laptop pose.
         let divisionFrame = rawDivisionFrame.flatMap { (frame: CGRect) -> CGRect? in
             guard windowBounds.contains(frame) else { return nil }
             if frame.height > frame.width {
@@ -402,13 +432,16 @@ struct DuoLayout {
                 let trailingBarWidth = toolbarVerticalEdge == .trailing ? width : 0
                 let leftExtent = frame.minX - leadingBarWidth
                 let rightExtent = windowSize.width - frame.maxX - trailingBarWidth
-                if leftExtent < Self.minFoldPageExtent
-                    || rightExtent < Self.minFoldPageExtent {
+                let minProportionalExtent = windowSize.width * 0.35
+                if leftExtent < Self.minFoldPageExtent || leftExtent < minProportionalExtent
+                    || rightExtent < Self.minFoldPageExtent || rightExtent < minProportionalExtent {
                     return nil
                 }
             } else {
-                if frame.minY < Self.minFoldPageExtent
-                    || windowSize.height - frame.maxY < Self.minFoldPageExtent {
+                let minProportionalExtent = windowSize.height * 0.35
+                if frame.minY < Self.minFoldPageExtent || frame.minY < minProportionalExtent
+                    || windowSize.height - frame.maxY < Self.minFoldPageExtent
+                    || windowSize.height - frame.maxY < minProportionalExtent {
                     return nil
                 }
             }
@@ -467,6 +500,51 @@ struct DuoLayout {
             isMirrored: isMirrored,
             isUpsideDown: isUpsideDown
         )
+    }
+
+    /// Review fix (BLOCKER, findings 1/2): "is this frame's own device a
+    /// foldable at all" — a synchronous, event-independent replacement
+    /// for the old `hinge == nil` test `isMirrored` used to gate the
+    /// `leftHandedControls` setting on. Callable on any frame, from any
+    /// host, the moment that host has a `GeometryProxy` at all — unlike
+    /// `hinge`, which needs a mounted `HingeReader` AND that reader's
+    /// first `onHingeChange` delivery (see `HingeReader`'s own comment)
+    /// before it ever reads non-nil.
+    ///
+    /// SDK search (this fix's own build spec, confirmed against the
+    /// iOS 27.1 SDK headers): neither `UIKit.framework/Headers/
+    /// UIHinge.h` nor `UIHingeInteraction.h` exposes a synchronous
+    /// "does this device have a hinge" property — `UIHinge`'s own
+    /// `status`/`angle` only ever arrive through a mounted
+    /// `UIHingeInteraction`'s update handler, the same event-driven
+    /// shape `onHingeChange`/`HingeReader` already have, with the same
+    /// "may not have fired yet" gap. `UIDevice.h` and `UIWindowScene.h`
+    /// have no hinge/fold-related property at all, and neither
+    /// `UIKit.swiftmodule` nor `SwiftUICore.swiftmodule`'s own
+    /// `arm64e-apple-ios.swiftinterface` declares one either. The one
+    /// synchronous, always-callable API either framework exposes for
+    /// this device's own fold geometry is `reservedRegions(kind:
+    /// options:)` itself — `UIKit.framework/Headers/
+    /// UIViewReservedRegion.h`, mirrored on `GeometryProxy` in
+    /// `SwiftUICore.swiftinterface` (`public func reservedRegions(
+    /// kind:options:layoutDirectionBehavior:)`) — already this file's
+    /// own source for `occlusion`/`division` above, and for
+    /// `debugRawDivision` just above this function.
+    ///
+    /// No synchronous "is this device a foldable" boolean exists to
+    /// read instead, so this falls back exactly the way the build spec
+    /// asks: querying `.division` with `.includeInactive` reports a
+    /// division region on a foldable device in EVERY pose — including
+    /// fully closed and fully open flat, where a fold genuinely exists
+    /// but happens to be inactive this frame — and never on a regular
+    /// iPhone, which has no fold to report at all, active or not. Not
+    /// gated on `.isActive` the way `occlusionFrame`/`rawDivisionFrame`
+    /// above are: an active-only query reads empty on exactly the
+    /// poses (closed, fully open) this helper most needs to tell apart
+    /// from "no hinge at all."
+    @available(iOS 27.1, *)
+    static func isFoldableDevice(proxy: GeometryProxy) -> Bool {
+        !proxy.reservedRegions(kind: .division, options: .includeInactive).isEmpty
     }
 
     /// The pose classifier — "classify from the space we have" (Decision
@@ -2017,15 +2095,26 @@ struct DuoLayout {
     /// own width instead of discarding it — same `y`/size, only `x`
     /// moves — and only falls to the synthetic box with no occlusion
     /// to reflect in the first place.
+    /// Review fix: `occlusion` itself carries no containment check of
+    /// its own (unlike `current(...)`'s own `division`/`isUpsideDown`
+    /// reads, which both test against `windowBounds` already — see
+    /// that function's own comments), so a stale cross-display
+    /// occlusion frame could otherwise reach either branch below.
+    /// `windowBounds` here is the same `insetBy(dx: -1, dy: -1)` 1pt
+    /// rounding tolerance `current(...)` already uses for its own
+    /// containment checks, against this function's own `containerSize`
+    /// rather than `current(...)`'s `windowSize` — the two already
+    /// agree by the time either caller hands this function anything.
     func statusBlock(containerSize: CGSize, safeAreaTop: CGFloat) -> CGRect {
+        let windowBounds = CGRect(origin: .zero, size: containerSize).insetBy(dx: -1, dy: -1)
         if isMirrored {
-            if let occlusion {
+            if let occlusion, windowBounds.contains(occlusion) {
                 return CGRect(x: containerSize.width - occlusion.maxX, y: occlusion.minY,
                                width: occlusion.width, height: occlusion.height)
             }
             return CGRect(x: 0, y: 0, width: 0, height: safeAreaTop)
         }
-        if let occlusion, occlusion.minX > containerSize.width / 2 {
+        if let occlusion, windowBounds.contains(occlusion), occlusion.minX > containerSize.width / 2 {
             return occlusion
         }
         return CGRect(x: containerSize.width, y: 0, width: 0, height: safeAreaTop)

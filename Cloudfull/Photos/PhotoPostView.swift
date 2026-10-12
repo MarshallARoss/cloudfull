@@ -1457,32 +1457,41 @@ struct PhotoPostView: View {
         // Mirrored-layout round (owner call, relayed: "mirror it too,
         // consistency for left-handed users"): the group reads in the
         // other direction and sits flush against the trailing edge
-        // instead of the leading one. `.frame(maxWidth: .infinity,
-        // alignment:)` below is what moves the group to whichever
-        // edge applies.
+        // instead of the leading one. The mirrored branch's own
+        // `.frame(maxWidth: .infinity, alignment: .trailing)` below is
+        // what moves it there — it has no internal `Spacer` of its own
+        // to do that job the way the unmirrored branch's does.
         //
         // Review fix (owner call, relayed): the UNMIRRORED branch must
-        // stay byte-for-byte the pre-mirrored-round layout — restored
-        // the original trailing `Spacer(minLength: 0)` (and the 14pt
-        // gap `HStack(spacing: 14)` already gives it) exactly as
-        // `git diff duo-before-night` shows it, rather than trusting
-        // the "already a no-op" reasoning this comment used to make
-        // for dropping it. The mirrored branch is unchanged.
-        HStack(spacing: 14) {
+        // stay byte-for-byte the pre-mirrored-round layout — both the
+        // original trailing `Spacer(minLength: 0)` (and the 14pt gap
+        // `HStack(spacing: 14)` already gives it) AND no added
+        // `.frame(maxWidth: .infinity, ...)` wrapping it at all, exactly
+        // as `git diff duo-before-night` shows it, rather than trusting
+        // the "already a no-op" reasoning an earlier version of this
+        // comment made for sharing that frame modifier across both
+        // branches. The two branches are kept as separate `Group`
+        // members below, each with its own modifiers, specifically so
+        // this one stays untouched; the mirrored branch is unchanged.
+        Group {
             if isMirrored {
-                trashButton
-                shareButton
-                albumButton
-                keepButton
+                HStack(spacing: 14) {
+                    trashButton
+                    shareButton
+                    albumButton
+                    keepButton
+                }
+                .frame(maxWidth: .infinity, alignment: .trailing)
             } else {
-                keepButton
-                albumButton
-                shareButton
-                trashButton
-                Spacer(minLength: 0)
+                HStack(spacing: 14) {
+                    keepButton
+                    albumButton
+                    shareButton
+                    trashButton
+                    Spacer(minLength: 0)
+                }
             }
         }
-        .frame(maxWidth: .infinity, alignment: isMirrored ? .trailing : .leading)
         .frame(height: 44)
         .padding(.horizontal, 16)
     }

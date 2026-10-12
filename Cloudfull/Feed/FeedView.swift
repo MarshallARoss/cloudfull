@@ -94,8 +94,13 @@ struct FeedView: View {
     /// Mirrored-layout round: the owner's own "Left-handed controls"
     /// setting (`SettingsView`'s own toggle) — fed to `DuoLayout.current`
     /// below, the same "the caller reads it live" rule every other
-    /// parameter there already follows. Only takes effect with no
-    /// system bar at all; see `DuoLayout.isMirrored`'s own comment.
+    /// parameter there already follows. Owner decision: "the Duo
+    /// always follows the system bar side; the Left-handed controls
+    /// setting applies only on regular iPhones." Review fix: this
+    /// setting now only takes effect with no system bar at all AND on
+    /// a device that is not a foldable at all — never on an iPhone
+    /// Duo, bar-on or bar-off, which always follows the bar/system
+    /// side instead; see `DuoLayout.isMirrored`'s own comment.
     @AppStorage("settings.leftHandedControls") private var leftHandedControls = false
     /// This frame's hinge reading, from `HingeReader` — `DuoLayout.swift`'s
     /// own mirror of `ToolbarVerticalEdgeReader`, mounted the same way,
@@ -1541,9 +1546,18 @@ struct FeedView: View {
         // never read it. Clamped to `occlusion.minX - 8`, whatever
         // width that region reports this frame, so Bin stays clear at
         // any pill width instead of only the un-grown one. `nil`
-        // occlusion (no status block, or a stale cross-display frame
-        // `statusBlock` already filters out) leaves the plain
+        // occlusion (no status block at all) leaves the plain
         // stage-edge trailing unchanged.
+        //
+        // Review fix: this reads `duoLayout.occlusion` directly, not
+        // `duoLayout.statusBlock(...)` — so `statusBlock`'s own new
+        // containment check against a stale cross-display occlusion
+        // frame (see that function's own comment) does not cover this
+        // call site. A stale frame here is a separate failure mode
+        // from the `nil` case just above — real, non-nil, but
+        // wrong — and still reaches `occlusionClamp` unfiltered; this
+        // comment used to claim `statusBlock` already covered it,
+        // which was never true for a direct read like this one.
         //
         // Review fix (1H): the clamp above only ever makes sense when
         // the occlusion genuinely sits PAST `leading` — a real Live
@@ -3844,14 +3858,40 @@ private struct FeedPageContent: View {
     @ViewBuilder
     private func duoBookCaption(containerSize: CGSize, safeAreaTop: CGFloat) -> some View {
         if let rightPage = duoLayout.rightPage(containerSize: containerSize, safeAreaTop: safeAreaTop) {
-            let leading = rightPage.minX + 20
-            let width = max(0, rightPage.maxX - leading)
+            // Review fix (finding 4): `rightPage` itself already flips
+            // which physical side it occupies when mirrored (grid on
+            // the LEFT instead of the right — see that function's own
+            // comment), so `rightPage.minX`/`.maxX` swap which edge is
+            // "near the fold" and which is "the window's own outer
+            // edge" too. Unmirrored, `rightPage.minX` is the fold-
+            // adjacent edge (the wireframe's own `rightPage.minX + 20`)
+            // and `rightPage.maxX` is the outer edge, bare, no inset.
+            // Mirrored, that is reversed: `rightPage.maxX` is now the
+            // fold-adjacent edge (gets the 20pt inset instead) and
+            // `rightPage.minX` is the outer edge (stays bare) — using
+            // the unmirrored formula's bare `rightPage.minX + 20` here
+            // would have inset the wrong (outer) edge by 20pt and left
+            // the fold-adjacent edge at the bare `rightPage.maxX`,
+            // the exact opposite of "sits near the fold." A plain
+            // value closure, like `duoLaptopCaption`'s own
+            // `(leading, trailing)` — not an `if/else` written directly
+            // in this `@ViewBuilder` body, which the builder would try
+            // to read as a view branch (`duoLaptopCaption`'s own
+            // comment on this exact pattern).
+            let (leading, width): (CGFloat, CGFloat) = {
+                if duoLayout.isMirrored {
+                    let trailing = rightPage.maxX - 20
+                    return (rightPage.minX, max(0, trailing - rightPage.minX))
+                }
+                let leading = rightPage.minX + 20
+                return (leading, max(0, rightPage.maxX - leading))
+            }()
             let captionHeight: CGFloat = 40
             let top = duoRightGridBottomY.map { $0 + 16 } ?? max(0, containerSize.height - 30 - captionHeight)
             let rect = CGRect(x: leading, y: top, width: width, height: captionHeight)
             captionTexts()
                 .feedShadow()
-                .frame(width: rect.width, alignment: .leading)
+                .frame(width: rect.width, alignment: duoLayout.isMirrored ? .trailing : .leading)
                 .opacity(isScrubbing ? 0 : 1)
                 .animation(.easeOut(duration: 0.15), value: isScrubbing)
                 .allowsHitTesting(false)
@@ -3859,7 +3899,7 @@ private struct FeedPageContent: View {
                 .accessibilityHidden(hideForFullscreen)
                 .accessibilityIdentifier(isActive && !hideForFullscreen ? "feed_caption" : "")
                 .accessibilityLabel(meta.placeText.map { "\($0). " + meta.voiceOverLabel } ?? meta.voiceOverLabel)
-                .frame(width: rect.width, height: rect.height, alignment: .topLeading)
+                .frame(width: rect.width, height: rect.height, alignment: duoLayout.isMirrored ? .topTrailing : .topLeading)
                 .position(x: rect.midX, y: rect.midY)
                 .duoGuideMark("caption", color: .pink, active: isActive)
         }
