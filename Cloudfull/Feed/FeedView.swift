@@ -322,75 +322,63 @@ struct FeedView: View {
         pageAllowsLandscape || hingeStatus == .partial
     }
 
-    /// Pose 5's own chin position: beside the rail's own last item in
-    /// the open-tall column (bar off), `Rail.spacing` below it — the
-    /// same gap the rail's own five buttons use between each other —
-    /// x-centred on that same column. `nil` wherever the column does
-    /// not apply (every other pose, and every regular iPhone), which
-    /// leaves `ChinNavigation`'s own ordinary bottom-trailing anchor
-    /// as the only one in play there; see `ChinNavigation.railAlignedCenter`'s
-    /// own comment for why this is `nil` everywhere else, and why it
-    /// is read only while collapsed.
+    /// This control's own rail-aligned chin position, for the three
+    /// poses that place it beside (or on) the rail instead of at the
+    /// plain bottom-trailing spot every other host and pose still
+    /// uses: 1V (`.closed`), pose 5 (`.openTall`), and pose 6
+    /// (`.laptop`). `nil` on every other pose and every regular
+    /// iPhone, which leaves `ChinNavigation`'s own ordinary
+    /// bottom-trailing anchor as the only one in play there; see
+    /// `ChinNavigation.railAlignedCenter`'s own comment — read in
+    /// EVERY state now, not only while collapsed, so the chin EXPANDS
+    /// from this same point too.
     ///
-    /// The owner's own review of this pose asked for it directly:
-    /// "[the chin] should at least be bigger and align with the other
-    /// rail items" — same x-centre as the rail, below its last item,
-    /// with the rail's own spacing.
+    /// **Pose 6 (laptop)**, build 8b: `DuoLayout.laptopRailRow`'s own
+    /// `chinCenter` — "chin collapsed centre (600, v 236) via
+    /// `railAlignedCenter`" (`design/duo/duo_build_spec.md` §2.6).
     ///
-    /// Build 8b: pose 6 (laptop) reuses this same `ChinNavigation
-    /// .railAlignedCenter` mechanism for its own collapsed chin, at
-    /// `DuoLayout.laptopRailRow`'s own `chinCenter` — "chin collapsed
-    /// centre (600, v 236) via `railAlignedCenter`" (`design/duo/duo_build_spec.md`
-    /// §2.6). The mechanism itself ("position the collapsed switcher at
-    /// a point, else the ordinary bottom-trailing anchor") is already
-    /// pose-agnostic; only the point differs, so this branches first
-    /// rather than growing a second parameter on `ChinNavigation`.
-    ///
-    /// Owner re-adapt (pose pass): pose 1V (`.closed`) joins pose 5
-    /// here too — "the rail (and the chin, and anything else in the
-    /// column) [should align] to the ring's centre x." `x` now comes
-    /// from `DuoLayout.ringCenteredColumnX`, not the column rect's own
-    /// naive `midX` — see that function's own comment for why, and
-    /// `actionRailColumn`'s identical switch for the rail itself.
-    /// Deliberately still scoped to `.openTall`/`.closed`, not every
-    /// closed-bar pose: pose 3/4/4W's own chin is untouched this
-    /// round, unverified against this change.
-    ///
-    /// Owner correction (pose 1V, collapsed chin): "the COLLAPSED chin
-    /// must sit exactly where the Home Screen's own Search button sits
-    /// on the closed display — the bottom of the bar column," not
-    /// `extent.bottom + Rail.spacing` (under Delete), which the owner
-    /// measured as "about 70pt too high." The owner's own screenshot
-    /// measurements (closed, 466×678pt): Search button bottom ≈ 652pt,
-    /// 26pt above the window's own true bottom edge, against a 34pt
-    /// bottom safe-area inset there — 8pt inside that inset line, not
-    /// on it exactly. `closedCollapsedChinBottomOffset` is that 8pt,
-    /// applied to the REAL, live `safeAreaBottom` rather than a flat
-    /// 628/652: `containerSize.height - safeAreaBottom +
+    /// **1V (`.closed`) and pose 5 (`.openTall`)** now share one rule
+    /// — the owner's own correction: "the chin should be in the same
+    /// position and alignment and closed like 1V" (pose 5 used to stay
+    /// always open in its own column of three tabs; see the removed
+    /// `columnTabsAnchor`/`ChinNavigation.columnTabs` this round).
+    /// `x` is `DuoLayout.ringCenteredColumnX` — the ring's own real
+    /// centre, not the column rect's naive `midX`; see that function's
+    /// own comment for why, and `actionRailColumn`'s identical switch
+    /// for the rail itself. `y` is 1V's own rule, applied to both
+    /// poses: "the COLLAPSED chin must sit exactly where the Home
+    /// Screen's own Search button sits … the bottom of the bar
+    /// column," not `extent.bottom + Rail.spacing` (under Delete),
+    /// which the owner measured as "about 70pt too high" on 1V. The
+    /// owner's own screenshot measurements (closed, 466×678pt): Search
+    /// button bottom ≈ 652pt, 26pt above the window's own true bottom
+    /// edge, against a 34pt bottom safe-area inset there — 8pt inside
+    /// that inset line, not on it exactly. `closedCollapsedChinBottomOffset`
+    /// is that 8pt, applied to the REAL, live `safeAreaBottom` rather
+    /// than a flat 628/652: `containerSize.height - safeAreaBottom +
     /// closedCollapsedChinBottomOffset` reproduces the owner's own
     /// 652pt exactly at the measured 34pt inset, and stays correct at
-    /// any other inset this app ever sees. Pose 5 is UNCHANGED — its
-    /// own wireframe explicitly wants the chin "40pt clear of Delete,"
-    /// which `extent.bottom + Rail.spacing` already gives it; this is
-    /// the EXPANDED side's own anchor there regardless (pose 5's own
-    /// tabs stay open per §3c), so the collapsed case barely shows.
-    /// `ChinNavigation`'s own EXPANDED-capsule position is untouched
-    /// either way — `railAlignedCenter` is read only while collapsed.
+    /// any other inset this app ever sees — including pose 5's own
+    /// real bottom inset, which is `fullscreenSafeArea.bottom` the
+    /// same way 1V's is: both poses are handed the same live value
+    /// from `body`, never a flat constant, so this formula needs no
+    /// per-pose number to stay correct on either one.
+    ///
+    /// Deliberately still scoped to `.openTall`/`.closed`, not every
+    /// closed-bar pose: pose 3/4/4W's own chin is untouched this
+    /// round — it has no `railAlignedCenter` of its own at all, and
+    /// already expands in place through `ChinNavigation`'s own plain
+    /// bottom-trailing path (see that type's own comment), unverified
+    /// against this change beyond that.
     private func railAlignedChinCenter(duoLayout: DuoLayout, safeAreaTop: CGFloat, safeAreaBottom: CGFloat, containerSize: CGSize) -> CGPoint? {
         if duoLayout.pose == .laptop {
             return duoLayout.laptopRailRow(containerSize: containerSize, safeAreaBottom: safeAreaBottom)?.chinCenter
         }
         guard duoLayout.pose == .openTall || duoLayout.pose == .closed,
-              let centerX = duoLayout.ringCenteredColumnX(containerSize: containerSize, safeAreaTop: safeAreaTop),
-              let extent = duoLayout.railVerticalExtent(containerSize: containerSize, safeAreaTop: safeAreaTop)
+              let centerX = duoLayout.ringCenteredColumnX(containerSize: containerSize, safeAreaTop: safeAreaTop)
         else { return nil }
-        let centerY: CGFloat
-        if duoLayout.pose == .closed {
-            let bottom = containerSize.height - safeAreaBottom + Self.closedCollapsedChinBottomOffset
-            centerY = bottom - Rail.hit / 2
-        } else {
-            centerY = extent.bottom + Rail.spacing + Rail.hit / 2
-        }
+        let bottom = containerSize.height - safeAreaBottom + Self.closedCollapsedChinBottomOffset
+        let centerY = bottom - Rail.hit / 2
         return CGPoint(x: centerX, y: centerY)
     }
 
@@ -399,29 +387,17 @@ struct FeedView: View {
     /// bottom safe-area inset line, on the closed display.
     private static let closedCollapsedChinBottomOffset: CGFloat = 8
 
-    /// Step 7's own anchor (`design/duo/duo_build_spec.md` §3c): the
-    /// column tabs' own top edge ("Delete bottom + 40") and horizontal
-    /// centre (the rail column's own `midX`). Explicitly gated on
-    /// `.openTall` — pose 5 only, per §3c's own words ("pose 5, Videos
-    /// host only") — unlike `railAlignedChinCenter` just above, whose
-    /// own `!isClosedBar` gate is pose-generic; `ChinNavigation.body`
-    /// still checks `columnTabsTop`/`columnX` first, so the two can
-    /// never disagree even though both are computed.
-    private func columnTabsAnchor(duoLayout: DuoLayout, safeAreaTop: CGFloat, containerSize: CGSize) -> (top: CGFloat, x: CGFloat)? {
-        guard duoLayout.pose == .openTall,
-              let columnRect = duoLayout.railColumnRect(containerSize: containerSize, safeAreaTop: safeAreaTop)
-        else { return nil }
-        let top = duoLayout.railBottom(safeAreaTop: safeAreaTop, containerSize: containerSize) + 40
-        // Owner re-adapt (Opus wireframe compare, pose 5): was
-        // `columnRect.midX` directly — the same construction this
-        // column's own rail centring trusted, and broke under, before
-        // `ringCenteredColumnX` started reading `occlusion` directly
-        // for the bar-off case too. The tabs sit directly under the
-        // rail in this column; the two must share one x source or a
-        // fixed clamp case could pull them apart from each other, not
-        // just from the ring.
-        let x = duoLayout.ringCenteredColumnX(containerSize: containerSize, safeAreaTop: safeAreaTop) ?? columnRect.midX
-        return (top, x)
+    /// Pose 6 (laptop) only: the fold's own `y` — `DuoLayout
+    /// .laptopBottomRect`'s own `minY` (`division.maxY`) — handed to
+    /// `ChinNavigation.railAlignedTopClamp` so the EXPANDED capsule's
+    /// own top edge can never rise above the fold, however little
+    /// clearance a short window leaves between it and
+    /// `railAlignedChinCenter`'s own `y`. `nil` on every other pose —
+    /// 1V and pose 5 have no fold to clamp against, and `ChinNavigation`
+    /// only ever reads this where `railAlignedCenter` is also non-nil.
+    private func railAlignedTopClamp(duoLayout: DuoLayout, containerSize: CGSize, safeAreaBottom: CGFloat) -> CGFloat? {
+        guard duoLayout.pose == .laptop else { return nil }
+        return duoLayout.laptopBottomRect(containerSize: containerSize, safeAreaBottom: safeAreaBottom)?.minY
     }
 
     /// `DuoLayout.current`, behind the `#available` check its own
@@ -505,10 +481,6 @@ struct FeedView: View {
             // `.animation(.default, value: duoLayout.pose)` below, not a
             // debounce, is what smooths a real transition's layout jump.
             let duoLayout = resolvedDuoLayout(rootProxy: rootProxy)
-            // Computed once here, not inline at the `ChinNavigation`
-            // call site, so its two fields (`.top`/`.x`) do not each
-            // force a second call to `columnTabsAnchor(duoLayout:safeAreaTop:containerSize:)`.
-            let chinColumnTabs = columnTabsAnchor(duoLayout: duoLayout, safeAreaTop: safeAreaTop, containerSize: windowSize)
             ZStack {
             // Zero-size; only ever updates `toolbarVerticalEdge` above.
             // See that property's own comment for why the read is
@@ -550,8 +522,7 @@ struct FeedView: View {
                                                                containerSize: rootProxy.size),
                            railBottom: duoLayout.railBottom(safeAreaTop: safeAreaTop, containerSize: rootProxy.size),
                            railAlignedCenter: railAlignedChinCenter(duoLayout: duoLayout, safeAreaTop: safeAreaTop, safeAreaBottom: fullscreenSafeArea.bottom, containerSize: windowSize),
-                           columnTabsTop: chinColumnTabs?.top,
-                           columnX: chinColumnTabs?.x)
+                           railAlignedTopClamp: railAlignedTopClamp(duoLayout: duoLayout, containerSize: windowSize, safeAreaBottom: fullscreenSafeArea.bottom))
                 .opacity(hidesGlobalChrome ? 0 : 1)
                 .allowsHitTesting(!hidesGlobalChrome)
                 .accessibilityHidden(hidesGlobalChrome)
