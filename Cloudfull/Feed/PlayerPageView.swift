@@ -626,10 +626,21 @@ struct PlayerPageView: View {
             // `stageRect` would otherwise still produce — see that
             // property's own comment for why a landscape window with a
             // 9:16 box was the bug this fixes.
+            //
+            // Owner re-adapt (pose 5, open-tall): reads the video's own
+            // real aspect there even for a PORTRAIT video —
+            // `useVideoAspect` alone never would, since it requires
+            // `videoIsLandscape`. A narrower-than-9:16 clip (e.g.
+            // 9:19.5) needs `stageRect` to actually SEE that narrower
+            // ratio for its own new right-align branch to have
+            // anything to act on; `videoAspectRatio` already defaults
+            // to 9:16 before a real asset loads, so this reads
+            // identically to the old default for that one frame, not
+            // a jump once the real value lands.
             let stageRect = duoLayout.stageRect(
                 containerSize: proxy.size,
                 safeAreaTop: safeAreaTop,
-                aspectRatio: useVideoAspect ? videoAspectRatio : 9.0 / 16.0
+                aspectRatio: (useVideoAspect || duoLayout.pose == .openTall) ? videoAspectRatio : 9.0 / 16.0
             )
             let stageWidth = stageRect.width
             let stageHeight = stageRect.height

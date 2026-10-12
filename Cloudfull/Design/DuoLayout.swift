@@ -461,7 +461,26 @@ struct DuoLayout {
             return fitRect(in: box, aspectRatio: aspectRatio)
         }
         let avail = availableRect(containerSize: containerSize, safeAreaTop: safeAreaTop)
-        return fitRect(in: avail, aspectRatio: aspectRatio)
+        let fitted = fitRect(in: avail, aspectRatio: aspectRatio)
+        // Owner re-adapt (pose 5, open-tall): a height-bound video —
+        // its own fitted width narrower than `avail`'s, "a 9:19.5
+        // phone video, or anything narrower than 9:16" — right-aligns
+        // flush against the rail column's own leading edge
+        // (`avail.maxX`, the same edge `availableRect`'s own trailing
+        // branch already excludes the column to) instead of centring,
+        // so the leftover gap lands on the left alone. A 9:16 video's
+        // own fitted width already equals `avail.width` (bound by
+        // WIDTH there, not height, with nothing left over to shift),
+        // so this is a no-op for it — "a 9:16 video already spans
+        // 0…535, so it doesn't move" — and a WIDE video reads the
+        // same `fitted.width == avail.width` either way, so it never
+        // reaches this branch at all. Pose 5 only: every other pose's
+        // own stage (regular iPhone, closed, laptop, open-wide, book)
+        // is untouched.
+        if pose == .openTall, fitted.width < avail.width {
+            return CGRect(x: avail.maxX - fitted.width, y: fitted.minY, width: fitted.width, height: fitted.height)
+        }
+        return fitted
     }
 
     /// The largest `aspectRatio` box that fits inside `box`, centred
