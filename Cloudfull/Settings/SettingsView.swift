@@ -169,7 +169,8 @@ struct SettingsView: View {
                 // point `FeedView`/`PhotoFeedView` use on the Duo otherwise.
                 ChinNavigation(bottomBand: 0,
                                railAlignedCenter: duoLayout.railAlignedChinCenter(safeAreaTop: safeAreaTop, safeAreaBottom: safeAreaBottom, containerSize: windowSize),
-                               railAlignedTopClamp: duoLayout.railAlignedTopClamp(containerSize: windowSize, safeAreaBottom: safeAreaBottom))
+                               railAlignedTopClamp: duoLayout.railAlignedTopClamp(containerSize: windowSize, safeAreaBottom: safeAreaBottom),
+                               safeAreaBottom: safeAreaBottom)
             }
             .onAppear {
                 Usage.shared.settingsOpened()

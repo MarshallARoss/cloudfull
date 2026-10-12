@@ -129,6 +129,18 @@ struct ChinNavigation: View {
     /// never read this at all.
     let railAlignedTopClamp: CGFloat?
 
+    /// The real home-indicator inset, read the same "pass the real
+    /// proxy value, never a constant" way every other Duo-aware number
+    /// in this app is — `resolvedBottomPadding` floors the EXPANDED
+    /// capsule's own bottom clearance at `max(safeAreaBottom, 8)`
+    /// (review follow-up), so a rail-aligned anchor sitting close to
+    /// the window's own bottom edge (1V/5's own Search-spot point) can
+    /// never grow the capsule out of that point and past the safe
+    /// area, or flush against a screen with no inset at all. `0` by
+    /// default: a regular iPhone's own plain bottom-trailing anchor
+    /// (`railAlignedCenter == nil`) never reads this at all.
+    let safeAreaBottom: CGFloat
+
     @State private var isExpanded = false
     @ObservedObject private var modeStore = AppModeStore.shared
     // Collapses the switcher when either pager starts to scroll.
@@ -174,12 +186,13 @@ struct ChinNavigation: View {
 
     init(
         bottomBand: CGFloat, railBottom: CGFloat = 0, railAlignedCenter: CGPoint? = nil,
-        railAlignedTopClamp: CGFloat? = nil
+        railAlignedTopClamp: CGFloat? = nil, safeAreaBottom: CGFloat = 0
     ) {
         self.bottomBand = bottomBand
         self.railBottom = railBottom
         self.railAlignedCenter = railAlignedCenter
         self.railAlignedTopClamp = railAlignedTopClamp
+        self.safeAreaBottom = safeAreaBottom
     }
 
     var body: some View {
@@ -331,10 +344,10 @@ struct ChinNavigation: View {
     // costs nothing visually.
     //
     // `collapsedHeight` is an instance property, not `static`, only
-    // because every `railAlignedCenter` pose (1V, 5, the laptop rail
-    // row) needs a different collapsed size — see that property's own
-    // comment. Every other host keeps the plain 36pt default, since
-    // `railAlignedCenter` is `nil` there.
+    // because every `railAlignedCenter` pose — 1V, 3, 4/4W, 5, and
+    // the laptop rail row alike — needs a different collapsed size —
+    // see that property's own comment. Every other host keeps the
+    // plain 36pt default, since `railAlignedCenter` is `nil` there.
     private var collapsedHeight: CGFloat { railAlignedCenter != nil ? Rail.hit : 36 }
     /// The invisible square the collapsed button answers to. Apple's
     /// Human Interface Guidelines set the minimum tap target at 44pt —
@@ -420,14 +433,27 @@ struct ChinNavigation: View {
     /// capsule grows taller/shorter around the same centre point
     /// instead of sliding to a different one.
     ///
-    /// Clamped while expanded, on pose 6 only (`railAlignedTopClamp`
-    /// non-nil), so the capsule's own TOP edge never rises above the
-    /// fold — see that property's own comment. `nil` on 1V and pose 5,
-    /// which have no fold to clamp against.
+    /// Clamped while expanded two ways, both floors on how far DOWN
+    /// the capsule's own bottom edge may sit — never a ceiling, so
+    /// they only ever push the capsule UP, back on screen:
     ///
-    /// Otherwise (`railAlignedCenter == nil` — every regular iPhone,
-    /// and `FeedView`'s own poses 3 and 4/4W, which still use the
-    /// plain bottom-trailing anchor, unaffected by this change):
+    /// 1. On pose 6 only (`railAlignedTopClamp` non-nil), so the
+    ///    capsule's own TOP edge never rises above the fold — see
+    ///    that property's own comment. `nil` on 1V, 5, and 3/4/4W,
+    ///    which have no fold to clamp against.
+    /// 2. Review follow-up, every rail-aligned pose alike: the
+    ///    capsule's own BOTTOM edge never sits closer than
+    ///    `max(safeAreaBottom, 8)` to the window's own bottom edge —
+    ///    1V/5's own Search-spot anchor sits close enough to that edge
+    ///    already that an EXPANDED capsule grown straight out of it
+    ///    could otherwise cross into, or flush against, the home
+    ///    indicator's own safe area.
+    ///
+    /// Otherwise (`railAlignedCenter == nil` — a regular iPhone's own
+    /// plain bottom-trailing anchor; every rail-aligned Duo pose this
+    /// app knows today — 1V, 3, 4/4W, 5, 6 alike — now reads
+    /// `DuoLayout.railAlignedChinCenter` instead, through whichever of
+    /// `FeedView`/`PhotoFeedView`/`SettingsView` mounts this control):
     /// returns the plain, fixed anchor unconditionally, with no
     /// dependence on `containerHeight` at all — pixel-identical to
     /// what this control has always done. `railBottom > 0` still
@@ -441,9 +467,12 @@ struct ChinNavigation: View {
         if let railAlignedCenter {
             let halfHeight = (isExpanded ? Self.expandedHeight : collapsedTapTarget) / 2
             let anchored = containerHeight - railAlignedCenter.y - halfHeight
-            guard isExpanded, let railAlignedTopClamp else { return anchored }
+            guard isExpanded else { return anchored }
+            let minBottomInset = max(safeAreaBottom, 8)
+            let flooredForBottomInset = max(anchored, minBottomInset)
+            guard let railAlignedTopClamp else { return flooredForBottomInset }
             let maxBottomForClampedTop = containerHeight - Self.expandedHeight - railAlignedTopClamp
-            return min(anchored, maxBottomForClampedTop)
+            return min(flooredForBottomInset, maxBottomForClampedTop)
         }
         let fixedAnchor = StageGeometry.captionCenterFromBottom - currentHeight / 2
         guard railBottom > 0 else { return fixedAnchor }
