@@ -2406,9 +2406,9 @@ struct DuoLayout {
             // `toolbarVerticalEdge`). That used to let this row (and
             // Bin) run the full 0…678 span into the bar column — Bin at
             // 666, not the photo edge. Reading `debugSafeAreaInsets`
-            // FIRST — the same real-inset-first rule
-            // `photosChinCenter`'s own `columnIsTrailing` already
-            // uses — fixes it: a nonzero real inset on either side wins
+            // FIRST fixes it (the tab switcher no longer uses this
+            // rule — in 1H it always sits in the trailing column, owner
+            // 2026-10-12): a nonzero real inset on either side wins
             // outright and excludes that side's own real width; only
             // with BOTH real insets at zero (the Split View left-half
             // fallback-bar case, where the real bar lives in the
@@ -2771,38 +2771,25 @@ struct DuoLayout {
     /// rotation. Paired with `closedLandscapeCameraBottomGap` above.
     static let closedCameraSize: CGFloat = 37
 
-    /// Shared by `photosChinCenter`'s own 1H landscapeRight branch and
-    /// `photosChinIsMirrored` below — one formula, so the two can
-    /// never read a different side for the same frame (the risk this
-    /// file's own header already warns every new branch away from).
-    /// Real-insets-first, the same rule `photosTopRowRect`'s own
-    /// `.closed` case now reads `debugSafeAreaInsets` for too:
-    /// `toolbarVerticalEdge` (and so `isMirrored`/`barEdge`) misreports
-    /// `.leading` on fold-on-bottom even though its real column is
-    /// genuinely trailing — `debugSafeAreaInsets` is raw and does not
-    /// carry that misreport forward. Only with BOTH real insets at
-    /// zero (the Split View left-half fallback-bar case, where the
-    /// real bar lives in the companion app's own window, never this
-    /// one's) does this fall back to `!isMirrored`.
-    private var closedLandscapeColumnIsTrailing: Bool {
-        let realTrailingInset = debugSafeAreaInsets.trailing > 0
-        let realLeadingInset = debugSafeAreaInsets.leading > 0
-        return realTrailingInset ? true : (realLeadingInset ? false : !isMirrored)
-    }
-
     /// Photos tab only: which side `ChinNavigation`'s own tab switcher
     /// anchors from and grows toward — same as `isMirrored` everywhere
     /// except inside `photosChinCenter`'s own 1H closed-landscape
-    /// branch, where the switcher's own `x` already comes from
-    /// `closedLandscapeColumnIsTrailing`, not `isMirrored` directly
-    /// (that branch's own comment explains the `toolbarVerticalEdge`
-    /// misreport this sidesteps). Its MIRROR direction has to follow
-    /// that same real signal — `!closedLandscapeColumnIsTrailing` — or
-    /// fold-on-bottom's capsule would anchor and expand from the wrong
-    /// side even with Decision 2's own `x` fix landing it in the right
-    /// spot: fold-on-bottom's real column is trailing, same as
-    /// fold-on-top's, so the capsule must grow leftward from the
-    /// trailing edge on both (capsule 399.5…651.5), never mirrored.
+    /// branch.
+    ///
+    /// Owner rule (2026-10-12, live reading 13:42): in 1H (`pose ==
+    /// .closed && containerSize.width > containerSize.height`), the
+    /// tab switcher ALWAYS sits in the RIGHT (trailing) column and
+    /// always anchors/expands from that trailing side — never mirrored
+    /// — regardless of `toolbarVerticalEdge`, `isMirrored`, `barEdge`,
+    /// or the reported safe-area insets. On screen, the empty bar
+    /// column sits on the right in BOTH 1H directions (fold on top,
+    /// fold at the bottom); but on fold-at-the-bottom frames, those
+    /// signals (even the real safe-area insets, which Decision 2 below
+    /// used to trust) pointed this code to the LEFT instead, landing
+    /// the switcher bottom-left over the photo (live sim, Photos tab,
+    /// 678×466, 13:42). This supersedes Decision 2's own real-inset
+    /// side check — there is no side left to choose here, so this
+    /// returns `false` unconditionally for the 1H branch.
     /// `PhotoFeedView`/`SettingsView` are the two callers, both passing
     /// this instead of `isMirrored` straight through to their own
     /// `ChinNavigation(...)`.
@@ -2810,7 +2797,7 @@ struct DuoLayout {
         guard pose == .closed, containerSize.width > containerSize.height, containerSize.height <= 470 else {
             return isMirrored
         }
-        return !closedLandscapeColumnIsTrailing
+        return false
     }
 
     /// Photos tab only: the chin centre. Same as `railAlignedChinCenter`
@@ -2830,32 +2817,35 @@ struct DuoLayout {
         // size, not any wider-than-tall `.closed` window a future pose
         // might report. 470 leaves a few points of rounding tolerance.
         //
-        // Decision 2 (owner, 2026-10-12): "Upside down 1H with the fold
-        // on the bottom — the switcher is on the wrong side and the
-        // live, filter, and bin buttons are mirrored. It should look
-        // exactly like 1H with the fold on top." Live sim reading
-        // (closed, landscape, 678×466, Photos tab): the photos spanned
-        // x 0…594 and an EMPTY reserved column sat at 594…678 on the
-        // RIGHT — the very same real, trailing-side reservation normal
-        // (fold-on-top) 1H has — yet `isMirrored` read true there, a
-        // `toolbarVerticalEdge == .leading` misreport on this
-        // sub-pose, so the switcher landed on the WRONG (leading) side
-        // (Decision 1 already fixes the Live/Filter/Bin mirroring this
-        // same misreport caused). `isMirrored`/`barEdge` both derive
-        // from `toolbarVerticalEdge` and carry that misreport forward;
-        // `debugSafeAreaInsets` is this frame's own RAW
-        // `safeAreaInsets`, independent of `toolbarVerticalEdge`, and
-        // it reads correctly here (trailing > 0, leading == 0). So the
-        // switcher's side below now comes from THAT real reading first
-        // — `isMirrored` only decides the side when NEITHER real inset
-        // is nonzero (the Split View left-half fallback-bar case, where
-        // the real bar lives in the companion app's own window, not
-        // this one's, so neither inset is ever measurable here).
+        // Owner rule (2026-10-12, live reading 13:42, supersedes
+        // Decision 2 below): the switcher's own column is ALWAYS
+        // trailing in 1H — see `photosChinIsMirrored`'s own doc above.
+        // So `x` is `normalRingCenteredColumnX`'s own answer taken
+        // directly, with no leading/trailing choice left to make: that
+        // helper already computes against the TRAILING-anchored column
+        // by construction (its own doc comment) —
+        // `containerSize.width − 47.7`
+        // (`openTallRingInsetFromTrailingEdge`) by default, or a valid
+        // in-window occlusion's own `midX` when one sits inside that
+        // trailing column. The fold-on-top camera (`611…648`) reads
+        // 629.5 this way — the value already measured live, unchanged.
+        //
+        // Decision 2 (owner, 2026-10-12, historical): "Upside down 1H
+        // with the fold on the bottom — the switcher is on the wrong
+        // side and the live, filter, and bin buttons are mirrored. It
+        // should look exactly like 1H with the fold on top." Live sim
+        // reading (closed, landscape, 678×466, Photos tab): the photos
+        // spanned x 0…594 and an EMPTY reserved column sat at 594…678
+        // on the RIGHT — the very same real, trailing-side reservation
+        // normal (fold-on-top) 1H has — yet `isMirrored` read true
+        // there, a `toolbarVerticalEdge == .leading` misreport on this
+        // sub-pose (Decision 1 already fixes the Live/Filter/Bin
+        // mirroring this same misreport caused). That misreport is why
+        // the owner rule above now skips side-detection entirely rather
+        // than trusting any signal, real insets included.
         if pose == .closed, containerSize.width > containerSize.height,
            containerSize.height <= 470,
-           let normalX = normalRingCenteredColumnX(containerSize: containerSize, safeAreaTop: safeAreaTop) {
-            let columnIsTrailing = closedLandscapeColumnIsTrailing
-            let x = columnIsTrailing ? normalX : containerSize.width - normalX
+           let x = normalRingCenteredColumnX(containerSize: containerSize, safeAreaTop: safeAreaTop) {
             let usualY = containerSize.height - max(safeAreaBottom - Self.chinBottomInset, Self.chinBottomInset) - Rail.hit / 2
             let bounds = CGRect(origin: .zero, size: containerSize)
             let clippedOcclusion = occlusion.map { $0.intersection(bounds) }
@@ -2865,16 +2855,16 @@ struct DuoLayout {
             // (`occ-611,399,37,37`), never true for fold-on-bottom,
             // whose real camera sits top-LEADING instead
             // (`occ-29,29,37,37`), with the SAME real trailing-84
-            // inset either way — `columnIsTrailing` alone cannot tell
-            // the two sub-poses apart, only the occlusion's own
-            // position can. A clipped occlusion genuinely inside the
-            // window, sitting in the window's own TOP half, is
-            // positive proof THIS frame has no bottom-right camera to
-            // clear at all — skip the lift outright and keep the
-            // switcher at its normal bottom spot (y ≈ 420 here), the
-            // same way fold-on-top's own `x` above stays put on the
-            // trailing column once there is nothing to mirror it
-            // against.
+            // inset either way — only the occlusion's own position can
+            // tell the two sub-poses apart. A clipped occlusion
+            // genuinely inside the window, sitting in the window's own
+            // TOP half, is positive proof THIS frame has no bottom-right
+            // camera to clear at all — skip the lift outright and keep
+            // the switcher at its usual bottom spot (y ≈ 420, owner
+            // approved). Everything else — a clipped occlusion in the
+            // BOTTOM half, or no reliable occlusion reading at all —
+            // keeps today's lifted spot below (cy = 363, owner
+            // approved: "where it is now is perfect").
             let cameraKnownAtTop = clippedOcclusion.map { !$0.isEmpty && $0.midY <= containerSize.height / 2 } ?? false
             guard !cameraKnownAtTop else {
                 return CGPoint(x: x, y: usualY)
@@ -2896,17 +2886,12 @@ struct DuoLayout {
             // this reads its clipped position instead of falling back
             // to the fixed 399 on every such frame.
             //
-            // Decision 2: the camera-clearance side check below now
-            // follows `columnIsTrailing` too, the same reasoning as `x`
-            // above — on the bug's own misread frame the real column
-            // (and so the real camera) is on the trailing side
-            // (`columnIsTrailing` reads `true` there from the real
-            // inset), so this still clears the real camera instead of
-            // checking the wrong edge.
+            // Owner rule above: the switcher's own column is always
+            // trailing in 1H now, so the camera-clearance check below
+            // always reads the TRAILING edge — there is no leading-side
+            // camera left to check for.
             if let clipped = clippedOcclusion {
-                let onCameraSide = columnIsTrailing
-                    ? clipped.minX >= containerSize.width - barWidth - 8
-                    : clipped.maxX <= barWidth + 8
+                let onCameraSide = clipped.minX >= containerSize.width - barWidth - 8
                 if !clipped.isEmpty,
                    clipped.midY > containerSize.height / 2,
                    onCameraSide {
