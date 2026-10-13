@@ -77,6 +77,12 @@ def main():
     a = ap.parse_args()
     S = [r for r in fetch(a.env, a.month) if r["day"].startswith(a.month)]
     if not S: sys.exit(f"no UsageSession records for {a.month} in {a.env}")
+    # Every key with an `@` is a Duo pose twin of a plain key already in
+    # `counts` — split out so the existing totals and `startswith` scans
+    # below never see it. See `Usage.bump`'s own `poseTwin` doc comment.
+    for r in S:
+        r["poseCounts"] = {k: v for k, v in r["counts"].items() if "@" in k}
+        r["counts"] = {k: v for k, v in r["counts"].items() if "@" not in k}
 
     phones = {r["install"] for r in S}
     latest = {}   # The latest session per phone, for this month.
@@ -162,7 +168,7 @@ def main():
     if fe: print(f"  free space GB at end   avg {sum(fe)/len(fe):.1f}  (start minus end, summed: {sum(fs)-sum(fe):.1f} GB freed while in the app)" if len(fe) == len(fs) else f"  free space GB at end   avg {sum(fe)/len(fe):.1f}")
     for k in ("defaultTabSetting","openMutedSetting","liveDefaultSetting","dailyReminderSetting","dailyReminderHourSetting","albumSort","keepsAlbumSetting","appIconSetting",
               "sort.videos","filters.videos","types.videos","sort.photos","filters.photos","types.photos",
-              "photoPermissionAtStart","photoPermissionAfterSettings","daysSinceInstall",
+              "photoPermissionAtStart","photoPermissionAfterSettings","daysSinceInstall","runsOn","leftHandedSetting",
               "darkModeSetting","reduceMotion","lowPowerAtStart","textSize","language","country","timeZone","utcOffsetMinutes","startHour","startWeekday",
               "audioRouteAtStart","audioRouteAtEnd","networkAtStart","networkExpensive","lowDataMode","networkAtEnd"):
         c = F.get(k, {}); t = sum(c.values())
@@ -256,6 +262,115 @@ def main():
     print(f"  share sheet opened: videos {C.get('shareSheetOpened.videos',0)} photos {C.get('shareSheetOpened.photos',0)}   (finished on a target = action.<mode>.share above)")
     print(f"  network changes {C.get('networkChanges',0)}   audio route changes {C.get('audioRouteChanges',0)}")
     print()
+
+    print("Duo and devices")
+    def schema_ge(r, n):
+        try: return int(r.get("schema") or 0) >= n
+        except (TypeError, ValueError): return False
+    D = [r for r in S if schema_ge(r, 4)]   # only sessions whose record carries pose data
+    if not D:
+        print("  no schema 4+ sessions this month\n")
+    else:
+        DC = collections.Counter()
+        for r in D: DC.update(r["counts"])
+        PC = collections.Counter()
+        for r in D: PC.update(r["poseCounts"])
+        DF = collections.defaultdict(collections.Counter)
+        for r in D:
+            for k, v in r["facts"].items(): DF[k][v] += 1
+        POSES = ("1V", "1H", "tent", "3", "4", "5", "6", "splitL", "splitR")
+        # `phone` is a real pose (a regular iPhone's whole session), but
+        # it is never a twin suffix — `bump` never writes `<key>@phone`
+        # — so it stays out of `POSES` itself and out of `by_pose`'s own
+        # twin lookup below. `POSES_WITH_PHONE` adds it back only for
+        # the session-share/minutes lines, which read `secondsInPose.*`
+        # directly rather than a twin.
+        POSES_WITH_PHONE = ("phone",) + POSES
+        # The remainder after subtracting every known twin — the base
+        # key itself is never incremented a second time for the twin,
+        # so this is the only way to recover it. This is NOT the
+        # regular-iPhone share: on the Duo, any event that bumps before
+        # `poseReported` has ever fired once also gets no twin (there
+        # is no `poseNow` yet — see `Usage.bump`'s own doc comment), so
+        # this remainder mixes those Duo events in with real `phone`
+        # sessions. Labelled `untagged`, not `phone`.
+        def by_pose(key):
+            twins = {p: PC.get(f"{key}@{p}", 0) for p in POSES}
+            return {"untagged": DC.get(key, 0) - sum(twins.values()), **twins}
+        ro = DF.get("runsOn", {}); t = sum(ro.values())
+        if t: print("  runsOn: " + "  ".join(f"{k}={pct(n,t)}" for k, n in ro.most_common()))
+        foldableN = DF.get("foldable", {}).get("1", 0)
+        print(f"  Duo sessions (foldable=1): {foldableN}/{len(D)} ({pct(foldableN, len(D))})")
+        poseSessions = collections.Counter(); poseMinutes = collections.defaultdict(float)
+        for r in D:
+            for p in POSES_WITH_PHONE:
+                secs = r["counts"].get(f"secondsInPose.{p}", 0)
+                if secs: poseSessions[p] += 1; poseMinutes[p] += secs / 60
+        print("  pose share of sessions: " + "  ".join(f"{p}={pct(poseSessions.get(p,0), len(D))}" for p in POSES_WITH_PHONE))
+        print("  pose minutes: " + "  ".join(f"{p}={poseMinutes.get(p,0):.0f}" for p in POSES_WITH_PHONE))
+        transitions = collections.Counter({k[len("poseChange."):]: n for k, n in DC.items() if k.startswith("poseChange.")})
+        if transitions: print("  top transitions: " + "  ".join(f"{k}={n}" for k, n in transitions.most_common(12)))
+        nextBtn, prevBtn = DC.get("laptopPager.next", 0), DC.get("laptopPager.previous", 0)
+        swipes6 = PC.get("swipes.videos@6", 0)
+        moves6 = nextBtn + prevBtn + swipes6
+        afterByButton = sum(n for k, n in DC.items() if k.startswith("afterDeleteByButton."))
+        print(f"  pose 6 moves: next={nextBtn} previous={prevBtn} swipes={swipes6}   button share {pct(nextBtn+prevBtn, moves6)}   after-delete windows closed by a button: {afterByButton}")
+        dayTaps, weekTaps, scrolls = DC.get("duoGrid.tap.day", 0), DC.get("duoGrid.tap.week", 0), DC.get("duoGrid.scroll", 0)
+        postsSeen4 = PC.get("postsSeen.videos@4", 0)
+        print(f"  book grid: day taps={dayTaps} week taps={weekTaps} scrolls={scrolls}   taps per post seen (pose 4): " + (f"{(dayTaps+weekTaps)/postsSeen4:.2f}" if postsSeen4 else "–"))
+        # A session used Split View if it has split seconds or a change
+        # into a split pose.
+        def has_pose(r, p): return bool(r["counts"].get(f"secondsInPose.{p}")) or any(k.startswith("poseChange.") and k.endswith(f".{p}") for k in r["counts"])
+        leftSessions = sum(1 for r in D if has_pose(r, "splitL"))
+        rightSessions = sum(1 for r in D if has_pose(r, "splitR"))
+        splitSessions = sum(1 for r in D if has_pose(r, "splitL") or has_pose(r, "splitR"))
+        print(f"  Split View: sessions={splitSessions}   left={leftSessions} ({poseMinutes.get('splitL',0):.0f} min)   right={rightSessions} ({poseMinutes.get('splitR',0):.0f} min)")
+        msOpened = by_pose("modeSwitcherOpened")
+        print("  switcher opens by pose: " + "  ".join(f"{p}={n}" for p, n in msOpened.items() if n))
+        for tab in ("videos", "photos", "settings", "same"):
+            sp = by_pose(f"switcherPick.{tab}")
+            if sum(sp.values()): print(f"    pick {tab}: " + "  ".join(f"{p}={n}" for p, n in sp.items() if n))
+        fsTotal = DC.get("video.rotatedToFullscreen", 0)
+        # `video.rotatedToFullscreenIn.<pose>` is its own dedicated bump
+        # (not a `@`-suffixed twin), written for `phone` too — read it
+        # over `POSES_WITH_PHONE`, not `POSES`, or the phone's own share
+        # goes missing from the breakdown entirely.
+        fsByPose = {p: DC.get(f"video.rotatedToFullscreenIn.{p}", 0) for p in POSES_WITH_PHONE}
+        print(f"  fullscreen (sideways) total={fsTotal}   " + "  ".join(f"{p}={n}" for p, n in fsByPose.items() if n))
+        # Fold playback: whether a video kept playing across a fold/
+        # unfold, and, when it stopped, how long until it played again.
+        fp = {k[len("foldPlayback."):]: n for k, n in DC.items() if k.startswith("foldPlayback.")}
+        if fp:
+            kept = sum(n for k, n in fp.items() if k.endswith(".kept"))
+            stopped = sum(n for k, n in fp.items() if k.endswith(".stopped"))
+            print(f"  fold playback: kept={kept} stopped={stopped} ({pct(kept, kept+stopped)} kept)   " + "  ".join(f"{k}={n}" for k, n in sorted(fp.items(), key=lambda kv: -kv[1])[:12]))
+            rb = {k[len("foldResumeSeconds."):]: n for k, n in DC.items() if k.startswith("foldResumeSeconds.")}
+            # Buckets start at 2 s: `stopped` above is itself decided 1 s
+            # after the fold, so every bucket here is measured from the
+            # fold too, one past that 1 s mark — see `ANALYTICS_DOC.md`.
+            if rb: print("    resume time (of the ones that stopped): " + "  ".join(f"{b}={rb.get(b,0)}" for b in ("lt2", "lt5", "ge5", "never") if rb.get(b, 0)))
+        # Start pose: the shape each session began in, and session
+        # length by that start pose (from the existing `sessionSeconds`).
+        startPoseN = collections.Counter(); startPoseMinutes = collections.defaultdict(float)
+        for r in D:
+            sp = r["facts"].get("startPose")
+            if not sp: continue
+            secsSession = r.get("sessionSeconds")
+            if not isinstance(secsSession, int):
+                v = r["facts"].get("sessionSeconds")
+                secsSession = int(v) if v and v.lstrip("-").isdigit() else 0
+            startPoseN[sp] += 1; startPoseMinutes[sp] += secsSession / 60
+        if startPoseN:
+            print("  start pose: " + "  ".join(f"{p}={n} ({pct(n, sum(startPoseN.values()))}, avg {startPoseMinutes[p]/n:.1f} min)" for p, n in startPoseN.most_common()))
+        latestD = {}
+        for r in sorted(D, key=lambda r: r["startedAt"] or ""): latestD[r["install"]] = r
+        regularLatest = [r for r in latestD.values() if r["facts"].get("foldable") == "0" and r["facts"].get("runsOn") == "iPhone"]
+        lh = sum(1 for r in regularLatest if r["facts"].get("leftHandedSetting") == "1")
+        print(f"  left-handed (regular iPhones, latest session): {lh}/{len(regularLatest)} ({pct(lh, len(regularLatest))})   setting changes this month: {DC.get('setting.leftHandedControls', 0)}")
+        iPadCompat = sum(1 for r in latestD.values() if r["facts"].get("runsOn") == "iPadCompat")
+        print(f"  iPads in compatibility mode: {iPadCompat}/{len(latestD)} ({pct(iPadCompat, len(latestD))})")
+        print()
+
     print("Health")
     print(f"  photo load failed {C.get('photoLoadFailedCount',0)}   video load failed {C.get('videoLoadFailedCount',0)}   slow downloads {C.get('slowDownloadCount',0)}   "
           f"stalls>250ms {sum(fnums('mainThreadStallsOver250ms'))}   ended by: " + "  ".join(f"{v}={n}" for v,n in F['endReason'].most_common()))
@@ -268,7 +383,8 @@ def main():
     for lit in _re.findall(r"""C\.get\(f?['"]([^'"]+)['"]""", src): named.add(_re.sub(r"\{[^}]*\}", "*", lit))
     import fnmatch as _fn
     # Key families the script matches with `startswith`, instead of naming each key.
-    scanned = ["setting.", "filterOn.", "filterOff.", "sortChanged.", "shareTarget", "shareTargetRaw.", "shareKind.", "shrink.originalKept.", "notificationTap.", "deleted.videos.res.", "deleted.photos.res.", "video.served.", "daysToFirst.", "settingsLink.", "tip.tapped.", "tip.outcome.", "tip.unavailable.", "bin.restore."]
+    scanned = ["setting.", "filterOn.", "filterOff.", "sortChanged.", "shareTarget", "shareTargetRaw.", "shareKind.", "shrink.originalKept.", "notificationTap.", "deleted.videos.res.", "deleted.photos.res.", "video.served.", "daysToFirst.", "settingsLink.", "tip.tapped.", "tip.outcome.", "tip.unavailable.", "bin.restore.",
+               "secondsInPose.", "poseChange.", "afterDeleteByButton.", "video.rotatedToFullscreenIn.", "switcherPick.", "laptopPager.", "duoGrid.", "foldPlayback.", "foldResumeSeconds."]
     unread = sorted(k for k in C if k not in named and not any(_fn.fnmatch(k, n) for n in named if "*" in n) and not any(k.startswith(p) for p in scanned))
     if unread: print("  counts not read by this script: " + "  ".join(f"{k}={C[k]}" for k in unread))
     # Lists the facts whose names do not appear in this file. A name

@@ -214,6 +214,15 @@ struct SettingsView: View {
             .onChange(of: openMuted) { _, _ in Usage.shared.settingChanged("openMuted") }
             .onChange(of: reminder.isEnabled) { _, _ in Usage.shared.settingChanged("dailyReminder") }
             .onChange(of: reminder.time) { _, _ in Usage.shared.settingChanged("dailyReminderHour") }
+            // Analytics only — see `FeedView`'s identical `onChange`.
+            // Known limit: this screen passes `hinge: nil` to
+            // `resolvedDuoLayout`. Tent is only detected on the Videos
+            // tab; a tent that starts while Photos or Settings shows
+            // reads as `1H` until Videos reports it.
+            .onChange(of: Usage.PoseInput(pose: duoLayout.pose, landscape: windowSize.width > windowSize.height,
+                                          barLeading: duoLayout.barEdge == .leading, windowWidth: Int(windowSize.width),
+                                          seesHinge: false),
+                      initial: true) { _, input in Usage.shared.poseReported(input) }
             .fullScreenCover(isPresented: $showWelcome) {
                 WelcomeScreenView { showWelcome = false }
             }

@@ -111,6 +111,66 @@ final class Usage {
     /// Why the tip jar has no products to show.
     enum TipUnavailableReason: String { case loadFailed, empty }
 
+    /// The iPhone Duo's physical pose, as analytics records it. Mirrors
+    /// `DuoPose` (`DuoLayout.swift`), but splits the closed pose into
+    /// its two orientations and adds Split View's two halves, which
+    /// `DuoPose` itself has no idea of — `poseReported` derives those
+    /// from `isSplit` below, not from a `DuoPose` case.
+    enum Pose: String {
+        case phone, closed1V = "1V", closed1H = "1H", tent
+        case openWide = "3", book = "4", openTall = "5", laptop = "6"
+        case splitL, splitR
+    }
+    /// One frame's pose-relevant geometry, read from a host's own
+    /// `DuoLayout`/`GeometryReader` locals. A plain `Bool` for the bar
+    /// side, not a `HorizontalEdge`, keeps SwiftUI out of this file.
+    struct PoseInput: Equatable {
+        let pose: DuoPose
+        let landscape: Bool
+        let barLeading: Bool
+        let windowWidth: Int
+        /// True only for `FeedView`, the one host that mounts a
+        /// `HingeReader`. `PhotoFeedView` and `SettingsView` pass
+        /// `hinge: nil` to `resolvedDuoLayout` (see their own comments),
+        /// so `classify` can never return `.tent` there — a tab switch
+        /// away from Videos while tented would otherwise report `.closed`
+        /// (landscape), which `poseReported` would mistake for a real
+        /// unfold out of tent.
+        let seesHinge: Bool
+    }
+    /// Maps a `DuoPose` to the pose analytics records. `splitL` means
+    /// Cloudfull is on the left half — the half with the leading bar,
+    /// which is also the mirrored half.
+    ///
+    /// `.regularPhone` means "no fold signal classified" — on a phone
+    /// that has never shown a foldable hardware signal, that really is
+    /// a regular iPhone. On a Duo (`DuoLayout.seenFoldable`), the same
+    /// report means the hinge/division read came back empty for this
+    /// one frame; the Duo is still closed, not suddenly a different
+    /// phone, so this reads as the closed pose instead of `.phone`.
+    static func pose(_ p: DuoPose, landscape: Bool) -> Pose {
+        switch p {
+        case .regularPhone: return DuoLayout.seenFoldable ? (landscape ? .closed1H : .closed1V) : .phone
+        case .closed: return landscape ? .closed1H : .closed1V
+        case .tent: return .tent
+        case .openWide: return .openWide
+        case .book: return .book
+        case .openTall: return .openTall
+        case .laptop: return .laptop
+        }
+    }
+    /// True when the window is narrower than the whole screen by more
+    /// than 20pt — a Split View half, not the real closed 1V/1H
+    /// window, which fills its screen. Reads the first `UIWindowScene`'s
+    /// own `screen.bounds.width`. Only `poseReported` calls this, and
+    /// only for `.closed`: an iPad running the iPhone app in
+    /// compatibility mode never reaches here, since its pose is
+    /// `.regularPhone`, not `.closed`.
+    private static func isSplit(windowWidth: Int) -> Bool {
+        guard let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first else { return false }
+        return CGFloat(windowWidth) < scene.screen.bounds.width - 20
+    }
+
     /// The mode the user is in right now.
     ///
     /// `creditModeSeconds` must credit the mode that is ending. A read of
@@ -139,6 +199,146 @@ final class Usage {
         guard let since = modeSince else { return }
         bump("secondsIn.\(mode.rawValue)", by: Int(Date().timeIntervalSince(since)))
         modeSince = Date()
+    }
+
+    // MARK: - Pose tracker
+
+    /// Called from every host's `.onChange(of: PoseInput, initial: true)`.
+    /// A `.closed` report that `isSplit` upgrades to Split View becomes
+    /// `splitL`/`splitR` first, before anything below ever sees `.closed`.
+    ///
+    /// The 1 s debounce stops the short frames in the middle of a fold
+    /// or an unfold from becoming transitions of their own.
+    func poseReported(_ input: PoseInput) {
+        var mapped = Self.pose(input.pose, landscape: input.landscape)
+        // Once this phone has ever shown a foldable hardware signal, a
+        // `.regularPhone` report is really the closed pose with an
+        // empty hinge/division read for this one frame (see `pose`'s
+        // own doc comment above), so it can be a Split View half too —
+        // the same check `.closed` itself gets.
+        if (input.pose == .closed || (input.pose == .regularPhone && DuoLayout.seenFoldable)),
+           Self.isSplit(windowWidth: input.windowWidth) {
+            mapped = input.barLeading ? .splitL : .splitR
+        }
+        // `PhotoFeedView`/`SettingsView` have no hinge reader, so a
+        // physically tented phone reports as `.closed1H` from them —
+        // not a real unfold. Ignore that report outright while tent is
+        // still committed, so merely switching tabs away from Videos
+        // never counts as leaving tent.
+        if mapped == .closed1H, !input.seesHinge, committedPose == .tent {
+            return
+        }
+        guard committedPose != nil else {
+            // The first report of the process: no transition, no debounce.
+            committedPose = mapped
+            poseSince = Date()
+            // The very first launch of the process reaches `beginSession`
+            // before any host has reported a pose at all, so `startPose`
+            // could not be set there yet. Set it from this first report
+            // instead, guarded so a later process-wide first report (there
+            // is only ever one) cannot overwrite an already-set fact.
+            if current.facts["startPose"] == nil { current.facts["startPose"] = mapped.rawValue }
+            return
+        }
+        if mapped == committedPose { pendingPose = nil; return }
+        guard mapped != pendingPose?.pose else { return }
+        let at = Date()
+        pendingPose = (mapped, at)
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(1))
+            guard let self, self.pendingPose?.at == at else { return }   // a newer report already claimed this window
+            self.commitPose(mapped, at: at)
+        }
+    }
+    /// Credits the seconds of the old pose up to `at` — the first
+    /// report of the new pose, so the debounce itself never counts as
+    /// time in either pose — then bumps the transition.
+    ///
+    /// Pass `notifyObserver: false` from a caller that is tearing the
+    /// session down (`endSession`, for its own trailing `pendingPose`):
+    /// the page registered in `foldObserver` belongs to the session
+    /// that is ending, and a fold measurement must never cross into
+    /// the next one.
+    ///
+    /// `startPoseFinalized` gives `beginSession`'s own provisional
+    /// `startPose` write (see its doc comment) one chance to be
+    /// corrected: the first commit of a session, if it lands within
+    /// about 2 s of the session's own start, is really that correction
+    /// landing late, not an in-session transition — the pose carried
+    /// over from before the app backgrounded was already stale by the
+    /// time this session began. That one commit overwrites `startPose`
+    /// instead of bumping `poseChange` or notifying the fold observer.
+    private func commitPose(_ newPose: Pose, at: Date, notifyObserver: Bool = true) {
+        let old = committedPose
+        creditPoseSeconds(until: at)
+        committedPose = newPose
+        pendingPose = nil
+        let isStartPoseCorrection = !startPoseFinalized && at.timeIntervalSince(current.startedAt) <= 2
+        startPoseFinalized = true
+        if isStartPoseCorrection {
+            current.facts["startPose"] = newPose.rawValue
+            return
+        }
+        if let old {
+            bump("poseChange.\(old.rawValue).\(newPose.rawValue)", poseTwin: false)
+            // Hands the transition to the Videos tab's active page, if
+            // one is registered, so it can measure its own playback —
+            // see `setFoldObserver`'s own doc comment. `at` is the
+            // fold's own first-report time, not this commit's (1 s
+            // later, after the debounce) — the observer needs the real
+            // moment of the fold to ask "was I playing right then",
+            // not "am I playing a second later".
+            if notifyObserver { foldObserver?(old, newPose, at) }
+        }
+    }
+    /// Set by the Videos tab's one active video page (`PlayerPageView`),
+    /// so a committed fold/unfold — the same transition `poseChange`
+    /// counts, never a raw mid-fold frame — can be measured against
+    /// that page's own playback state. `Usage` has no idea of
+    /// `AVPlayer`; it only hands the transition, and the fold's own
+    /// first-report time, to whichever page registered. `nil` whenever
+    /// no video page is active, so nothing fires off the Videos tab at
+    /// all.
+    private var foldObserver: ((_ from: Pose, _ to: Pose, _ at: Date) -> Void)?
+    /// The page id that currently owns `foldObserver` — see
+    /// `setFoldObserver`'s own doc comment.
+    private var foldObserverOwner: String?
+    /// `PlayerPageView` calls this from `.onChange(of: isActive)` and
+    /// `.onDisappear`. A non-nil `handler` always registers (the newly
+    /// active page always wins); `nil` only clears when `pageID` is
+    /// still the current owner, so a page going inactive can never
+    /// clobber a different page's registration that happened to run
+    /// first, whichever order SwiftUI fires the two `onChange`s in.
+    func setFoldObserver(pageID: String, handler: ((_ from: Pose, _ to: Pose, _ at: Date) -> Void)?) {
+        if let handler {
+            foldObserverOwner = pageID
+            foldObserver = handler
+        } else if foldObserverOwner == pageID {
+            foldObserverOwner = nil
+            foldObserver = nil
+        }
+    }
+    /// Whether this fold/unfold's playback kept going: playing at the
+    /// fold, and still (or again) playing a moment later. Never
+    /// twinned — the pose is already in the key itself.
+    func foldPlayback(from: Pose, to: Pose, kept: Bool) {
+        bump("foldPlayback.\(from.rawValue).\(to.rawValue).\(kept ? "kept" : "stopped")", poseTwin: false)
+    }
+    /// How long playback took to resume after a fold stopped it,
+    /// bucketed so the report reads a distribution, not a raw average.
+    /// `bucket` is one of `lt0_5`, `lt1`, `lt2`, `lt5`, `ge5`, `never`.
+    func foldResumeSeconds(bucket: String) {
+        bump("foldResumeSeconds.\(bucket)", poseTwin: false)
+    }
+    /// Seconds spent in the pose that is ending, credited to it. Same
+    /// shape as `creditModeSeconds`; `until` is a passed-in time, not
+    /// always `Date()`, so `commitPose` can credit up to the new pose's
+    /// own first-report time instead of now.
+    private func creditPoseSeconds(until: Date = Date()) {
+        guard let since = poseSince, let pose = committedPose else { return }
+        let secs = Int(until.timeIntervalSince(since).rounded())
+        if secs > 0 { bump("secondsInPose.\(pose.rawValue)", by: secs, poseTwin: false) }
+        poseSince = until
     }
     /// Records the sort, the filters, and the types in force at open as
     /// facts. `sort.*` is set only for a mode that has a sort.
@@ -176,6 +376,13 @@ final class Usage {
     /// replay.
     func livePlayed(byTap: Bool) { bump(byTap ? "livePlay.tap" : "livePlay.auto") }
     func switcherOpened() { bump("modeSwitcherOpened") }
+    /// A tab switcher pick, including a pick of Settings and a re-pick
+    /// of the tab already shown — neither counted before this. `mode`
+    /// is `AppMode.rawValue`, passed as a plain `String` to match every
+    /// other raw-value key in this file.
+    func switcherPicked(_ mode: String, same: Bool) {
+        bump(same ? "switcherPick.same" : "switcherPick.\(mode)")
+    }
     func keepTapNoop(mode: Mode) { bump("keepTapOnAlreadyKept.\(mode.rawValue)") }
     func shrinkSheetOpened() { bump("shrink.sheet") }
     func shrinkCancelled() { bump("shrink.cancel") }
@@ -204,8 +411,19 @@ final class Usage {
     func tipTapped(_ tier: TipTier) { bump("tip.tapped.\(tier.rawValue)") }
     func tipOutcome(_ tier: TipTier, _ outcome: TipOutcome) { bump("tip.outcome.\(tier.rawValue).\(outcome.rawValue)") }
     func tipProductsUnavailable(_ reason: TipUnavailableReason) { bump("tip.unavailable.\(reason.rawValue)") }
-    func fullscreenEntered() { bump("video.rotatedToFullscreen") }
+    /// `pose` is passed in, not read from `poseNow`: the same turn that
+    /// enters fullscreen also changes the pose, and the tracker's own
+    /// debounce — plus the order `onChange` calls run in across views —
+    /// would otherwise tag this event with the OLD pose.
+    func fullscreenEntered(pose: Pose) {
+        bump("video.rotatedToFullscreen", poseTwin: false)   // the unchanged total
+        bump("video.rotatedToFullscreenIn.\(pose.rawValue)", poseTwin: false)
+    }
     func quickAction(mode: Mode) { bump("quickAction.\(mode.rawValue)") }
+    /// The book pose's (4/4W) right-page grid. A tile tap does not close
+    /// the after-delete window (open point for the owner).
+    func duoGridTap(week: Bool) { bump("duoGrid.tap.\(week ? "week" : "day")", poseTwin: false) }
+    func duoGridScrolled() { bump("duoGrid.scroll", poseTwin: false) }
 
     // Feed
     func postSeen(mode: Mode) { bump("postsSeen.\(mode.rawValue)"); postsSeenSinceFilter += 1 }
@@ -213,10 +431,25 @@ final class Usage {
         bump("swipes.\(mode.rawValue)"); if up { bump("swipesBack.\(mode.rawValue)") }
         // Counts the first swipe within 5 seconds of a delete, back or
         // forward.
-        if let last = lastDelete, Date().timeIntervalSince(last.at) < 5 {
-            bump("afterDelete.\(last.mode.rawValue).\(up ? "back" : "swipe")")   // counted under the mode the delete happened in
-            lastDelete = nil
-        }
+        closeAfterDeleteWindow(back: up, byButton: false)
+    }
+    /// Closes the 5-second after-delete window, if one is open — the
+    /// half of `swipe`'s own outcome-counting that pose 6's Previous/
+    /// Next buttons (`laptopPager`) also need to reach. `back` matches
+    /// `swipe`'s own `up`: true for a move that goes back toward the
+    /// deleted item's old neighbor, false for one that moves forward.
+    private func closeAfterDeleteWindow(back: Bool, byButton: Bool) {
+        guard let last = lastDelete, Date().timeIntervalSince(last.at) < 5 else { return }
+        let outcome = back ? "back" : "swipe"
+        bump("afterDelete.\(last.mode.rawValue).\(outcome)")   // counted under the mode the delete happened in
+        if byButton { bump("afterDeleteByButton.\(last.mode.rawValue).\(outcome)", poseTwin: false) }
+        lastDelete = nil
+    }
+    /// Pose 6's Previous/Next pills. The pose 6 swipe counts come from
+    /// the twins instead: `swipes.videos@6` and `swipesBack.videos@6`.
+    func laptopPager(next: Bool) {
+        bump("laptopPager.\(next ? "next" : "previous")", poseTwin: false)
+        closeAfterDeleteWindow(back: !next, byButton: true)
     }
     /// Starts the 5-second window after a delete. `swipe` counts a swipe
     /// inside the window. If no swipe occurs, the window counts as `stay`.
@@ -411,6 +644,9 @@ final class Usage {
         set("albumSort", UserDefaults.standard.string(forKey: "albumPicker.sortOrder") ?? "recent")
         set("keepsAlbumSetting", KeepsAlbum.shared.isOn ? "1" : "0")
         set("appIconSetting", AppIconChoice.current.rawValue)
+        // Read only when `foldable` is `0`: on the Duo this setting does
+        // nothing (SettingsView hides its own toggle there).
+        set("leftHandedSetting", UserDefaults.standard.bool(forKey: "settings.leftHandedControls") ? "1" : "0")
         if let hour = reminderHour, reminderOn {
             let now = Calendar.current.component(.hour, from: Date())
             let apart = abs(now - hour)
@@ -459,6 +695,21 @@ final class Usage {
     private var sessionHasBegun = false
     /// When the current mode began, for seconds-per-mode.
     private var modeSince: Date?
+    /// The current pose after the 1 s debounce. Stays across sessions
+    /// in memory: nothing re-reports on a plain foreground with no
+    /// change, so a session boundary must never reset this.
+    private var committedPose: Pose?
+    /// A new pose that has not yet held for 1 s.
+    private var pendingPose: (pose: Pose, at: Date)?
+    /// When the current pose (or the session) began, for
+    /// seconds-per-pose.
+    private var poseSince: Date?
+    /// The pose the `@pose` twins attach to right now.
+    private var poseNow: Pose? { pendingPose?.pose ?? committedPose }
+    /// Reset to `false` by `beginSession`. True once this session's
+    /// first `commitPose` has run — see `commitPose`'s own doc comment
+    /// on the one, early, chance it gives to correct `startPose`.
+    private var startPoseFinalized = false
     private var postsSeenSinceFilter = 0
     private let defaults = UserDefaults.standard
     private static let currentKey = "usage.session.current"
@@ -525,6 +776,30 @@ final class Usage {
         lastDelete = nil
         postsSeenSinceFilter = 0
         modeSince = Date()
+        startPoseFinalized = false
+        // Does not reset `committedPose`: no host reports again on a
+        // foreground with no change, so the pose from before this
+        // session still holds until something actually differs. A pose
+        // that was still waiting on its 1 s debounce when the app
+        // backgrounded is adopted now, with no transition bump — the
+        // debounce itself was never a real transition, and dropping it
+        // here would otherwise lose it outright.
+        if let pending = pendingPose { committedPose = pending.pose; pendingPose = nil }
+        poseSince = Date()
+        // The pose this session started in, for "session length by
+        // start pose" — provisional. On a true cold launch no host has
+        // reported a pose yet (`committedPose` is still nil);
+        // `poseReported`'s own first-report branch sets this fact
+        // instead, once one arrives. Otherwise this is the pose carried
+        // over from before the app backgrounded, which may already be
+        // stale (the phone can fold, or rotate, while the screen is
+        // off) — `commitPose`'s own `startPoseFinalized` check
+        // overwrites it with the real pose if a correction lands within
+        // the first couple of seconds.
+        if let committedPose { current.facts["startPose"] = committedPose.rawValue }
+        // Read again at `endSession`, in case `seenFoldable` latches
+        // true partway through the session (the first-ever Duo launch).
+        current.facts["foldable"] = DuoLayout.seenFoldable ? "1" : "0"
         mode = AppModeStore.shared.mode == .photos ? .photos : .videos
         current.facts["startHour"] = String(Calendar.current.component(.hour, from: Date()))
         current.facts["startWeekday"] = String(Calendar.current.component(.weekday, from: Date()))
@@ -542,6 +817,10 @@ final class Usage {
         current.facts["sessionsBefore"] = String(before)
         current.facts["openedFromNotification"] = current.facts["openedFromNotification"] ?? "0"   // always written, like every other flag
         current.facts["lowPowerAtStart"] = ProcessInfo.processInfo.isLowPowerModeEnabled ? "1" : "0"
+        // An iPad in compatibility mode reports the `.phone` idiom
+        // (`DuoLayout`'s own `.regularPhone`), so this reads the real
+        // machine id in `device` instead.
+        current.facts["runsOn"] = Self.runsOn(device: current.device)
         current.facts["reduceMotion"] = UIAccessibility.isReduceMotionEnabled ? "1" : "0"
         current.facts["textSize"] = UIApplication.shared.preferredContentSizeCategory.rawValue.replacingOccurrences(of: "UICTContentSizeCategory", with: "")
         current.facts["darkModeSetting"] = UITraitCollection.current.userInterfaceStyle == .dark ? "1" : "0"
@@ -588,6 +867,17 @@ final class Usage {
     private func endSession(by: String) {
         guard current.endedAt == nil else { return }
         creditModeSeconds()
+        // If a pose is pending, commit it at its own start time first —
+        // otherwise the next session starts on an old pose. Then credit
+        // whichever pose is now committed for the rest of the session.
+        // `notifyObserver: false`: the page registered in `foldObserver`
+        // belongs to this ending session, and a fold measurement must
+        // never run past the session boundary into the next one.
+        if let pending = pendingPose { commitPose(pending.pose, at: pending.at, notifyObserver: false) }
+        creditPoseSeconds()
+        // Read at the end of the session: on the first Duo launch the
+        // flag is set only after the first frame.
+        current.facts["foldable"] = DuoLayout.seenFoldable ? "1" : "0"
         if let volumeObserver { NotificationCenter.default.removeObserver(volumeObserver) }
         volumeObserver = nil
         pathMonitor?.cancel()
@@ -631,6 +921,17 @@ final class Usage {
         return Calendar.current.dateComponents([.day], from: at, to: Date()).day ?? 0
     }
 
+    /// `mac` for Mac (Designed for iPad / Apple silicon), `iPadCompat`
+    /// for an iPad running the iPhone app in compatibility mode,
+    /// `iPhone` for the model this file otherwise assumes throughout,
+    /// `other` for anything else.
+    nonisolated private static func runsOn(device: String) -> String {
+        if ProcessInfo.processInfo.isiOSAppOnMac { return "mac" }
+        if device.hasPrefix("iPad") { return "iPadCompat" }
+        if device.hasPrefix("iPhone") { return "iPhone" }
+        return "other"
+    }
+
     /// A count that keeps the biggest value seen this session, not a sum.
     private func raise(_ key: String, to n: Int) {
         guard current.endedAt == nil else { return }
@@ -642,10 +943,28 @@ final class Usage {
     /// Pass `userEvent: false` for something the phone did on its own,
     /// such as a Wi-Fi drop or a route change. It still counts, but it is
     /// not the user being active.
-    fileprivate func bump(_ key: String, by n: Int = 1, userEvent: Bool = true) {
+    ///
+    /// Pass `poseTwin: false` for a key that is already specific to a
+    /// pose (one of this feature's own pose-named keys): writing a twin
+    /// of it would be redundant. Every other user event, on the Duo,
+    /// also writes `<key>@<poseNow>` — a regular iPhone's `poseNow` is
+    /// always `.phone`, so it never gets a twin and its record size
+    /// never changes.
+    ///
+    /// `by` is `nil` for a real, single, 1-step user event — the only
+    /// kind that ever gets a twin. A call that passes an explicit `by`
+    /// is always a total (bytes, seconds, a count of many items), never
+    /// one user action, so it is excluded from twinning outright, even
+    /// on the rare total that happens to equal 1 — `n == 1` alone
+    /// cannot tell a real single event apart from a total of exactly 1.
+    fileprivate func bump(_ key: String, by n: Int? = nil, userEvent: Bool = true, poseTwin: Bool = true) {
         guard current.endedAt == nil else { return }   // an ended session is sealed
-        current.counts[key, default: 0] += n
+        current.counts[key, default: 0] += n ?? 1
         if userEvent { lastEventAt = Date() }
+        if poseTwin, userEvent, n == nil, let poseNow, poseNow != .phone,
+           !key.hasPrefix("deleted."), !key.hasPrefix("shareTargetRaw.") {
+            current.counts["\(key)@\(poseNow.rawValue)", default: 0] += 1
+        }
         markDirty()
     }
 
@@ -798,7 +1117,10 @@ final class Usage {
                 record["startedAt"] = session.startedAt
                 record["endedAt"] = session.endedAt ?? session.startedAt
                 record["coldStart"] = session.coldStart ? 1 : 0   // CloudKit has no Bool: 0/1
-                record["schema"] = 3
+                // 4 marks a session that carries pose data (`secondsInPose.*`,
+                // `poseChange.*`, the `@pose` twins). No new CloudKit field,
+                // no Production schema deploy.
+                record["schema"] = 4
                 record["app"] = session.app
                 record["ios"] = session.ios
                 record["device"] = session.device

@@ -748,6 +748,8 @@ struct ChinNavigation: View {
         selectionToken += 1
         let token = selectionToken
 
+        Usage.shared.switcherPicked(mode.rawValue, same: mode == displayMode)
+
         // Re-picking the tab already selected is not a mode change. There
         // is nothing to commit, so this only puts the capsule away. On
         // Settings it stays open, which is that screen's rule.

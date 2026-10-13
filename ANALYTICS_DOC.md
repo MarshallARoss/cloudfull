@@ -16,7 +16,10 @@ email address, or an Apple Account. The app does not send a record when it
 runs in the iOS Simulator, and it does not send one during an automated UI
 test run. A copy of the app built with a different bundle ID (a fork) never sends
 one. A record also never reaches the developer if the phone is not
-signed into iCloud, because it has nowhere to go.
+signed into iCloud, because it has nowhere to go. On the iPhone Duo, many
+counters also carry a twin tagged with the physical pose the phone was in
+when the event happened (for example `action.videos.keep@1V`), so the
+report can break a count down by pose.
 
 ## What is sent
 
@@ -36,7 +39,7 @@ to the key.
 |---|---|---|
 | `installId` | Random ID for this install of the app. | Random UUID string. |
 | `id` | Random ID for this one session record. | Random UUID string. |
-| `schema` | Version number of the record's own format. | Exact integer. |
+| `schema` | Version number of the record's own format. Value `4` marks a record that also carries phone-shape and pose data (see Phone shape and pose). | Exact integer. |
 | `app` | App version and build number. | String, e.g. `1.2 (34)`. |
 | `ios` | iOS version. | String, e.g. `26.0`. |
 | `device` | Hardware model identifier. | String, e.g. `iPhone15,2`. |
@@ -55,6 +58,9 @@ to the key.
 | `startedAt` / `endedAt` | When the session began and ended. | Exact timestamps. |
 | `openedFromNotification` | Whether this session was opened by tapping a notification. | Boolean, `0` or `1`. |
 | `notificationKind` | Which notification type opened the session. | Fixed value, `daily`. |
+| `runsOn` | What kind of hardware the app runs on. | One of `iPhone`, `iPadCompat` (an iPad running the iPhone app in compatibility mode), `mac`, `other`. |
+| `leftHandedSetting` | Whether the Left-handed controls setting is on. Read only when `foldable` is `0`; the Duo hides this setting. | Boolean, `0` or `1`. |
+| `foldable` | Whether this phone is an iPhone Duo. | Boolean, `0` or `1`. |
 
 ### Library
 
@@ -130,6 +136,41 @@ to the key.
 | `liveSwitch.turnedOn` / `liveSwitch.turnedOff` | Taps on the Live Photo on/off switch. | Exact integer, running total. |
 | `livePlay.tap` / `livePlay.auto` | Live Photo plays, by whether the user tapped or it auto-played. | Exact integer, running total. |
 
+### Phone shape and pose
+
+On the iPhone Duo, the app tracks which physical shape the phone is folded
+or opened into. A new shape must hold for 1 second before it counts as a
+change, so a short frame in the middle of a fold or an unfold is not
+recorded as its own shape. On a regular iPhone the shape itself never
+changes. The exact new keys a regular iPhone's record carries are
+`secondsInPose.phone`, `foldable`, `startPose`, `runsOn`,
+`leftHandedSetting`, `switcherPick.*`, and
+`video.rotatedToFullscreenIn.phone`. A crash or a kill loses the seconds
+of whichever shape was current when it happened, the same way a crash
+loses the last few seconds of `secondsIn.<mode>` — both are credited only
+on a change of shape/mode or at the end of a session.
+
+| Pose value | What it means |
+|---|---|
+| `phone` | A regular iPhone, not a Duo. |
+| `1V` | The Duo closed, held upright. |
+| `1H` | The Duo closed, held sideways. |
+| `tent` | The Duo standing in a tent shape. Tent is only detected on the Videos tab; a tent that starts while Photos or Settings shows reads as `1H` until Videos reports it. |
+| `3` | The Duo open wide, side by side. |
+| `4` | The Duo open like a book. |
+| `5` | The Duo open tall, one above the other. |
+| `6` | The Duo open flat, like a laptop. |
+| `splitL` / `splitR` | A Split View half on the open Duo, next to another app. `splitL` = Cloudfull on the left half; `splitR` = on the right half. |
+
+| Key | Description | Type / format |
+|---|---|---|
+| `secondsInPose.<pose>` | Seconds spent in each phone shape. | Exact integer, seconds, running total. |
+| `poseChange.<from>.<to>` | A change from one phone shape to another, such as a fold or an unfold. | Exact integer, running total. |
+| `<key>@<pose>` | A twin of a single real user event above, recorded only on the iPhone Duo. Gives the same count broken down by phone shape. Never added for a running total of any kind (bytes, seconds, or a count of several items, such as `secondsIn.<mode>` or `bin.emptied.<mode>.itemCount`), for `raise`/`set` facts, or for a key starting with `deleted.` or `shareTargetRaw.`. | Exact integer, running total. |
+| `startPose` | The phone shape the session started in. | One of the pose values above. |
+| `foldPlayback.<from>.<to>.kept` / `.stopped` | After a fold or an unfold while a video was playing on the Videos tab, whether that video was still playing 1 second later (`stopped` if not). | Exact integer, running total. |
+| `foldResumeSeconds.<bucket>` | Of the plays marked `stopped` above, how long after the fold the video played again (`bucket` = `lt2`, `lt5`, `ge5`, or `never`, each measured from the fold itself, not from the 1-second `stopped` check). | Exact integer, running total. |
+
 ### Feature counters
 
 | Key | Description | Type / format |
@@ -140,6 +181,7 @@ to the key.
 | `modeSwitch.<via>` | A switch between the Videos and Photos feeds, by how it was triggered (`via` = `chin`, `quickAction`, `notification`, `endPage`). | Exact integer, running total. |
 | `modeSwitchTo.<mode>` | Which feed a mode switch landed on. | Exact integer, running total. |
 | `modeSwitcherOpened` | The feed switcher was opened. | Exact integer, running total. |
+| `switcherPick.<tab>` | A pick in the feed switcher (`tab` = `videos`, `photos`, `settings`), or `same` for a re-pick of the tab already showing. | Exact integer, running total. |
 | `quickAction.<mode>` | The app was opened using a Home Screen quick action, by feed. | Exact integer, running total. |
 | `filterOn.<mode>.<name>` / `filterOff.<mode>.<name>` | A filter was turned on or off, by feed and filter name. | Exact integer, running total. |
 | `sortChanged.<mode>.<name>` | The sort order was changed, by feed and the new sort's name. | Exact integer, running total. |
@@ -160,6 +202,10 @@ to the key.
 | `video.fastForwardHold` | A fast-forward hold gesture on a video. | Exact integer, running total. |
 | `video.scrub` | A scrub gesture on a video's timeline. | Exact integer, running total. |
 | `video.rotatedToFullscreen` | A video was rotated into fullscreen. | Exact integer, running total. |
+| `video.rotatedToFullscreenIn.<pose>` | The same event, split by the iPhone Duo phone shape it happened in. | Exact integer, running total. |
+| `laptopPager.next` / `.previous` | The Duo's laptop pose (6) Previous/Next button was tapped. | Exact integer, running total. |
+| `duoGrid.tap.day` / `.tap.week` | A tap on a tile in the Duo book pose's (4) right-page grid, by whether the grid fell back from "Same day" to "Same week". | Exact integer, running total. |
+| `duoGrid.scroll` | A drag on the Duo book pose's (4) right-page grid. | Exact integer, running total. |
 | `video.served.<W>x<H>` | The pixel size of a video actually played, exact width and height. | Exact integer counter keyed by resolution, e.g. `video.served.1920x1080`. |
 | `video.clipsLogged` / `video.secondsLogged` | Clips finished on screen, and total seconds watched. | Exact integer, running total. |
 | `video.logStalls` / `video.droppedFrames` / `video.clipsWithTrouble` | Playback stalls and dropped frames reported by the player, and clips that had either. | Exact integer, running total. |
@@ -170,7 +216,8 @@ to the key.
 | `deleted.<mode>.res.<W>x<H>` | The exact pixel size of a deleted item, by feed. | Exact integer counter keyed by resolution, e.g. `deleted.videos.res.1920x1080`. |
 | `postsSeen.<mode>` | Posts seen in the feed. | Exact integer, running total. |
 | `swipes.<mode>` / `swipesBack.<mode>` | Swipes in the feed, and swipes that went backward. | Exact integer, running total. |
-| `afterDelete.<mode>.back` / `.swipe` / `.stay` | What happened in the 5 seconds after a delete: swiped back, swiped on, or stayed. | Exact integer, running total. |
+| `afterDelete.<mode>.back` / `.swipe` / `.stay` | What happened in the 5 seconds after a delete: swiped back, swiped on, or stayed. On the Duo's laptop pose (6), the Previous/Next buttons count here too, alongside a swipe. | Exact integer, running total. |
+| `afterDeleteByButton.<mode>.back` / `.swipe` | Of the above, the ones closed by a laptop-pose (6) Previous/Next button instead of a swipe. | Exact integer, running total. |
 | `bin.open` / `bin.preview` | The Bin was opened, or a bin item was previewed. | Exact integer, running total. |
 | `bin.emptyTapped` | "Empty Bin" was tapped (before the system confirms). | Exact integer, running total. |
 | `bin.emptiedCount` | An empty of the Bin was confirmed. | Exact integer, running total. |
@@ -200,7 +247,7 @@ to the key.
 | `photoLoadFailedCount` / `videoLoadFailedCount` | A photo or video failed to load. | Exact integer, running total. |
 | `slowDownloadCount` | An iCloud download was slow to arrive. | Exact integer, running total. |
 | `settingsOpened` | The Settings screen was opened. | Exact integer, running total. |
-| `setting.<name>` | A setting was changed, by name (`name` = `keepsAlbum`, `defaultTab`, `openMuted`, `dailyReminder`, `dailyReminderHour`). | Exact integer, running total. |
+| `setting.<name>` | A setting was changed, by name (`name` = `keepsAlbum`, `defaultTab`, `openMuted`, `dailyReminder`, `dailyReminderHour`, `leftHandedControls`). | Exact integer, running total. |
 | `settingsLink.<name>` | A link row was tapped in Settings, by which link (`name` = `website`, `contact`, `privacy`, `sourceCode`, `feelsMusic`, `guestBets`, `carlyAndTheUniverse`, `tabzTech`, `barkBarkBark`). Caught by one handler for every link on the screen; never the raw URL. | Exact integer, running total. |
 | `showWelcomeTapped` | "Show welcome screen" was tapped in Settings. | Exact integer, running total. |
 | `showOnboardingAgainTapped` | "Show onboarding again" was tapped in Settings. | Exact integer, running total. |
@@ -246,6 +293,7 @@ Cloudfull's own database, and it does not use the phone's current location.
 - Record type: `UsageSession`, one record for each session.
 - Fields: `installId`, `startedAt`, `endedAt`, `coldStart`, `schema`, `app`, `ios`, `device`, `libraryCount`, `sessionSeconds`, `daysSinceInstall`, `country`, `photoPermissionAtStart`, `endReason`, `counts`, `facts`.
 - `counts` and `facts` are JSON text. Do not index them. An index on a large text field wastes the container's index limit.
+- Schema value `4` marks a record that carries phone-shape and pose data. It added no new CloudKit field, so it needed no Production schema deploy.
 - Security roles, in both environments:
   - `GRANT CREATE TO "_icloud"`: a signed-in iCloud user can create a record.
   - `GRANT WRITE TO "_creator"`: only the creator can change it.

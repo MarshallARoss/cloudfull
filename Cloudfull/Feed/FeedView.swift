@@ -641,6 +641,14 @@ struct FeedView: View {
             // `pose` never changes (always `.regularPhone`), so this is a
             // no-op there: zero risk to the "byte-for-byte" promise.
             .animation(.default, value: duoLayout.pose)
+            // Analytics only: reports this frame's pose to the tracker
+            // in `Usage`, which debounces it and credits seconds/
+            // transitions itself. See `Usage.PoseInput`'s own comment
+            // for why this passes a plain `Bool` for the bar side.
+            .onChange(of: Usage.PoseInput(pose: duoLayout.pose, landscape: windowSize.width > windowSize.height,
+                                          barLeading: duoLayout.barEdge == .leading, windowWidth: Int(windowSize.width),
+                                          seesHinge: true),
+                      initial: true) { _, input in Usage.shared.poseReported(input) }
             // See `duoRightGridBottomY`'s own comment. This ZStack is
             // the nearest ancestor both `DuoRightPage` and the pager
             // (which mounts `FeedPageContent`) sit inside as siblings,
@@ -2859,11 +2867,13 @@ struct FeedView: View {
     /// action, so `laptopDeckControls` stays a plain view builder.
     private func laptopGoToNextPage() {
         guard let currentPageID, let entry = viewModel.deck.first(where: { $0.id == currentPageID }) else { return }
+        Usage.shared.laptopPager(next: true)
         advanceToNextPage(from: entry)
     }
 
     private func laptopGoToPreviousPage() {
         guard let currentPageID, let entry = viewModel.deck.first(where: { $0.id == currentPageID }) else { return }
+        Usage.shared.laptopPager(next: false)
         retreatToPreviousPage(from: entry)
     }
 
