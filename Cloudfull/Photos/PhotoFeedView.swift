@@ -578,6 +578,15 @@ struct PhotoFeedView: View {
                 Self.logPhotosLayout(newLine)
             }
             #endif
+            // Analytics only — see `FeedView`'s identical `onChange`.
+            // Known limit: this screen passes `hinge: nil` to
+            // `resolvedDuoLayout`. Tent is only detected on the Videos
+            // tab; a tent that starts while Photos or Settings shows
+            // reads as `1H` until Videos reports it.
+            .onChange(of: Usage.PoseInput(pose: duoLayout.pose, landscape: windowSize.width > windowSize.height,
+                                          barLeading: duoLayout.barEdge == .leading, windowWidth: Int(windowSize.width),
+                                          seesHinge: false),
+                      initial: true) { _, input in Usage.shared.poseReported(input) }
         }
         // R2's other half: a scale-only change (an external display, or
         // the inner/outer swap on Duo) moves no width at all, so the

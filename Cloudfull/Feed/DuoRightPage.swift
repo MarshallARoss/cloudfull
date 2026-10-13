@@ -73,6 +73,10 @@ struct DuoRightPage: View {
             sameDayTab
         }
         .scrollIndicators(.hidden)
+        // Analytics only: one count per drag, not per frame.
+        .onScrollPhaseChange { old, new in
+            if new == .interacting, old != .interacting { Usage.shared.duoGridScrolled() }
+        }
         .padding(.horizontal, 16)
         .padding(.top, 16)
         .frame(width: contentRect.width, height: contentRect.height, alignment: .top)
@@ -128,6 +132,7 @@ struct DuoRightPage: View {
         return LazyVGrid(columns: columns, spacing: 10) {
             ForEach(result.assets) { asset in
                 SameDayTile(asset: asset, dayKey: dayKey, tileSize: tileSize) {
+                    Usage.shared.duoGridTap(week: result.usedWeekFallback)
                     onPlay(asset.id)
                 }
                 .accessibilityIdentifier("duo_right_tile_\(asset.id)")

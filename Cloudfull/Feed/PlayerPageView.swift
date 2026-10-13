@@ -85,6 +85,19 @@ struct PlayerPageView: View {
     /// An `isActive` change that arrives mid-scroll. Applied once the pager
     /// is idle.
     @State private var pendingActive: Bool?
+    /// Analytics only. The in-flight fold-playback measurement started
+    /// by `recordFoldPlayback`, if one is still running. A new fold
+    /// cancels the previous measurement instead of letting two
+    /// overlap and both report a resume time.
+    @State private var foldMeasureTask: Task<Void, Never>?
+    /// Analytics only. The time of this page's own last play/pause
+    /// edge, tracked by a dedicated `.onChange(of: holder.isPlaying)`
+    /// so `recordFoldPlayback` can ask "was I playing AT the fold"
+    /// instead of reading `holder.isPlaying` at commit time (1 s
+    /// later, after `Usage`'s own debounce), by which point a
+    /// fold-driven pause has often already landed.
+    @State private var lastPlayAt: Date?
+    @State private var lastPauseAt: Date?
     @State private var isLoading = true
     /// The asset's own Photos thumbnail, fetched with
     /// `PhotoLibraryService.thumbnail(for:side:)`. This thumbnail is local
@@ -1166,7 +1179,30 @@ struct PlayerPageView: View {
         // an edge signal to drive `.scrollDisabled(isScrubbing ||
         // isFullscreen)` and hide its own global chrome. This matches the
         // shape `onScrubbingChanged` already uses.
-        .onChange(of: isFullscreen) { _, on in if on { Usage.shared.fullscreenEntered() } }
+        .onChange(of: isFullscreen) { _, on in
+            if on { Usage.shared.fullscreenEntered(pose: Usage.pose(duoLayout.pose, landscape: windowIsLandscape)) }
+        }
+        // Analytics only: registers/clears this page as the one
+        // `Usage`'s pose tracker hands committed fold/unfold
+        // transitions to, so a fold while this page is active can
+        // measure whether its own playback kept going. See
+        // `Usage.setFoldObserver`'s own doc comment for why a page
+        // going inactive clears only its own registration, never a
+        // different page's.
+        .onChange(of: isActive, initial: true) { _, active in
+            Usage.shared.setFoldObserver(pageID: pageID, handler: active ? { from, to, at in
+                recordFoldPlayback(from: from, to: to, at: at)
+            } : nil)
+            // A neighbour swiped away within 1 s of a fold stays
+            // mounted (SwiftUI never calls `onDisappear` on it), so a
+            // measurement already running on the now-inactive page
+            // must be cancelled here too, not only in `onDisappear`.
+            if !active { foldMeasureTask?.cancel() }
+        }
+        .onDisappear {
+            Usage.shared.setFoldObserver(pageID: pageID, handler: nil)
+            foldMeasureTask?.cancel()
+        }
         .onChange(of: isFullscreen) { _, newValue in
             onFullscreenChanged(newValue)
         }
@@ -1257,6 +1293,12 @@ struct PlayerPageView: View {
             downloadFraction = nil
             hideSpinnerImmediately()
         }
+        // Analytics only: the last play/pause edge, for
+        // `recordFoldPlayback`'s own "was playing at the fold" check —
+        // see `lastPlayAt`'s own doc comment.
+        .onChange(of: holder.isPlaying) { _, playing in
+            if playing { lastPlayAt = Date() } else { lastPauseAt = Date() }
+        }
         // The wait can also end without a rising `isPlaying` edge: the
         // page deactivates, a sheet comes up, or the item is released. The
         // loader must not outlive the wait.
@@ -1326,6 +1368,14 @@ struct PlayerPageView: View {
             // for a background transition. Do it explicitly on return.
             if newPhase == .active {
                 holder.applyPlaybackState()
+            } else {
+                // Analytics only. A fold measurement in flight when the
+                // app leaves `.active` must not keep running into the
+                // background and report against whatever session comes
+                // next — see `Usage.commitPose`'s own `notifyObserver`
+                // doc comment for the session-ending half of this same
+                // rule.
+                foldMeasureTask?.cancel()
             }
         }
         .onDisappear {
@@ -1851,6 +1901,135 @@ struct PlayerPageView: View {
         // t0 for the `load_seq_` probe is the instant the page becomes
         // active: the moment the user's swipe settled.
         active ? loadSeq.activate(ProcessInfo.processInfo.systemUptime) : loadSeq.deactivate()
+    }
+
+    /// Analytics only. Measures whether this page's own playback kept
+    /// going across a fold/unfold `Usage` just committed — the same
+    /// transition `poseChange` counts, never a raw mid-fold frame —
+    /// and, if it stopped, how long until it plays again. Only runs
+    /// for the page `Usage` has registered as active (see
+    /// `.onChange(of: isActive)` above), so a fold while this page is
+    /// preloading, or gone, never measures anything.
+    ///
+    /// `at` is the fold's own first-report time, not this call's own
+    /// (which only happens once `Usage`'s 1 s debounce commits the
+    /// transition). The entry guard reads from `lastPlayAt`/
+    /// `lastPauseAt`, not a fresh `holder.isPlaying`, so it reflects
+    /// the fold's own moment rather than whatever already happened in
+    /// the second since. `stopped` and every resume bucket below are
+    /// anchored to `at` too, for the same reason.
+    private func recordFoldPlayback(from: Usage.Pose, to: Usage.Pose, at: Date) {
+        guard wasPlaying(at: at) else { return }   // nothing was playing to keep going or stop
+        foldMeasureTask?.cancel()
+        // The session this fold belongs to. `.onChange(of: scenePhase)`
+        // already cancels this task once the scene leaves `.active`,
+        // but a measurement that was mid-sleep at that exact instant
+        // must still be stopped from crediting whichever session comes
+        // next — see `Usage.commitPose`'s own `notifyObserver` doc
+        // comment for the other half of this same rule.
+        let sessionID = Usage.shared.current.id
+        // `holder` stays weak and optional throughout — read with `?`
+        // at each step, never permanently unwrapped, so a page that
+        // disappears mid-measurement is noticed at the very next check
+        // instead of being held alive by this task.
+        foldMeasureTask = Task { @MainActor [weak holder] in
+            // `stopped` means "still not playing 1 s after the fold" —
+            // wait for exactly that instant, rather than assuming (the
+            // old bug's assumption) that this call already lands there
+            // via `Usage`'s own debounce.
+            let oneSecondAfterFold = at.addingTimeInterval(1)
+            let untilOneSecond = oneSecondAfterFold.timeIntervalSinceNow
+            if untilOneSecond > 0 { try? await Task.sleep(for: .seconds(untilOneSecond)) }
+            guard !Task.isCancelled, let playingNow = holder?.isPlaying, Usage.shared.current.id == sessionID else { return }
+            if playingNow {
+                Usage.shared.foldPlayback(from: from, to: to, kept: true)
+                return
+            }
+            Usage.shared.foldPlayback(from: from, to: to, kept: false)
+            // Resume-time buckets, all anchored to the fold itself
+            // (`at`), not to whichever checkpoint below happens to
+            // notice it. Each checkpoint asks "has `lastPlayAt` moved
+            // past `at` yet" — the persisted timestamp of the most
+            // recent play edge — rather than sampling `holder.isPlaying`:
+            // a resume that fires and is immediately paused again,
+            // between two checkpoints, still set `lastPlayAt` and so is
+            // still caught here, bucketed by its own timing rather than
+            // by whether it happens to still be playing when checked.
+            // The walk starts at 2 s, one past the 1 s mark `stopped`
+            // was decided at, and is checked in order; the first
+            // checkpoint where the edge has already landed wins. Past
+            // the widest named bucket, one more, generous wait decides
+            // `ge5` vs `never`.
+            //
+            // A cancellation reaching any of these waits — the page
+            // swiping away, disappearing, or the app leaving `.active`,
+            // same as the entry guard above — means the measurement
+            // never got to see an outcome of its own. That still
+            // counts as the fold's one resume bucket: `left`, gated by
+            // the same session check as every other bucket here, so a
+            // measurement orphaned by a session boundary never credits
+            // the next session. So every `stopped` gets exactly one
+            // resume bucket, named for whichever of these five ways it
+            // resolved.
+            @MainActor func leftIfCancelled() -> Bool {
+                guard Task.isCancelled else { return false }
+                if Usage.shared.current.id == sessionID { Usage.shared.foldResumeSeconds(bucket: "left") }
+                return true
+            }
+            let thresholds: [(seconds: Double, bucket: String)] = [(2, "lt2"), (5, "lt5")]
+            for (seconds, bucket) in thresholds {
+                let remaining = seconds - Date().timeIntervalSince(at)
+                if remaining > 0 { try? await Task.sleep(for: .seconds(remaining)) }
+                if leftIfCancelled() { return }
+                guard Usage.shared.current.id == sessionID else { return }
+                if let playAt = self.lastPlayAt, playAt > at { Usage.shared.foldResumeSeconds(bucket: bucket); return }
+            }
+            let maxWait = 30.0
+            let remaining = maxWait - Date().timeIntervalSince(at)
+            if remaining > 0 { try? await Task.sleep(for: .seconds(remaining)) }
+            if leftIfCancelled() { return }
+            guard Usage.shared.current.id == sessionID else { return }
+            let resumed = self.lastPlayAt.map { $0 > at } ?? false
+            Usage.shared.foldResumeSeconds(bucket: resumed ? "ge5" : "never")
+        }
+    }
+
+    /// Analytics only. Reconstructs this page's playback state at a
+    /// past instant from the last play/pause edges — see
+    /// `lastPlayAt`'s own doc comment — rather than a fresh
+    /// `holder.isPlaying`, which by the time `recordFoldPlayback` runs
+    /// (commit time, 1 s after `at`) can have already flipped.
+    ///
+    /// Only the most recent play and the most recent pause are kept,
+    /// so this can only reason about the state around those two edges.
+    /// That is always enough in practice: `at` is always a recent
+    /// fold moment, within a second or two of whichever edges exist.
+    private func wasPlaying(at: Date) -> Bool {
+        // Neither edge has fired yet on this page: no transition to
+        // read, so the current state is also the state `at` held.
+        if lastPlayAt == nil, lastPauseAt == nil { return holder.isPlaying }
+        switch (lastPlayAt, lastPauseAt) {
+        case (nil, .some(let pause)):
+            // Only a pause has ever landed: whatever state came before
+            // it (the same default as the no-edges case above) held up
+            // until the pause, then stopped.
+            return at < pause
+        case (.some(let play), nil):
+            // Only a play has ever landed: not yet playing before it,
+            // playing from it on.
+            return at >= play
+        case (.some(let play), .some(let pause)) where play > pause:
+            // The play is the more recent edge: playing from `play`
+            // onward, and also in the stretch before the earlier
+            // `pause` — the same state that later play resumed.
+            return at >= play || at < pause
+        case (.some(let play), .some(let pause)):
+            // The pause is the more recent edge: playing only in the
+            // gap between `play` and `pause`.
+            return at >= play && at < pause
+        default:
+            return holder.isPlaying   // unreachable: nil/nil is handled above
+        }
     }
 
     /// Entry point for the stage long press (`StageLongPressScrubGesture`).

@@ -50,6 +50,12 @@ struct FeedView: View {
     /// one through this nonce.
     @State private var advanceNonce = 0
     @State private var advanceTargetID: String?
+    /// The page a programmatic advance (trash tap, pose 6's Previous/
+    /// Next pills, Play Next) lands on. The advance's own completion
+    /// sets `currentPageID` and clears `isAdvancing` in the same
+    /// update, so the page-change handler sees `isAdvancing == false`
+    /// for that landing. This id lets it skip the swipe count anyway.
+    @State private var programmaticPageID: String?
     /// Bumped after every prune that removes a page. The pager's
     /// `ScrollViewReader` then re-anchors on `currentPageID`.
     @State private var reanchorNonce = 0
@@ -641,6 +647,14 @@ struct FeedView: View {
             // `pose` never changes (always `.regularPhone`), so this is a
             // no-op there: zero risk to the "byte-for-byte" promise.
             .animation(.default, value: duoLayout.pose)
+            // Analytics only: reports this frame's pose to the tracker
+            // in `Usage`, which debounces it and credits seconds/
+            // transitions itself. See `Usage.PoseInput`'s own comment
+            // for why this passes a plain `Bool` for the bar side.
+            .onChange(of: Usage.PoseInput(pose: duoLayout.pose, landscape: windowSize.width > windowSize.height,
+                                          barLeading: duoLayout.barEdge == .leading, windowWidth: Int(windowSize.width),
+                                          seesHinge: true),
+                      initial: true) { _, input in Usage.shared.poseReported(input) }
             // See `duoRightGridBottomY`'s own comment. This ZStack is
             // the nearest ancestor both `DuoRightPage` and the pager
             // (which mounts `FeedPageContent`) sit inside as siblings,
@@ -1120,7 +1134,9 @@ struct FeedView: View {
             // Not while the trash tap's own advance is moving the pager.
             // That is not a swipe, and it must not consume the 5 s
             // after-delete window.
-            if !isAdvancing, let oldValue,
+            let isProgrammaticLanding = newValue == programmaticPageID
+            if isProgrammaticLanding { programmaticPageID = nil }
+            if !isAdvancing, !isProgrammaticLanding, let oldValue,
                let from = viewModel.deck.firstIndex(where: { $0.id == oldValue }),
                let to = viewModel.deck.firstIndex(where: { $0.id == newValue }) {
                 Usage.shared.swipe(mode: .videos, up: to < from)
@@ -1172,6 +1188,7 @@ struct FeedView: View {
         // before pruning.
         .onChange(of: advanceNonce) { _, _ in
             guard let nextID = advanceTargetID else { return }
+            programmaticPageID = nextID
             withAnimation(.easeInOut(duration: 0.4)) {
                 scrollProxy.scrollTo(nextID, anchor: .top)
             }
@@ -2859,11 +2876,13 @@ struct FeedView: View {
     /// action, so `laptopDeckControls` stays a plain view builder.
     private func laptopGoToNextPage() {
         guard let currentPageID, let entry = viewModel.deck.first(where: { $0.id == currentPageID }) else { return }
+        Usage.shared.laptopPager(next: true)
         advanceToNextPage(from: entry)
     }
 
     private func laptopGoToPreviousPage() {
         guard let currentPageID, let entry = viewModel.deck.first(where: { $0.id == currentPageID }) else { return }
+        Usage.shared.laptopPager(next: false)
         retreatToPreviousPage(from: entry)
     }
 
