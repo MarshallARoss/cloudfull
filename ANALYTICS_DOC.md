@@ -144,7 +144,7 @@ change, so a short frame in the middle of a fold or an unfold is not
 recorded as its own shape. On a regular iPhone the shape itself never
 changes. The exact new keys a regular iPhone's record carries are
 `secondsInPose.phone`, `foldable`, `startPose`, `runsOn`,
-`leftHandedSetting`, `switcherPick.*`, and
+`leftHandedSetting`, `modeSwitcherCancelled`, and
 `video.rotatedToFullscreenIn.phone`. A crash or a kill loses the seconds
 of whichever shape was current when it happened, the same way a crash
 loses the last few seconds of `secondsIn.<mode>` — both are credited only
@@ -181,7 +181,7 @@ on a change of shape/mode or at the end of a session.
 | `modeSwitch.<via>` | A switch between the Videos and Photos feeds, by how it was triggered (`via` = `chin`, `quickAction`, `notification`, `endPage`). | Exact integer, running total. |
 | `modeSwitchTo.<mode>` | Which feed a mode switch landed on. | Exact integer, running total. |
 | `modeSwitcherOpened` | The feed switcher was opened. | Exact integer, running total. |
-| `switcherPick.<tab>` | A pick in the feed switcher (`tab` = `videos`, `photos`, `settings`), or `same` for a re-pick of the tab already showing. | Exact integer, running total. |
+| `modeSwitcherCancelled` | The feed switcher was opened and the tab already showing was tapped again, so nothing changed. A pick of another tab is counted by `modeSwitch.chin`, `modeSwitchTo.<mode>`, or `settingsOpened`. | Exact integer, running total. |
 | `quickAction.<mode>` | The app was opened using a Home Screen quick action, by feed. | Exact integer, running total. |
 | `filterOn.<mode>.<name>` / `filterOff.<mode>.<name>` | A filter was turned on or off, by feed and filter name. | Exact integer, running total. |
 | `sortChanged.<mode>.<name>` | The sort order was changed, by feed and the new sort's name. | Exact integer, running total. |

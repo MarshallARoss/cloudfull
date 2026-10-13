@@ -237,7 +237,7 @@ def main():
     print("Taps and sheets")
     icons = {k.split('.',1)[1]: n for k,n in C.items() if k.startswith("appIcon.")}
     if icons: print("  app icon changed to: " + "  ".join(f"{k}={n}" for k,n in icons.items()))
-    print(f"  switcher opens {C.get('modeSwitcherOpened',0)}   mode switches to: videos {C.get('modeSwitchTo.videos',0)} photos {C.get('modeSwitchTo.photos',0)}   settings opens {C.get('settingsOpened',0)}   " + "  ".join(f"{k.split('.',1)[1]}={n}" for k,n in C.items() if k.startswith("setting.")))
+    print(f"  switcher opens {C.get('modeSwitcherOpened',0)}   cancelled (same tab) {C.get('modeSwitcherCancelled',0)}   mode switches to: videos {C.get('modeSwitchTo.videos',0)} photos {C.get('modeSwitchTo.photos',0)}   settings opens {C.get('settingsOpened',0)}   " + "  ".join(f"{k.split('.',1)[1]}={n}" for k,n in C.items() if k.startswith("setting.")))
     links = {k[len("settingsLink."):]: n for k,n in C.items() if k.startswith("settingsLink.")}
     if links: print("  settings links tapped: " + "  ".join(f"{k}={n}" for k,n in sorted(links.items(), key=lambda kv: -kv[1])))
     print(f"  show welcome {C.get('showWelcomeTapped',0)}   show onboarding again {C.get('showOnboardingAgainTapped',0)}   open iOS settings (reminder denied) {C.get('settingsOpenIOSSettingsTapped',0)}")
@@ -327,9 +327,8 @@ def main():
         print(f"  Split View: sessions={splitSessions}   left={leftSessions} ({poseMinutes.get('splitL',0):.0f} min)   right={rightSessions} ({poseMinutes.get('splitR',0):.0f} min)")
         msOpened = by_pose("modeSwitcherOpened")
         print("  switcher opens by pose: " + "  ".join(f"{p}={n}" for p, n in msOpened.items() if n))
-        for tab in ("videos", "photos", "settings", "same"):
-            sp = by_pose(f"switcherPick.{tab}")
-            if sum(sp.values()): print(f"    pick {tab}: " + "  ".join(f"{p}={n}" for p, n in sp.items() if n))
+        msCancelled = by_pose("modeSwitcherCancelled")
+        if sum(msCancelled.values()): print("    cancelled (same tab) by pose: " + "  ".join(f"{p}={n}" for p, n in msCancelled.items() if n))
         fsTotal = DC.get("video.rotatedToFullscreen", 0)
         # `video.rotatedToFullscreenIn.<pose>` is its own dedicated bump
         # (not a `@`-suffixed twin), written for `phone` too — read it
@@ -387,7 +386,7 @@ def main():
     import fnmatch as _fn
     # Key families the script matches with `startswith`, instead of naming each key.
     scanned = ["setting.", "filterOn.", "filterOff.", "sortChanged.", "shareTarget", "shareTargetRaw.", "shareKind.", "shrink.originalKept.", "notificationTap.", "deleted.videos.res.", "deleted.photos.res.", "video.served.", "daysToFirst.", "settingsLink.", "tip.tapped.", "tip.outcome.", "tip.unavailable.", "bin.restore.",
-               "secondsInPose.", "poseChange.", "afterDeleteByButton.", "video.rotatedToFullscreenIn.", "switcherPick.", "laptopPager.", "duoGrid.", "foldPlayback.", "foldResumeSeconds."]
+               "secondsInPose.", "poseChange.", "afterDeleteByButton.", "video.rotatedToFullscreenIn.", "laptopPager.", "duoGrid.", "foldPlayback.", "foldResumeSeconds."]
     unread = sorted(k for k in C if k not in named and not any(_fn.fnmatch(k, n) for n in named if "*" in n) and not any(k.startswith(p) for p in scanned))
     if unread: print("  counts not read by this script: " + "  ".join(f"{k}={C[k]}" for k in unread))
     # Lists the facts whose names do not appear in this file. A name

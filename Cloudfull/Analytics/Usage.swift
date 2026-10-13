@@ -380,13 +380,11 @@ final class Usage {
     /// replay.
     func livePlayed(byTap: Bool) { bump(byTap ? "livePlay.tap" : "livePlay.auto") }
     func switcherOpened() { bump("modeSwitcherOpened") }
-    /// A tab switcher pick, including a pick of Settings and a re-pick
-    /// of the tab already shown — neither counted before this. `mode`
-    /// is `AppMode.rawValue`, passed as a plain `String` to match every
-    /// other raw-value key in this file.
-    func switcherPicked(_ mode: String, same: Bool) {
-        bump(same ? "switcherPick.same" : "switcherPick.\(mode)")
-    }
+    /// A tap on the tab already shown in the tab switcher: the switcher
+    /// was opened and put away with no change. A pick of another tab is
+    /// already counted by `modeSwitch.chin`/`modeSwitchTo.<mode>` or
+    /// `settingsOpened`, so it is not counted again here.
+    func switcherCancelled() { bump("modeSwitcherCancelled") }
     func keepTapNoop(mode: Mode) { bump("keepTapOnAlreadyKept.\(mode.rawValue)") }
     func shrinkSheetOpened() { bump("shrink.sheet") }
     func shrinkCancelled() { bump("shrink.cancel") }
