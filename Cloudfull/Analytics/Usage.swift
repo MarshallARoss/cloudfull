@@ -276,6 +276,10 @@ final class Usage {
         let isStartPoseCorrection = !startPoseFinalized && at.timeIntervalSince(current.startedAt) <= 2
         startPoseFinalized = true
         if isStartPoseCorrection {
+            // A session that has already ended is sealed: its
+            // `startPose` fact is already written for good, so a
+            // provisional correction landing late must not reopen it.
+            guard current.endedAt == nil else { return }
             current.facts["startPose"] = newPose.rawValue
             return
         }
@@ -326,7 +330,7 @@ final class Usage {
     }
     /// How long playback took to resume after a fold stopped it,
     /// bucketed so the report reads a distribution, not a raw average.
-    /// `bucket` is one of `lt0_5`, `lt1`, `lt2`, `lt5`, `ge5`, `never`.
+    /// `bucket` is one of `lt2`, `lt5`, `ge5`, `never`, `left`.
     func foldResumeSeconds(bucket: String) {
         bump("foldResumeSeconds.\(bucket)", poseTwin: false)
     }

@@ -169,7 +169,7 @@ on a change of shape/mode or at the end of a session.
 | `<key>@<pose>` | A twin of a single real user event above, recorded only on the iPhone Duo. Gives the same count broken down by phone shape. Never added for a running total of any kind (bytes, seconds, or a count of several items, such as `secondsIn.<mode>` or `bin.emptied.<mode>.itemCount`), for `raise`/`set` facts, or for a key starting with `deleted.` or `shareTargetRaw.`. | Exact integer, running total. |
 | `startPose` | The phone shape the session started in. | One of the pose values above. |
 | `foldPlayback.<from>.<to>.kept` / `.stopped` | After a fold or an unfold while a video was playing on the Videos tab, whether that video was still playing 1 second later (`stopped` if not). | Exact integer, running total. |
-| `foldResumeSeconds.<bucket>` | Of the plays marked `stopped` above, how long after the fold the video played again (`bucket` = `lt2`, `lt5`, `ge5`, or `never`, each measured from the fold itself, not from the 1-second `stopped` check). | Exact integer, running total. |
+| `foldResumeSeconds.<bucket>` | Of the plays marked `stopped` above, how long after the fold the video played again (`bucket` = `lt2`, `lt5`, `ge5`, `never`, or `left`, each measured from the fold itself, not from the 1-second `stopped` check; `left` is a measurement cut short by a swipe away, the page disappearing, or the app leaving the foreground). Every `foldPlayback.*.stopped` count above is covered by exactly one of these five buckets, so they add up to it. | Exact integer, running total. |
 
 ### Feature counters
 

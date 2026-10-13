@@ -1946,25 +1946,51 @@ struct PlayerPageView: View {
                 return
             }
             Usage.shared.foldPlayback(from: from, to: to, kept: false)
-            // Resume-time buckets, all measured from the fold itself
-            // (`at`) — not from the real pause moment — so they agree
-            // with the `stopped` decision just made above. The walk
-            // starts at 2 s, one past the 1 s mark `stopped` was
-            // decided at, and is checked in order; the first bucket
-            // where playback has resumed wins. Past the widest named
-            // bucket, one more, generous wait decides `ge5` vs `never`.
+            // Resume-time buckets, all anchored to the fold itself
+            // (`at`), not to whichever checkpoint below happens to
+            // notice it. Each checkpoint asks "has `lastPlayAt` moved
+            // past `at` yet" — the persisted timestamp of the most
+            // recent play edge — rather than sampling `holder.isPlaying`:
+            // a resume that fires and is immediately paused again,
+            // between two checkpoints, still set `lastPlayAt` and so is
+            // still caught here, bucketed by its own timing rather than
+            // by whether it happens to still be playing when checked.
+            // The walk starts at 2 s, one past the 1 s mark `stopped`
+            // was decided at, and is checked in order; the first
+            // checkpoint where the edge has already landed wins. Past
+            // the widest named bucket, one more, generous wait decides
+            // `ge5` vs `never`.
+            //
+            // A cancellation reaching any of these waits — the page
+            // swiping away, disappearing, or the app leaving `.active`,
+            // same as the entry guard above — means the measurement
+            // never got to see an outcome of its own. That still
+            // counts as the fold's one resume bucket: `left`, gated by
+            // the same session check as every other bucket here, so a
+            // measurement orphaned by a session boundary never credits
+            // the next session. So every `stopped` gets exactly one
+            // resume bucket, named for whichever of these five ways it
+            // resolved.
+            @MainActor func leftIfCancelled() -> Bool {
+                guard Task.isCancelled else { return false }
+                if Usage.shared.current.id == sessionID { Usage.shared.foldResumeSeconds(bucket: "left") }
+                return true
+            }
             let thresholds: [(seconds: Double, bucket: String)] = [(2, "lt2"), (5, "lt5")]
             for (seconds, bucket) in thresholds {
                 let remaining = seconds - Date().timeIntervalSince(at)
                 if remaining > 0 { try? await Task.sleep(for: .seconds(remaining)) }
-                guard !Task.isCancelled, let playing = holder?.isPlaying, Usage.shared.current.id == sessionID else { return }
-                if playing { Usage.shared.foldResumeSeconds(bucket: bucket); return }
+                if leftIfCancelled() { return }
+                guard Usage.shared.current.id == sessionID else { return }
+                if let playAt = self.lastPlayAt, playAt > at { Usage.shared.foldResumeSeconds(bucket: bucket); return }
             }
             let maxWait = 30.0
             let remaining = maxWait - Date().timeIntervalSince(at)
             if remaining > 0 { try? await Task.sleep(for: .seconds(remaining)) }
-            guard !Task.isCancelled, let playing = holder?.isPlaying, Usage.shared.current.id == sessionID else { return }
-            Usage.shared.foldResumeSeconds(bucket: playing ? "ge5" : "never")
+            if leftIfCancelled() { return }
+            guard Usage.shared.current.id == sessionID else { return }
+            let resumed = self.lastPlayAt.map { $0 > at } ?? false
+            Usage.shared.foldResumeSeconds(bucket: resumed ? "ge5" : "never")
         }
     }
 

@@ -348,7 +348,10 @@ def main():
             # Buckets start at 2 s: `stopped` above is itself decided 1 s
             # after the fold, so every bucket here is measured from the
             # fold too, one past that 1 s mark — see `ANALYTICS_DOC.md`.
-            if rb: print("    resume time (of the ones that stopped): " + "  ".join(f"{b}={rb.get(b,0)}" for b in ("lt2", "lt5", "ge5", "never") if rb.get(b, 0)))
+            # `left` is a measurement cut short (swipe away, page gone,
+            # app backgrounded) rather than one that ran to an outcome.
+            # These five buckets add up to `stopped` above.
+            if rb: print("    resume time (of the ones that stopped): " + "  ".join(f"{b}={rb.get(b,0)}" for b in ("lt2", "lt5", "ge5", "never", "left") if rb.get(b, 0)))
         # Start pose: the shape each session began in, and session
         # length by that start pose (from the existing `sessionSeconds`).
         startPoseN = collections.Counter(); startPoseMinutes = collections.defaultdict(float)
