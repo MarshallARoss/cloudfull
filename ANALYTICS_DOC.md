@@ -215,7 +215,7 @@ on a change of shape/mode or at the end of a session.
 | `deleted.<mode>.sizeUnknown` | An item was deleted before its size could be read. | Exact integer, running total. |
 | `deleted.<mode>.res.<W>x<H>` | The exact pixel size of a deleted item, by feed. | Exact integer counter keyed by resolution, e.g. `deleted.videos.res.1920x1080`. |
 | `postsSeen.<mode>` | Posts seen in the feed. | Exact integer, running total. |
-| `swipes.<mode>` / `swipesBack.<mode>` | Swipes in the feed, and swipes that went backward. | Exact integer, running total. |
+| `swipes.<mode>` / `swipesBack.<mode>` | Swipes in the feed, and swipes that went backward. A page move made by a button (the trash button, pose 6's Previous/Next, Play Next) is not a swipe. | Exact integer, running total. |
 | `afterDelete.<mode>.back` / `.swipe` / `.stay` | What happened in the 5 seconds after a delete: swiped back, swiped on, or stayed. On the Duo's laptop pose (6), the Previous/Next buttons count here too, alongside a swipe. | Exact integer, running total. |
 | `afterDeleteByButton.<mode>.back` / `.swipe` | Of the above, the ones closed by a laptop-pose (6) Previous/Next button instead of a swipe. | Exact integer, running total. |
 | `bin.open` / `bin.preview` | The Bin was opened, or a bin item was previewed. | Exact integer, running total. |
