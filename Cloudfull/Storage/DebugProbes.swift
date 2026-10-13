@@ -11,6 +11,7 @@ import SwiftUI
 import SwiftData
 import Photos
 import os
+import UIKit
 
 // Every type in this file is DEBUG-only.
 #if DEBUG
@@ -573,6 +574,116 @@ enum ReplacementExporter {
                 continuation.resume()
             }
         }
+    }
+}
+
+/// Owner bug (Duo pose 5, `openTall`, VIDEOS tab): a tap on the expanded
+/// tab switcher's "Photos"/"Settings" segments does nothing, while the
+/// same switcher works on the Settings tab and in 1V. `FeedView`'s own
+/// root touch logger (`-cloudfull-log-touches`) already shows the touch
+/// reaches this app's view hierarchy at all. This type answers the other
+/// half: WHICH UIKit view actually receives it, so a live capture can
+/// show whether the switcher's own view is even in the hit chain, or
+/// something else wins the touch first.
+///
+/// A `UIGestureRecognizer` subclass, not a `UIWindow` subclass: a window
+/// subclass would need either a fresh window (this app has exactly one,
+/// made by `CloudfullSceneDelegate`) or a swizzle of the existing one.
+/// This needs neither. `attachIfNeeded()` adds one instance straight to
+/// the key window with `UIView.addGestureRecognizer(_:)`, the same way
+/// any other recognizer is attached.
+///
+/// Three properties keep it from ever being able to interfere with the
+/// touch it is only watching:
+/// - `cancelsTouchesInView = false` and `delaysTouchesBegan = false`:
+///   every other view and recognizer still gets the touch exactly as it
+///   would with this recognizer absent.
+/// - `shouldRecognizeSimultaneouslyWith` always returns `true`, so UIKit
+///   never holds another recognizer back waiting on this one.
+/// - `touchesBegan` always ends by setting `state = .failed`. This
+///   recognizer never reaches `.began`, so it can never itself become
+///   the one recognizer that wins a touch.
+///
+/// Logs through the same `Logger(subsystem: "com.cloudfull.app",
+/// category: "Touch")` pair (and the same `DiagnosticsLog`) the root
+/// touch logger uses, so both read with the same `xcrun simctl spawn
+/// <UDID> log stream --predicate 'subsystem == "com.cloudfull.app" and
+/// category == "Touch"'` pattern.
+///
+/// One line per touch:
+/// `hit_<x>,<y>_<Class0>[g:<n0>:<RecognizerClassNames>]_<Class1>[g:<n1>]_
+/// …_id:<accessibilityIdentifier|none>_label:<accessibilityLabel|none>`
+/// — the hit view and up to five superviews (six levels total, fewer if
+/// the chain is shorter), each tagged with its own gesture-recognizer
+/// count, the hit view alone also carrying its recognizers' own class
+/// names.
+final class HitTestProbeRecognizer: UIGestureRecognizer, UIGestureRecognizerDelegate {
+    private static let log = Logger(subsystem: "com.cloudfull.app", category: "Touch")
+
+    /// Only ever false → true. A second call — for example from a view
+    /// that remounts — is a no-op.
+    private static var attached = false
+
+    /// Called once, from the same `#if DEBUG` site `FeedView`'s own root
+    /// touch logger already uses.
+    static func attachIfNeeded() {
+        guard !attached else { return }
+        guard DiagnosticsGate.isOn("-cloudfull-log-touches") else { return }
+        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+              let window = scene.keyWindow else { return }
+        let recognizer = HitTestProbeRecognizer()
+        recognizer.delegate = recognizer
+        recognizer.cancelsTouchesInView = false
+        recognizer.delaysTouchesBegan = false
+        recognizer.delaysTouchesEnded = false
+        window.addGestureRecognizer(recognizer)
+        attached = true
+    }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        if let touch = touches.first, let window = view as? UIWindow {
+            Self.logHit(at: touch.location(in: window), in: window)
+        }
+        // Never `.began`. See this type's own header comment.
+        state = .failed
+    }
+
+    /// `true`, unconditionally — see this type's own header comment.
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+    ) -> Bool {
+        true
+    }
+
+    private static func logHit(at point: CGPoint, in window: UIWindow) {
+        let x = Int(point.x), y = Int(point.y)
+        guard let hitView = window.hitTest(point, with: nil) else {
+            let message = "hit_\(x),\(y)_nil"
+            log.notice("\(message, privacy: .public)")
+            DiagnosticsLog.shared.log("Touch", message)
+            return
+        }
+
+        var chain: [UIView] = [hitView]
+        while chain.count < 6, let next = chain.last?.superview {
+            chain.append(next)
+        }
+
+        let segments = chain.enumerated().map { index, view -> String in
+            let className = String(describing: type(of: view))
+            let recognizers = view.gestureRecognizers ?? []
+            guard index == 0 else { return "\(className)[g:\(recognizers.count)]" }
+            let names = recognizers.map { String(describing: type(of: $0)) }.joined(separator: ",")
+            return "\(className)[g:\(recognizers.count):\(names)]"
+        }
+
+        let identifier = hitView.accessibilityIdentifier ?? "none"
+        let label = hitView.accessibilityLabel ?? "none"
+
+        let message = "hit_\(x),\(y)_\(segments.joined(separator: "_"))_id:\(identifier)_label:\(label)"
+        log.notice("\(message, privacy: .public)")
+        DiagnosticsLog.shared.log("Touch", message)
     }
 }
 #endif

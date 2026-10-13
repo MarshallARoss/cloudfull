@@ -34,11 +34,40 @@ struct DeckEntry: Identifiable, Hashable {
     /// string per deck slot per body pass. On a deck of 10,000 entries, that is
     /// 10,000 allocations per swipe and per export progress tick.
     let id: String
+    /// True only for a session-only row `DeckViewModel.insertNext` splices
+    /// in. An ordinarily dealt entry is always `false`.
+    ///
+    /// A transient row deliberately reuses another entry's `position` —
+    /// `insertNext` has no real slot to give it, and allocating one from
+    /// `DeckOrder.nextSlot` would persist a row that is supposed to vanish
+    /// with the session. Every other site in this file that treats
+    /// `position` as a one-to-one slot-to-id mapping — `removeFromFuture`'s
+    /// exception recording, the vanished-asset path in
+    /// `performLibraryChange`, `persistSortedCursor`, `preloadableSlots` —
+    /// must check this flag and skip or special-case the row, rather than
+    /// trust its `position` at face value.
+    let isTransient: Bool
 
     init(assetID: String, position: Int) {
         self.assetID = assetID
         self.position = position
         self.id = "\(position)_\(assetID)"
+        self.isTransient = false
+    }
+
+    /// Builds a transient row for `insertNext`. `transientNonce` gives the
+    /// row its own `id` namespace — `"t<nonce>_<assetID>"` — disjoint from
+    /// every ordinarily dealt id (`"<position>_<assetID>"`), so a transient
+    /// row and the real entry it was copied from, or two transient rows
+    /// inserted back to back, can never collide. `position` still
+    /// duplicates the entry it was inserted after; see `isTransient`'s own
+    /// comment for why, and `insertNext` for the callers that must account
+    /// for it.
+    init(assetID: String, position: Int, transientNonce: Int) {
+        self.assetID = assetID
+        self.position = position
+        self.id = "t\(transientNonce)_\(assetID)"
+        self.isTransient = true
     }
 }
 
@@ -215,6 +244,13 @@ final class DeckViewModel: ObservableObject {
     /// triage feed offers, and it bounds the array whatever the library
     /// size.
     private let historyWindow = 20
+
+    /// Monotonically increasing. Its only job is to give each `insertNext`
+    /// row its own `id` namespace (`DeckEntry`'s `transientNonce` init), so
+    /// two transient rows can never collide. Never persisted: a transient
+    /// row never survives a relaunch, so the nonce does not need to
+    /// either, and it is free to restart at 0 every launch.
+    private var nextTransientNonce = 0
 
     init(library: PhotoLibraryService, modelContext: ModelContext) {
         self.library = library
@@ -543,9 +579,23 @@ final class DeckViewModel: ObservableObject {
     /// random-mode cursor: a date-sorted position is exactly as disposable
     /// as the random high-water mark. It must be durable before the
     /// process ends, not on every tap.
+    ///
+    /// If the current page is a transient row (`insertNext`), this walks
+    /// back to the nearest ordinarily dealt entry and persists that id
+    /// instead. `rebuildSortedDeck(resumeAssetID:)` looks the resume id up
+    /// in a freshly rebuilt, fully eligible sorted list — not a replay of
+    /// this exact `deck` array — so a transient row's own `assetID` would
+    /// resume wherever that video naturally falls in date order, which can
+    /// be nowhere near where the user actually was browsing. The entry
+    /// just before it is the real page the user was last on.
     private func persistSortedCursor() {
         guard isSortedMode, deck.indices.contains(currentIndex) else { return }
-        pendingSortedCursorAssetID = deck[currentIndex].assetID
+        var index = currentIndex
+        while deck.indices.contains(index), deck[index].isTransient {
+            index -= 1
+        }
+        guard deck.indices.contains(index) else { return }
+        pendingSortedCursorAssetID = deck[index].assetID
         scheduleCursorFlush()
     }
 
@@ -771,6 +821,77 @@ final class DeckViewModel: ObservableObject {
         return true
     }
 
+    // MARK: - Insert next (Duo right-page tap-to-play)
+
+    /// Makes `assetID` play immediately after the current page, for a tap
+    /// on a "Same day" grid tile or a "Biggest" list row (`DuoRightPage`,
+    /// the Duo book's pose 4/4W). `FeedView` then scrolls to the returned
+    /// id through its existing `advanceTargetID`/`advanceNonce` path, the
+    /// same one a trash tap's advance already uses.
+    ///
+    /// Inserts a **transient** `DeckEntry` (see that type's own comment)
+    /// right after `currentIndex`, reusing `deck[currentIndex].position`
+    /// rather than allocating a new slot from `order.nextSlot`: this
+    /// method has no real slot to give it, and allocating one would
+    /// persist a row that is supposed to vanish with the session.
+    ///
+    /// Invariants this method preserves:
+    /// - **Uniqueness.** The transient row gets its own `id` namespace
+    ///   (`DeckEntry`'s `transientNonce` init), disjoint from every
+    ///   ordinarily dealt id, so `ForEach(deck)` never sees a collision —
+    ///   even against the entry whose `position` it copies, and even
+    ///   against another transient row inserted moments earlier.
+    /// - **No new slot, nothing persisted.** `order.nextSlot` never
+    ///   advances, `appendCycle`/`appendLiteralCycle` are never called,
+    ///   and nothing is written to `DeckOrder`. `rebuildDeck`'s relaunch
+    ///   replay never reconstructs this entry: it lives only in the live,
+    ///   in-memory `deck` array for this session.
+    /// - **Cursor.** `pageBecameCurrent`'s high-water mark only advances
+    ///   when a page's `position` exceeds the stored cursor. This entry's
+    ///   `position` duplicates one already reached, so landing on it can
+    ///   never move `state.cursor` forward by itself.
+    /// - **No double playback.** `removeFromFuture(assetID:)` drops
+    ///   `assetID`'s own, ordinarily dealt occurrence ahead of the current
+    ///   page first (if any — the right page's queries usually draw from
+    ///   videos not yet reached this cycle), recording a real, honest
+    ///   slot exception for it. Without this, the same video could play
+    ///   twice: once now, transiently, and again when the pager later
+    ///   reaches its real slot.
+    /// - **Every position-keyed consumer skips the duplicate.**
+    ///   `removeFromFuture`, the vanished-asset path in
+    ///   `performLibraryChange`, `persistSortedCursor`, and
+    ///   `preloadableSlots` all check `isTransient` before trusting
+    ///   `position`, so this row's duplicated slot number cannot corrupt
+    ///   the persisted cycle log or misdirect a reconciliation anchor.
+    ///   See each method's own comment.
+    @discardableResult
+    func insertNext(assetID: String) -> String {
+        guard deck.indices.contains(currentIndex) else { return "" }
+        let current = deck[currentIndex]
+        guard assetID != current.assetID else { return current.id }
+        // Stale-tile guard: the right page's query can be a moment old by
+        // the time the tap lands. A video already queued for trash, or
+        // gone from the library entirely, must not play. A liked video is
+        // not stale — it is fine to play, just already kept — so this
+        // does not call `resolver.isEligible`, which would also exclude
+        // that case.
+        guard !resolver.isQueued(assetID), library.asset(for: assetID) != nil else { return current.id }
+
+        // Drops any occurrence of `assetID` already dealt ahead of the
+        // current page, so this video cannot play twice in one session.
+        // Safe to call unconditionally: in sorted mode it only removes
+        // the live duplicate (no exception, no cycle log to inform); in
+        // random mode the slot it records is real, since that slot
+        // genuinely held `assetID` at deal time.
+        removeFromFuture(assetID: assetID)
+
+        nextTransientNonce += 1
+        let entry = DeckEntry(assetID: assetID, position: current.position, transientNonce: nextTransientNonce)
+        deck.insert(entry, at: currentIndex + 1)
+        refreshPreloadableSlots()
+        return entry.id
+    }
+
     /// Marks a video seen. Called only once its player item actually
     /// reaches `.readyToPlay` — see `PlayerPageView`. A video that failed
     /// to load, such as a dropped iCloud stream or a network error, is
@@ -914,11 +1035,28 @@ final class DeckViewModel: ObservableObject {
     /// Recording it also means a relaunch resumes on the next video,
     /// rather than on the one the user just shielded, which is the
     /// correct outcome.
+    ///
+    /// A transient row (`DeckEntry.isTransient`, from `insertNext`) is
+    /// skipped when recording slots: its `position` duplicates another
+    /// entry's, copied rather than freshly allocated, so recording it as
+    /// an exception would also mark that *other* entry's real, honest
+    /// slot for drop on the next relaunch — a bug, since nothing excluded
+    /// that entry. The transient row itself is still removed from the
+    /// live deck when it sits ahead of the current page, exactly like any
+    /// other matching entry; it just never touches the persisted cycle
+    /// log.
     func removeFromFuture(assetID: String) {
         var slots: [Int] = []
         var index = deck.count - 1
         while index >= 0 {
             if deck[index].assetID == assetID {
+                if deck[index].isTransient {
+                    if index > currentIndex {
+                        deck.remove(at: index)
+                    }
+                    index -= 1
+                    continue
+                }
                 slots.append(deck[index].position)
                 // The page on screen is left exactly where it is, even
                 // when it is this very asset.
@@ -1261,9 +1399,30 @@ final class DeckViewModel: ObservableObject {
         // surviving slot when that exact slot is gone, meaning the video
         // in view was the one deleted. Absolute slot numbers make both
         // cases one search.
+        //
+        // A transient row's `position` (`DeckEntry.isTransient`, from
+        // `insertNext`) duplicates another entry's, so this search tries
+        // the current entry's own `id` first — unique even for a
+        // transient row — and only falls back to the slot search above
+        // when that id itself is the one that vanished. An ordinary entry
+        // behaves exactly as before: its `id` always matches itself, so
+        // this is a strict refinement, not a behavior change, for every
+        // non-transient page.
+        let previousID = deck.indices.contains(currentIndex) ? deck[currentIndex].id : nil
         let previousPosition = deck.indices.contains(currentIndex) ? deck[currentIndex].position : 0
 
-        appendExceptions(slots: vanished.map(\.position), ids: vanished.map(\.assetID), to: order)
+        // A transient row never touches the persisted cycle log (see
+        // `DeckEntry.isTransient`): recording its duplicated position here
+        // would mark the *other*, ordinarily dealt entry at that same slot
+        // for drop on the next relaunch, even though nothing excluded it.
+        // It is still dropped from the live deck below, through
+        // `survivors`, if its asset really left the library.
+        let vanishedForExceptions = vanished.filter { !$0.isTransient }
+        appendExceptions(
+            slots: vanishedForExceptions.map(\.position),
+            ids: vanishedForExceptions.map(\.assetID),
+            to: order
+        )
 
         var newDeck = survivors
         if !added.isEmpty {
@@ -1273,7 +1432,9 @@ final class DeckViewModel: ObservableObject {
             state.seed = Int64(bitPattern: seed)
         }
 
-        let newCursor = newDeck.firstIndex { $0.position >= previousPosition } ?? max(newDeck.count - 1, 0)
+        let newCursor = previousID.flatMap { id in newDeck.firstIndex { $0.id == id } }
+            ?? newDeck.firstIndex { $0.position >= previousPosition }
+            ?? max(newDeck.count - 1, 0)
 
         deck = newDeck
         currentIndex = min(max(newCursor, 0), max(newDeck.count - 1, 0))
@@ -1706,6 +1867,15 @@ final class DeckViewModel: ObservableObject {
     /// to `deck`'s bounds. Stores each surviving entry's `position`,
     /// rather than the index itself. Call this at every site that assigns
     /// `currentIndex`.
+    ///
+    /// A transient row (`DeckEntry.isTransient`, from `insertNext`)
+    /// contributes no `position` of its own: it duplicates the entry it
+    /// was inserted after, and that entry's `position` is already in this
+    /// set whenever it is still in the window. Including the duplicate
+    /// would not change the `Set`'s membership, but `refreshWarmWindow`
+    /// also reads `preloadableSlots.contains($0.position)` per deck
+    /// entry — keying strictly off real slots here keeps that check
+    /// meaningful for a transient row.
     private func refreshPreloadableSlots() {
         guard !deck.isEmpty else {
             preloadableSlots = []
@@ -1719,7 +1889,7 @@ final class DeckViewModel: ObservableObject {
             refreshWarmWindow()
             return
         }
-        preloadableSlots = Set(deck[lower...upper].map(\.position))
+        preloadableSlots = Set(deck[lower...upper].filter { !$0.isTransient }.map(\.position))
 
         refreshWarmWindow()
     }

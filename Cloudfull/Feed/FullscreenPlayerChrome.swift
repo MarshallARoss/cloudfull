@@ -8,11 +8,13 @@
 
 import SwiftUI
 
-/// The minimal chrome shown over a rotated, fullscreen video.
+/// The minimal chrome shown over a full-bleed, fullscreen video.
 /// `PlayerPageView` mounts this view only while `isFullscreen` is true,
-/// inside the same rotated canvas as the video itself, so it rotates with
-/// the video and reads upright in the user's hand. This view never reads
-/// `deviceStance` or applies its own rotation.
+/// inside the same canvas as the video itself. The window is really
+/// landscape by then (R4, real interface rotation — see
+/// `PlayerPageView.windowIsLandscape`'s own comment), so this lays out
+/// directly in that space and reads upright with no rotation of its
+/// own to apply. This view never reads a device or window orientation.
 ///
 /// Hidden by default. A tap anywhere on the stage toggles `revealed`; that
 /// tap gesture lives on `PlayerPageView`, not here, since this view only
@@ -36,6 +38,14 @@ struct FullscreenPlayerChrome: View {
     /// read-only hairline.
     let progress: Double
     let isMuted: Bool
+    /// Owner correction (Opus wireframe compare, pose 1H): the Duo's
+    /// own 1H wireframe reads "all controls hide" — nothing but the
+    /// video and the iCloud ring, not even this read-only hairline
+    /// (see `hairline`'s own comment for why it is normally
+    /// unconditional). `false` only for `duoLayout.pose == .closed`;
+    /// a regular iPhone's own fullscreen keeps the hairline exactly
+    /// as it already had it.
+    let showsHairline: Bool
     let onDismiss: () -> Void
     let onToggleMute: () -> Void
 
@@ -54,7 +64,9 @@ struct FullscreenPlayerChrome: View {
                 controls
                     .transition(.opacity)
             }
-            hairline
+            if showsHairline {
+                hairline
+            }
 
             // `fullscreen_overlay` lives on its own leaf, not on this `ZStack`
             // directly. A bare `.accessibilityIdentifier` on a group applies to

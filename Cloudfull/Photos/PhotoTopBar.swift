@@ -20,21 +20,74 @@ struct PhotoTopBar: View {
     @Binding var isLiveOn: Bool
     let safeAreaTop: CGFloat
     let onOpenBinRequested: () -> Void
+    /// Mirrored-layout round: true when the host's own `DuoLayout
+    /// .isMirrored` reads true — see `FeedView.topChrome`'s identical
+    /// mirror for the reasoning. Default `false`, pixel-identical to
+    /// before this round.
+    ///
+    /// Decision 1 (owner, 2026-10-12): "the heart to delete got
+    /// mirrored. Don't do that." `PhotoFeedView` now always passes
+    /// `false` here — this row's own order must stay exactly as if
+    /// not mirrored even in a mirrored window; only `ChinNavigation`
+    /// (the tab switcher) still moves. `row`'s `if isMirrored` branch
+    /// below is left in place rather than removed, but it is
+    /// unreachable from `PhotoFeedView` as of this decision.
+    var isMirrored: Bool = false
+    /// Non-nil on the Duo poses that place this row themselves —
+    /// `DuoLayout.photosTopRowRect` — in true window space. `nil` keeps
+    /// the original padding placement below, byte-for-byte: regular
+    /// iPhone, `.tent`.
+    var placement: CGRect? = nil
+    /// `true` only on poses 3/4 (`.openWide`/`.book`), where the row
+    /// starts flush at the window's own leading edge and the display's
+    /// rounded top corner is big enough to clip the Live button there.
+    var clearsCorner: Bool = false
 
     @ObservedObject private var photoOptionsStore = PhotoOptionsStore.shared
 
     var body: some View {
-        HStack(alignment: .top, spacing: 8) {
-            liveToggleButton
-            // The photo-specific filter menu, distinct from the video
-            // feed's filter menu.
-            PhotoFilterMenuView(store: photoOptionsStore)
-            Spacer(minLength: 8)
-            counterCapsule
-            binButton
+        Group {
+            if let placement {
+                if clearsCorner {
+                    row
+                        .frame(width: placement.width, height: placement.height, alignment: .center)
+                        .containerCornerOffset(.top)
+                        .position(x: placement.midX, y: placement.midY)
+                } else {
+                    row
+                        .frame(width: placement.width, height: placement.height, alignment: .center)
+                        .position(x: placement.midX, y: placement.midY)
+                }
+            } else {
+                row
+                    .padding(.horizontal, 12)
+                    .padding(.top, StageGeometry.chromeTop(safeAreaTop: safeAreaTop))
+            }
         }
-        .padding(.horizontal, 12)
-        .padding(.top, StageGeometry.chromeTop(safeAreaTop: safeAreaTop))
+    }
+
+    private var row: some View {
+        HStack(alignment: .top, spacing: 8) {
+            // Review fix: Bin is the OUTERMOST control in the mirrored
+            // row, same as `FeedView.topChrome`'s own mirrored branch —
+            // the owner's rule, "Bin outermost, same as the mirrored
+            // top row." This row used to read counter-then-Bin.
+            if isMirrored {
+                binButton
+                counterCapsule
+                Spacer(minLength: 8)
+                PhotoFilterMenuView(store: photoOptionsStore)
+                liveToggleButton
+            } else {
+                liveToggleButton
+                // The photo-specific filter menu, distinct from the
+                // video feed's filter menu.
+                PhotoFilterMenuView(store: photoOptionsStore)
+                Spacer(minLength: 8)
+                counterCapsule
+                binButton
+            }
+        }
     }
 
     // MARK: - Live toggle

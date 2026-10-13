@@ -116,11 +116,16 @@ final class PhotoImagePipeline {
     /// cancel its request first.
     nonisolated(unsafe) private static let liveRequests = PhotoImageRequestRegistry()
 
-    /// The feed's post width, in pixels. Starts at a default value, so a
-    /// `setWindow` call before the first layout pass still caches a
-    /// usable size. `configure(widthPoints:scale:)` replaces it after
-    /// first layout.
-    private var widthPixels: CGFloat = 402 * 3
+    /// The feed's post width, in pixels. Starts at `0`, meaning
+    /// "unmeasured" — never a guessed device width. `UIScreen.main` is
+    /// deprecated, and a guess baked in here would also be wrong on
+    /// Duo's inner display, in a Mirroring window, or at a larger Dynamic
+    /// Type size. `configure(widthPoints:scale:)` replaces this with a
+    /// real value, read from the feed's own root geometry, on first
+    /// layout and again on every later change. `setWindow` reads
+    /// `targetSize` as its own "has `configure` run yet" check: see that
+    /// method's guard.
+    private var widthPixels: CGFloat = 0
 
     private init() {
         // A prepared 1206 × 1608 image is about 7.8 MB. The 72 MB byte
@@ -136,24 +141,56 @@ final class PhotoImagePipeline {
 
     // MARK: - Geometry
 
-    /// Called from `PhotoFeedView`'s root `GeometryReader`. Does nothing
-    /// unless the width changed, from a rotation or the first real
-    /// layout replacing the default width. A width change drops the
-    /// cache, because every cached image was prepared for the old size.
+    /// Called from `PhotoFeedView`'s root geometry read — `widthPoints`
+    /// from an `.onGeometryChange(for: CGFloat.self) { $0.size.width }`
+    /// on the feed's own container, `scale` from
+    /// `@Environment(\.displayScale)` — never from `UIScreen.main`. The
+    /// caller must call this again on every change to either input, not
+    /// only once at first layout: a fold, a Mirroring resize, or a
+    /// display-scale change (an external display, or the inner/outer
+    /// swap on Duo) all need the cache re-measured the same way a
+    /// rotation already does below.
+    ///
+    /// Does nothing unless the width changed, from a rotation, a fold, or
+    /// the first real layout replacing the unmeasured `0` default. A
+    /// width change drops the cache, because every cached image was
+    /// prepared for the old size.
     func configure(widthPoints: CGFloat, scale: CGFloat) {
         guard widthPoints > 0, scale > 0 else { return }
         let pixels = (widthPoints * scale).rounded()
         guard pixels != widthPixels else { return }
+        let hadNoWidth = widthPixels == 0
         widthPixels = pixels
         Self.manager.stopCachingImagesForAllAssets()
         cachedIDs.removeAll()
         cache.removeAllObjects()
         // The thumbnail box is a fixed size, independent of the post
         // width, so a rotation does not invalidate any thumbnail.
+        // Review fix: `setWindow`'s own `widthPixels > 0` guard can run,
+        // and skip, before this very call ever lands — see that
+        // method's own comment on why it still records `lastWindowIDs`
+        // when that happens. Nothing besides the feed's own NEXT
+        // prefetch trigger used to replay that skipped window; in
+        // practice "soon," but not guaranteed. Replaying it directly,
+        // the instant the first real width arrives, closes that gap
+        // instead of waiting on an unrelated caller to happen to retry.
+        if hadNoWidth, !lastWindowIDs.isEmpty {
+            setWindow(lastWindowIDs)
+        }
     }
 
     /// The one box every request and every caching call uses. See this
     /// type's doc comment for why the size is shared and not per asset.
+    ///
+    /// Before the first `configure(widthPoints:scale:)` call,
+    /// `widthPixels` is `0` and this is `CGSize.zero`. `setWindow` guards
+    /// against starting any caching at that size — see its own comment.
+    /// The per-post full-size request in `events(for:)` now polls this
+    /// same zero size instead of requesting at it: a request fired in
+    /// the instant before the feed's first layout pass completes used
+    /// to go out at a 0×0 box regardless, confirmed landing in practice
+    /// despite `configure` usually arriving first — see that method's
+    /// own comment for the wait.
     var targetSize: CGSize {
         CGSize(width: widthPixels, height: widthPixels * 2)
     }
@@ -224,6 +261,16 @@ final class PhotoImagePipeline {
         // a late prefetch trigger could restart the downloads
         // `suspend()` just stopped.
         guard !isSuspended else { return }
+        // No prefetch until `configure(widthPoints:scale:)` has measured
+        // a real width. Caching at the unmeasured `0` default would be
+        // wasted PhotoKit work, thrown away the moment the real size
+        // lands anyway — `configure` clears `cachedIDs` and the cache on
+        // every change. `lastWindowIDs` above is still recorded, so
+        // `configure`'s own first-real-width branch can replay this
+        // same window at the right size the moment it lands, rather
+        // than waiting on the feed's own next prefetch trigger to
+        // happen to retry it.
+        guard widthPixels > 0 else { return }
         let wanted = Set(assetIDs)
         let toStart = wanted.subtracting(cachedIDs)
         let toStop = cachedIDs.subtracting(wanted)
@@ -346,26 +393,58 @@ final class PhotoImagePipeline {
             // download running against video playback the user is
             // watching.
             let token = PhotoImagePipeline.liveRequests.register(thumbBox, requestBox)
+            // Review fix: the `Task.detached` below is unstructured — it
+            // has no `.task` of its own to tear down, so nothing ever
+            // cancelled it, and `Task.isCancelled` inside it never
+            // became true. The slow-photo delay and the width-wait loop
+            // could both poll forever against a stream nobody was
+            // reading any more. Holding the handle here and cancelling
+            // it alongside the PhotoKit requests below makes both
+            // checks real.
+            var delivery: Task<Void, Never>?
             continuation.onTermination = { _ in
                 PhotoImagePipeline.liveRequests.unregister(token)
                 thumbBox.cancel()
                 requestBox.cancel()
+                delivery?.cancel()
             }
-            Task.detached(priority: .userInitiated) {
+            delivery = Task.detached(priority: .userInitiated) {
                 #if DEBUG
                 // `-cloudfull-slow-photo <seconds>` delays the whole
                 // per-post delivery, not only the full-size frame; see
                 // `CloudfullApp.slowPhotoArgument`'s doc comment for why.
                 // The delay runs before either request starts. If the
-                // user scrolls the post away during the delay, its
-                // `.task` teardown cancels the stream before any
+                // user scrolls the post away during the delay,
+                // `onTermination` above cancels this task before any
                 // PhotoKit call.
                 if let delay = PhotoImagePipeline.slowPhotoDelay {
                     try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
                     guard !Task.isCancelled else { return }
                 }
                 #endif
-                let size = await PhotoImagePipeline.shared.targetSize
+                var size = await PhotoImagePipeline.shared.targetSize
+                // Review fix: `targetSize` reads `.zero` until `configure
+                // (widthPoints:scale:)`'s first real call — "in practice
+                // ... well before any post's own request" (see that
+                // property's own comment), but a request fired in the
+                // rare instant before it lands used to go out anyway, at
+                // a 0×0 box this call never meant to ask for. Waits
+                // instead of requesting, polling the same way the
+                // slow-photo delay above already does. `configure`'s own
+                // same-value guard means this never busy-loops once a
+                // real width lands, and a post scrolled away during the
+                // wait is cancelled by `onTermination` above, which
+                // cancels this task directly — not by any `.task`
+                // teardown of its own.
+                while size.width == 0 {
+                    guard !Task.isCancelled else { return }
+                    do {
+                        try await Task.sleep(nanoseconds: 50_000_000)
+                    } catch {
+                        return
+                    }
+                    size = await PhotoImagePipeline.shared.targetSize
+                }
                 guard let asset = PhotoLibraryService.fetchAsset(assetID) else {
                     continuation.yield(.failed)
                     continuation.finish()

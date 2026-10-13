@@ -16,11 +16,14 @@ import SwiftUI
 /// `DeckViewModel.apply(options:)`. This view never touches the deck.
 struct FilterMenuView: View {
     @ObservedObject var store: FeedOptionsStore
-    /// The ancestor `.accessibilityHidden(isFullscreen)` does not
+    /// The ancestor `.accessibilityHidden(hidesGlobalChrome)` does not
     /// reliably reach this view on this runtime. So the view clears its
-    /// own identifier while `isFullscreen` is true. `bin_open` and the
-    /// four rail buttons do the same.
-    let isFullscreen: Bool
+    /// own identifier while this is true — `FeedView.hidesGlobalChrome`,
+    /// which reduces to plain `isFullscreen` (the rotation hack) as of
+    /// build 1's fix, step 2. `bin_open` and the four rail buttons do
+    /// the same, directly against `isFullscreen` — see
+    /// `FeedView.hidesGlobalChrome`'s own comment for why.
+    let hidesChrome: Bool
 
     var body: some View {
         Menu {
@@ -65,10 +68,24 @@ struct FilterMenuView: View {
         .buttonBorderShape(.capsule)
         .controlSize(.small)
         .tint(.white)
+        // Owner re-adapt (Opus wireframe compare, Duo pose 6): see
+        // `FeedView.muteButton`'s identical comment — `.controlSize(.small)`
+        // draws the icon-only case at about 32pt, under Apple's own
+        // 44×44pt minimum tap target.
+        //
+        // Owner re-adapt (18 Pro regression check, round-4 pass): see
+        // `FeedView.muteButton`'s identical comment — `.frame(minWidth:
+        // minHeight:)` grew this view's own LAYOUT size too, shifting
+        // `FeedView.topChrome`'s own row on a regular iPhone. Same
+        // padding/contentShape/negated-padding trick: the filter-count
+        // badge still grows the pill past 44pt on its own, unclipped.
+        .padding(6)
+        .contentShape(Rectangle())
+        .padding(-6)
         // Sections must not reorder when the menu opens upward. Tests and
         // people find items by their position on screen.
         .menuOrder(.fixed)
-        .accessibilityIdentifier(isFullscreen ? "" : "feed_filter_button")
+        .accessibilityIdentifier(hidesChrome ? "" : "feed_filter_button")
         .accessibilityLabel(accessibilityLabel)
         .accessibilityHint("Opens sort and filter options for the feed")
     }

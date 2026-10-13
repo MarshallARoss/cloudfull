@@ -9,6 +9,7 @@
 import SwiftUI
 import UIKit
 import UserNotifications
+import os
 
 /// A long press on the home-screen icon opens Cloudfull directly to Photos
 /// or Videos. A setting in Settings sets which mode is the default.
@@ -72,6 +73,31 @@ final class CloudfullAppDelegate: NSObject, UIApplicationDelegate {
         return true
     }
 
+    /// The pre-iOS 27 counterpart of
+    /// `CloudfullSceneDelegate.supportedInterfaceOrientations(for:)`.
+    /// `UIWindowScene.h` in the iOS 27.1 SDK marks that scene-delegate
+    /// method iOS 27.0+ only; `IPHONEOS_DEPLOYMENT_TARGET` is 26.0
+    /// (`project.pbxproj`), so on iOS 26 the system never calls it at
+    /// all and falls back to this older, app-delegate-level method
+    /// instead — without this override, iOS 26 would see no mask
+    /// override and read the Info.plist's `UISupportedInterfaceOrientations`
+    /// directly, which now lists all three orientations (landscape
+    /// included) for every screen, not only the ones that opt in.
+    ///
+    /// Same `RotationPolicy.shared.allowsLandscape` the scene delegate
+    /// reads, same `.allButUpsideDown` / `.portrait` formula — one
+    /// source of truth for the mask, asked for through whichever of the
+    /// two system methods this OS version actually calls.
+    /// `RotationPolicy.requestUpdate()` already calls
+    /// `setNeedsUpdateOfSupportedInterfaceOrientations()` (iOS 16+) on
+    /// every `allowsLandscape` change, which re-queries through
+    /// whichever method applies, so no separate invalidation path is
+    /// needed here for iOS 26.
+    func application(_ application: UIApplication,
+                     supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
+        RotationPolicy.shared.allowsLandscape ? .allButUpsideDown : .portrait
+    }
+
     func application(_ application: UIApplication,
                      configurationForConnecting connectingSceneSession: UISceneSession,
                      options: UIScene.ConnectionOptions) -> UISceneConfiguration {
@@ -108,10 +134,74 @@ extension CloudfullAppDelegate: UNUserNotificationCenterDelegate {
 /// through `performActionFor`.
 final class CloudfullSceneDelegate: NSObject, UIWindowSceneDelegate {
     func scene(_ scene: UIScene, willConnectTo session: UISceneSession, options connectionOptions: UIScene.ConnectionOptions) {
+        // `RotationPolicy.shared` outlives any one scene connection; this
+        // just hands it the one scene it needs to poke when its own
+        // `allowsLandscape` changes. See that type's own comment.
+        if let windowScene = scene as? UIWindowScene {
+            RotationPolicy.shared.scene = windowScene
+        }
         if let item = connectionOptions.shortcutItem {
             Self.open(item)
         }
     }
+
+    /// Decision A, real interface rotation with a dynamic orientation
+    /// mask (`design/duo/duo_audit_apple_checklist.md` §3). Replaces the
+    /// app's `UISupportedInterfaceOrientations` Info.plist value for
+    /// this scene — see that key's own build-setting comment in
+    /// `project.pbxproj`, which now lists all three orientations so this
+    /// override has landscape to grant.
+    ///
+    /// `RotationPolicy.shared` is the one switch; see its own doc
+    /// comment. R3's own build keeps `allowsLandscape` fixed at `false`
+    /// — the mask always resolves to `.portrait`, no visible change yet.
+    /// R4 is the step that lets `FeedView` drive it from the active
+    /// page's own content.
+    ///
+    /// Confirmed against `UIWindowScene.h` in the iOS 27.1 SDK: the
+    /// Objective-C selector is the single-parameter
+    /// `supportedInterfaceOrientationsForWindowScene:`, which Swift
+    /// imports as `supportedInterfaceOrientations(for:)` — NOT
+    /// `windowScene(_:supportedInterfaceOrientationsFor:)`, the shape of
+    /// the older, two-argument `UIApplicationDelegate` method
+    /// (`application(_:supportedInterfaceOrientationsFor:)`) this is
+    /// easy to confuse it with. Verified by compiling a conforming type
+    /// against the real SDK, not assumed from the header's prose alone.
+    /// Owner bug (closed + a tall video still rotating to landscape):
+    /// `hinge-closed-0` at the moment of the bad rotation rules out
+    /// the `.partial`-hinge pass-through this file's own
+    /// `RotationPolicy` comment blamed first. Before guessing again,
+    /// this logs what the system is ACTUALLY asking and what this
+    /// method ACTUALLY answers, every single call — not only the
+    /// SwiftUI-state-driven snapshots `PlayerPageView.logRotationPose`
+    /// already takes. Same `"Rotation"` log category, so
+    /// `xcrun simctl spawn <UDID> log stream --predicate 'subsystem ==
+    /// "com.cloudfull.app" and category == "Rotation"'` interleaves
+    /// both. `windowScene.session.persistentIdentifier` and the
+    /// screen's own size are logged specifically to answer whether
+    /// the closed/outer display is a SEPARATE `UIWindowScene` this
+    /// override is never consulted for — if the outer display's own
+    /// rotation is never preceded by a `mask_` line here, that is the
+    /// root cause, not anything `allowsLandscape` itself computes.
+    func supportedInterfaceOrientations(for windowScene: UIWindowScene) -> UIInterfaceOrientationMask {
+        let allowsLandscape = RotationPolicy.shared.allowsLandscape
+        let mask: UIInterfaceOrientationMask = allowsLandscape ? .allButUpsideDown : .portrait
+        #if DEBUG
+        if DiagnosticsGate.isOn("-cloudfull-log-rotation") {
+            let screenSize = windowScene.screen.bounds.size
+            let message = "mask_\(allowsLandscape ? "allButUpsideDown" : "portrait")"
+                + "_allowsLandscape-\(allowsLandscape)_scene-\(windowScene.session.persistentIdentifier)"
+                + "_screen-\(Int(screenSize.width))x\(Int(screenSize.height))"
+            Self.rotationMaskLog.notice("\(message, privacy: .public)")
+            DiagnosticsLog.shared.log("Rotation", message)
+        }
+        #endif
+        return mask
+    }
+
+    #if DEBUG
+    private static let rotationMaskLog = Logger(subsystem: "com.cloudfull.app", category: "Rotation")
+    #endif
 
     func sceneDidBecomeActive(_ scene: UIScene) {
         QuickActions.install()

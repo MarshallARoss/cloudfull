@@ -63,6 +63,18 @@ struct PhotoPostView: View {
     /// top is on screen before it crushes. See
     /// `PhotoFeedView.revealAbove(by:duration:)`.
     let onRevealRequested: (CGFloat, TimeInterval) -> Void
+    /// Mirrored-layout round: the host's own `DuoLayout.isMirrored` —
+    /// see `actionsRow`'s own comment. Default `false`, pixel-identical
+    /// to before this round.
+    ///
+    /// Decision 1 (owner, 2026-10-12): "the heart to delete got
+    /// mirrored. Don't do that." `PhotoFeedView` now always passes
+    /// `false` here — `actionsRow`'s own order must stay exactly as if
+    /// not mirrored even in a mirrored window; only `ChinNavigation`
+    /// (the tab switcher) still moves. `actionsRow`'s `if isMirrored`
+    /// branch below is left in place rather than removed, but it is
+    /// unreachable from `PhotoFeedView` as of this decision.
+    var isMirrored: Bool = false
 
     /// Free properties plus one resource fetch, loaded once at mount.
     /// `nil` only for the brief span before the first `.task(id:)`
@@ -1449,12 +1461,44 @@ struct PhotoPostView: View {
         // of usable width. `.fixedSize` on each label prevents
         // wrapping. A label that is too long crowds the row instead
         // of wrapping to a second line.
-        HStack(spacing: 14) {
-            keepButton
-            albumButton
-            shareButton
-            trashButton
-            Spacer(minLength: 0)
+        //
+        // Mirrored-layout round (owner call, relayed: "mirror it too,
+        // consistency for left-handed users"): the group reads in the
+        // other direction and sits flush against the trailing edge
+        // instead of the leading one. The mirrored branch's own
+        // `.frame(maxWidth: .infinity, alignment: .trailing)` below is
+        // what moves it there — it has no internal `Spacer` of its own
+        // to do that job the way the unmirrored branch's does.
+        //
+        // Review fix (owner call, relayed): the UNMIRRORED branch must
+        // stay byte-for-byte the pre-mirrored-round layout — both the
+        // original trailing `Spacer(minLength: 0)` (and the 14pt gap
+        // `HStack(spacing: 14)` already gives it) AND no added
+        // `.frame(maxWidth: .infinity, ...)` wrapping it at all, exactly
+        // as `git diff duo-before-night` shows it, rather than trusting
+        // the "already a no-op" reasoning an earlier version of this
+        // comment made for sharing that frame modifier across both
+        // branches. The two branches are kept as separate `Group`
+        // members below, each with its own modifiers, specifically so
+        // this one stays untouched; the mirrored branch is unchanged.
+        Group {
+            if isMirrored {
+                HStack(spacing: 14) {
+                    trashButton
+                    shareButton
+                    albumButton
+                    keepButton
+                }
+                .frame(maxWidth: .infinity, alignment: .trailing)
+            } else {
+                HStack(spacing: 14) {
+                    keepButton
+                    albumButton
+                    shareButton
+                    trashButton
+                    Spacer(minLength: 0)
+                }
+            }
         }
         .frame(height: 44)
         .padding(.horizontal, 16)

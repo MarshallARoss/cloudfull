@@ -11,6 +11,7 @@ import Foundation
 import UIKit
 import Photos
 import CoreLocation
+import os
 
 /// FeedView is a vertical pager. It shows one video per screen, from a
 /// persistent, shuffled deck.
@@ -70,17 +71,174 @@ struct FeedView: View {
 
     // MARK: - Landscape fullscreen
 
-    /// Publishes the device's physical stance. `start()` runs inside the
-    /// existing `.task`; `stop()` runs in `.onDisappear`.
-    /// `UIDevice.current.orientation` is read only inside this type, never
-    /// during a body pass.
-    @StateObject private var orientation = OrientationMonitor()
+    /// R5 (`design/duo/duo_audit_apple_checklist.md` Decision A/C):
+    /// `OrientationMonitor` is gone — no device orientation is read
+    /// anywhere in this file. `isFullscreen`/`allowsLandscape` below
+    /// read the window's own real shape and traits, through
+    /// `PlayerPageView`'s own `isFullscreen`/`allowsLandscapeCandidate`.
     @Environment(\.scenePhase) private var scenePhase
+    /// The vertical bar's edge on the iPhone Duo's closed screen; `nil`
+    /// on a regular iPhone, on the open Duo, and on anything below iOS
+    /// 27.1 (this plain stored property's default).
+    ///
+    /// Not read with a plain `@Environment(\.toolbarVerticalEdge)`
+    /// property: Swift refuses `@available` on a stored property, and
+    /// that environment key only exists from iOS 27.1, so a stored
+    /// property for it cannot be declared unconditionally on a type
+    /// whose own deployment target is lower. `ToolbarVerticalEdgeReader`
+    /// below is the standard workaround — a zero-size helper view that
+    /// is itself `@available`-marked, mounted only inside an
+    /// `if #available` branch in `body`, which writes into this plain,
+    /// always-available property instead.
+    ///
+    /// Review follow-up (SHOULD-FIX): because of the limitation above,
+    /// this value still starts `nil` for `body`'s own first pass on a
+    /// closed Duo — `ToolbarVerticalEdgeReader`'s `onChange(of:
+    /// initial: true)` (`DuoLayout.swift`) only updates this property
+    /// one render cycle later, not within that same first `body` call.
+    /// A true zero-lag fix needs the content that reads `duoLayout`
+    /// (effectively this whole view) to live INSIDE a child view that
+    /// itself declares `@Environment(\.toolbarVerticalEdge)` — the
+    /// only place SwiftUI actually injects the live value — since a
+    /// value a child reads can never flow back into a `let` the parent
+    /// already computed earlier in that same `body` call, state copy
+    /// or not. That is a real restructuring of this file's `body`, not
+    /// a local change, with no simulator available this pass to verify
+    /// it keeps a regular iPhone pixel-identical, so it is deferred
+    /// rather than risked here. `DuoLayout.seenFoldable` (review fix,
+    /// BLOCKER finding 1) already closes the one case this lag could
+    /// actually mis-mirror — the closed Duo's first-ever frame with
+    /// `leftHandedControls` on — for every launch after the first.
+    @State private var toolbarVerticalEdge: HorizontalEdge?
+    /// Mirrored-layout round: the owner's own "Left-handed controls"
+    /// setting (`SettingsView`'s own toggle) — fed to `DuoLayout.current`
+    /// below, the same "the caller reads it live" rule every other
+    /// parameter there already follows. Owner decision: "the Duo
+    /// always follows the system bar side; the Left-handed controls
+    /// setting applies only on regular iPhones." Review fix: this
+    /// setting now only takes effect with no system bar at all AND on
+    /// a device that is not a foldable at all — never on an iPhone
+    /// Duo, bar-on or bar-off, which always follows the bar/system
+    /// side instead; see `DuoLayout.isMirrored`'s own comment.
+    @AppStorage("settings.leftHandedControls") private var leftHandedControls = false
+    /// This frame's hinge reading, from `HingeReader` — `DuoLayout.swift`'s
+    /// own mirror of `ToolbarVerticalEdgeReader`, mounted the same way,
+    /// just below it. `nil` until the first `onHingeChange` delivery
+    /// (which has no `initial:` — see `HingeReader`'s own comment) or on
+    /// a device/OS with no hinge at all.
+    @State private var hingeStatus: DuoHingeStatus?
+    /// `DeviceHinge.angle.degrees` alongside `hingeStatus`, read by
+    /// `logRotationPose`'s DEBUG probe only.
+    @State private var hingeDegrees: Double?
+    /// Owner re-adapt (pose pass, book pose, second round): the book
+    /// pose's (4/4W) right-page grid's own real bottom edge, in
+    /// window space — replaces `DuoRightPageMetrics.shared`, an async
+    /// singleton `DuoRightPage.reload()` used to publish by hand after
+    /// its own PhotoKit query finished. That publish could lag or race
+    /// a page change (a new `DuoRightPage` mounts, a stale one's
+    /// `.onDisappear` clears the value, or the query simply has not
+    /// finished yet), which left `FeedPageContent.duoBookCaption`
+    /// reading a stale or `nil` value and falling back to its own old
+    /// screen-bottom anchor — the owner's own "sits at the bottom, not
+    /// under the grid" report.
+    ///
+    /// This value instead comes from `DuoRightGridBottomKey`, a
+    /// `PreferenceKey` `DuoRightPage`'s own grid reports from a
+    /// `GeometryReader` background — SwiftUI's own layout pass, not an
+    /// async callback, so there is nothing for it to race: whatever
+    /// the grid is ACTUALLY showing right now is what this reads,
+    /// every frame, including instantly on the first one. Caught once
+    /// here, on the ZStack both `DuoRightPage` and the pager (which
+    /// mounts `FeedPageContent`) are siblings inside, then threaded
+    /// down to each `FeedPageContent` the same way `safeAreaBottom`
+    /// already is.
+    @State private var duoRightGridBottomY: CGFloat?
+    /// Pose 6 (laptop), round 4: the active page's own caption date
+    /// line (`FeedPageContent.duoLaptopCaption`) — owner re-adapt:
+    /// "put the filters in the top right of the bottom section,
+    /// across and aligned from the date and time," so the Mute/
+    /// Filter/Bin group (`laptopDeckControls`) needs this line's real
+    /// vertical centre, not the caption block's as a whole.
+    ///
+    /// Owner re-adapt (round-4 review, BLOCKER): measured in a named
+    /// `"duoPage"` coordinate space, not `.global` — the per-page
+    /// `ZStack` the pager mounts (`FeedView.body`'s own
+    /// `ScrollView`/`LazyVStack`/`ForEach`) declares that space, so a
+    /// position read against it is relative to THAT page's own
+    /// content, not the screen. `.global` read the date line's real,
+    /// live screen position, which moves throughout any interactive
+    /// drag on the vertical pager — not only a committed page change —
+    /// so this value (and the group reading it) used to chase every
+    /// swipe/pull instead of staying put until a new page actually
+    /// settled active. A page's own content never moves relative to
+    /// its own `"duoPage"` origin mid-drag, only the page itself moves
+    /// on screen, so the named-space reading stays fixed through the
+    /// whole gesture and only changes when `isActive` genuinely picks
+    /// a different page — which, for a page sized to fill the window
+    /// the way every pager slide here is, reads as the same number
+    /// `.global` would have given once that page was fully settled at
+    /// the top. The same `GeometryReader`/`PreferenceKey` technique
+    /// `duoRightGridBottomY` just above already uses — see that
+    /// property's own comment — caught at the same ZStack, reported
+    /// only by the page `FeedPageContent.isActive` marks active (see
+    /// `LaptopCaptionDateLineCenterKey`'s own comment), so a preloaded
+    /// neighbor page can never steal it mid-swipe. `nil` outside pose
+    /// 6, or before the active page's own caption has laid out even
+    /// once this launch; `laptopDeckControls` now hides the group with
+    /// `.opacity(0)` for that one frame instead of guessing a Y.
+    @State private var laptopCaptionDateLineCenterY: CGFloat?
+    /// Pose 6 (laptop), round 4: the Mute/Filter/Bin group's
+    /// (`laptopDeckControls`) own real, just-laid-out frame, in
+    /// window space — `FeedPageContent.duoLaptopCaption` keeps its
+    /// own caption text clear of it, the same live-measurement
+    /// reasoning as `laptopCaptionDateLineCenterY` just above, mounted
+    /// once (never per-page), so there is no reduce ambiguity to guard
+    /// against here. `nil` outside pose 6, or before the group has
+    /// ever laid out this launch; `duoLaptopCaption` falls back to its
+    /// own old near-full-width clearance for that one frame.
+    ///
+    /// Mirrored-layout round: renamed from `laptopControlGroupLeadingX`
+    /// (a plain `CGFloat?`) to the whole frame — `duoLaptopCaption`
+    /// reads `.minX` unmirrored, `.maxX` mirrored; see
+    /// `LaptopControlGroupFrameKey`'s own comment.
+    @State private var laptopControlGroupFrame: CGRect?
+    /// Pose 3/4/4W's own Bin capsule (`chromeColumnBinCapsule`) — its
+    /// real, just-laid-out height, in window space. Empty (`Rail.hit`,
+    /// the same plain-circle height Mute/Filter use) until the bin has
+    /// items and the capsule grows downward for the count/size lines;
+    /// `chromeColumn` reads this to shift the WHOLE group (Mute,
+    /// Filter, Bin) up by half the growth, keeping Filter on the
+    /// rail's own vertical centre only while the bin is empty and
+    /// clear of the rail labels/video edge once it is not. One global
+    /// `GeometryReader` (`chromeColumn` mounts once, not per page), so
+    /// no `reduce`-ambiguity guard is needed here either — same
+    /// reasoning as `laptopControlGroupLeadingX` just above.
+    @State private var chromeBinCapsuleHeight: CGFloat = Rail.hit
+    /// Both read by `DuoLayout.classify` (Decision B,
+    /// `design/duo/duo_audit_apple_checklist.md` §4): neither axis alone
+    /// identifies a display — a 17 Pro resized large enough in iPhone
+    /// Mirroring also reads `.regular` width, which is exactly the audit's
+    /// F2 finding — so the classifier requires BOTH `horizontalSizeClass`
+    /// and `verticalSizeClass` to read `.regular` before calling a frame
+    /// fully open. Plain `@Environment` reads, no `#available` gate — size
+    /// classes predate iOS 27.1.
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
     /// The signal from whichever page's `PlayerPageView` currently reports
     /// `isFullscreen == true`, through `onFullscreenChanged`. This mirrors
     /// `isScrubbing`. Only the centered page can ever be fullscreen, so at
     /// most one page's callback ever reports `true`.
     @State private var isFullscreen = false
+    /// The id of whichever page's `PlayerPageView` most recently reported
+    /// `allowsLandscapeCandidate == true`, through `onAllowsLandscapeChanged`
+    /// — `nil` once that same page reports back `false`. `pageAllowsLandscape`
+    /// below derives from comparing this against `currentPageID`, rather
+    /// than storing the bool directly, so a page-change `.onChange` and a
+    /// child's own report can never race to overwrite each other: whichever
+    /// of the two fires last, the comparison still reads correctly, because
+    /// neither side writes a bool that the other could stomp on — see
+    /// `pageAllowsLandscape`'s own comment for the race this replaced.
+    @State private var landscapePageID: String?
 
     /// Owns the share flow end to end: the Wi-Fi guard, resolving a
     /// shareable file, presenting the system share sheet, and the album
@@ -103,6 +261,19 @@ struct FeedView: View {
     /// the `.task(id: shrinkVerificationCompletionKey)` in `body`, never
     /// read fresh during a body pass. See that task's comment for why.
     @State private var shrinkVerificationCache = "shrink_verify_none"
+    /// Every `.duoGuideMark` reporting view's own frame this frame —
+    /// see `DuoGuideMarksKey`'s own comment. Caught by the
+    /// `.onPreferenceChange` next to `duoRightGridBottomY`'s own,
+    /// rendered by `duoGuidesOverlay`.
+    @State private var duoGuideMarks: [DuoGuideMark] = []
+    /// Owner (pose pass): the legend's own dark backing covered real
+    /// content (pose 3's caption, then pose 5's own Mute/Filter —
+    /// `pose5TopRow` sits top-LEADING there, the same corner every
+    /// other pose left clear). No fixed corner is free in every pose,
+    /// so the legend now starts collapsed to a small toggle instead
+    /// of guessing a new corner that the NEXT pose fix could collide
+    /// with too. See `duoGuideLegend`'s own comment.
+    @State private var duoGuideLegendExpanded = false
     #endif
 
     /// This uses `.shared`, the same pattern `AssetKeyResolver` and
@@ -167,6 +338,86 @@ struct FeedView: View {
             && shareCoordinator.probeState == .idle
     }
 
+    /// True while fullscreen mode (a regular iPhone or a closed Duo
+    /// really rotated into landscape, R4) hides the GLOBAL chrome — the
+    /// top mute/filter/bin row (`overlayControls`) and the chin
+    /// (`ChinNavigation`).
+    ///
+    /// Build 1 fix, step 2: this used to also hide for `isLandscapeFit`
+    /// (a real-rotation horizontal video, open Duo only — the old
+    /// round's step 6). The round-3 wireframes (`DUO_POSES.md`) call
+    /// for pose 3's chrome to stay up instead: rail, chin, chrome,
+    /// caption, and status all visible over a wide video's own FIT
+    /// layout. `isLandscapeFit` itself is gone — see
+    /// `PlayerPageView.useVideoAspect`, its pose-gated replacement for
+    /// the stage/aspect-ratio math alone, with no chrome-hiding role of
+    /// its own left to inherit.
+    private var hidesGlobalChrome: Bool { isFullscreen }
+
+    /// `landscapePageID != nil && landscapePageID == currentPageID`, not a
+    /// stored bool.
+    ///
+    /// Review fix: the parent's own page-change `.onChange(of:
+    /// currentPageID)` used to reset a stored `pageAllowsLandscape = false`
+    /// directly, and the new page's own `onAllowsLandscapeChanged` report
+    /// set it `true` once that page qualified — two independent writers of
+    /// the same bool, with no guarantee which fired last. A fast swipe (or
+    /// a UI test) could land the new page's own "true" report BEFORE the
+    /// page-change `.onChange` ran, which then clobbered it back to
+    /// `false` — or the other order, leaving a stale `true` standing for a
+    /// page that never actually qualified. Deriving this from identity
+    /// instead removes the ordering dependency entirely: whichever of the
+    /// two fires last, the comparison below still reads correctly, because
+    /// neither side overwrites a bool the other one owns.
+    ///
+    /// BLOCKER fix: both ids start out `nil` (cold launch, a fresh
+    /// remount, or an empty deck), so a plain `==` reads `nil == nil` as
+    /// a match and grants landscape before any page ever reported in.
+    /// The explicit `!= nil` keeps that case `false`.
+    private var pageAllowsLandscape: Bool {
+        landscapePageID != nil && landscapePageID == currentPageID
+    }
+
+    /// Decision A's own `allowsLandscape` rule
+    /// (`design/duo/duo_audit_apple_checklist.md` §3, R4): "(active page
+    /// is a wide video && fullscreenAllowed && !dismissed) || hinge ==
+    /// .partiallyOpen". `pageAllowsLandscape` is the first clause,
+    /// reported up by whichever page is centered (`PlayerPageView
+    /// .allowsLandscapeCandidate`, through `onAllowsLandscapeChanged`).
+    /// The hinge clause is independent of any page's own content — a
+    /// partially-open hinge permits the OUTER display to rotate into the
+    /// tent (pose 2) even while a portrait video sits on screen, which
+    /// is what lets the 1H → 2 flow (closed, sideways → tent) begin
+    /// without first dismissing or changing videos.
+    ///
+    /// The one write site is the `.onChange(of: allowsLandscape, initial:
+    /// true)` in `body`, which hands this value to `RotationPolicy
+    /// .shared` — the single switch `CloudfullSceneDelegate
+    /// .supportedInterfaceOrientations(for:)` actually reads.
+    private var allowsLandscape: Bool {
+        pageAllowsLandscape || hingeStatus == .partial
+    }
+
+    /// `DuoLayout.current`, behind the `#available` check its own
+    /// declaration requires. Returns `DuoLayout.none` on anything below
+    /// iOS 27.1, so every caller downstream — today, `PlayerPageView` —
+    /// reads the same "no Duo furniture" value a regular iPhone always
+    /// had, with no availability check of its own to write.
+    private func resolvedDuoLayout(rootProxy: GeometryProxy) -> DuoLayout {
+        if #available(iOS 27.1, *) {
+            return DuoLayout.current(
+                proxy: rootProxy,
+                toolbarVerticalEdge: toolbarVerticalEdge,
+                horizontalSizeClass: horizontalSizeClass,
+                verticalSizeClass: verticalSizeClass,
+                hinge: hingeStatus,
+                hingeDegrees: hingeDegrees,
+                leftHandedControls: leftHandedControls
+            )
+        }
+        return .regularPhone(leftHandedControls: leftHandedControls)
+    }
+
     var body: some View {
         // The one place that measures the device's real top safe-area
         // inset. This reader sits above the pager's `.ignoresSafeArea()`,
@@ -177,25 +428,144 @@ struct FeedView: View {
         // safe area inside it, so both draw over the same rectangle.
         GeometryReader { rootProxy in
             let safeAreaTop = rootProxy.safeAreaInsets.top
+            // Step 9 (`design/duo/duo_audit_apple_checklist.md` §5): the
+            // 1H fullscreen ring's own bottom-leading inset, expressed
+            // as the real safe-area insets instead of a flat constant —
+            // same reasoning as `safeAreaTop` just above (this reader
+            // sits above the pager's own `.ignoresSafeArea()`, the one
+            // place these numbers are not already zeroed by it).
+            // Fullscreen is a real landscape window now (R4): SwiftUI
+            // reports `.bottom`/`.leading` relative to THIS view's own
+            // current frame, so these already read as the home
+            // indicator's and the camera cutout's real clearance in
+            // that orientation, not a device-specific guess.
+            let fullscreenSafeArea = rootProxy.safeAreaInsets
+            // Round 2 (Opus diagnosis, owner-reported pose 5/6/book
+            // misreads): `rootProxy` does not ignore the safe area, so
+            // `rootProxy.size` is the SAFE-AREA CONTENT rect, not the
+            // window — the same "reconstruct the real window" step
+            // `overlayControls`'s own nested `GeometryReader` already
+            // takes for `fullWindow`. `DuoLayout.current` below now
+            // normalises `occlusion`/`division` into this same TRUE
+            // window space (see that function's own comment), so any
+            // caller that still hands it `rootProxy.size` instead of
+            // this reconstructed size is comparing window-space
+            // regions against a safe-area-shrunk box — the root cause
+            // behind the book pose misreading as a tent (the vertical
+            // division's own height exceeded a landscape window's
+            // shorter safe-area height) and pose 5's own top row/rail
+            // anchors landing off-screen. Every call below that reads
+            // `duoLayout`'s own `occlusion`/`division`-derived geometry
+            // must use `windowSize`, never `rootProxy.size` — except
+            // `ChinNavigation`'s own `railBottom:` argument, deliberately
+            // left reading `rootProxy.size` below: that one also feeds
+            // `StageGeometry.bottomBand`'s fallback path for every
+            // regular-iPhone chin position, and changing its own
+            // containerSize would move the chin on a regular iPhone,
+            // which must stay byte-for-byte.
+            let windowSize = CGSize(
+                width: rootProxy.size.width + fullscreenSafeArea.leading + fullscreenSafeArea.trailing,
+                height: rootProxy.size.height + fullscreenSafeArea.top + fullscreenSafeArea.bottom
+            )
+            // Classified synchronously from this same proxy, every pass —
+            // no debounce. Audit finding F3's own fix
+            // (`design/duo/duo_audit_apple_checklist.md`): an earlier
+            // version withheld a changed `pose` for 250 ms to hide a
+            // transient misclassification from a stale cross-display
+            // `.division` frame — a frame `DuoLayout.current`'s own
+            // `windowBounds.contains(frame)` containment filter (see that
+            // function's own comment) already removes at the source, so
+            // the debounce delayed every REAL transition (a fold, an
+            // unfold, a Mirroring resize) for no remaining benefit.
+            // `.animation(.default, value: duoLayout.pose)` below, not a
+            // debounce, is what smooths a real transition's layout jump.
+            let duoLayout = resolvedDuoLayout(rootProxy: rootProxy)
             ZStack {
-            content(safeAreaTop: safeAreaTop)
+            // Zero-size; only ever updates `toolbarVerticalEdge` above.
+            // See that property's own comment for why the read is
+            // confined to this helper rather than a plain `@Environment`
+            // property on `FeedView` itself.
+            if #available(iOS 27.1, *) {
+                ToolbarVerticalEdgeReader { toolbarVerticalEdge = $0 }
+                // Zero-size; only ever updates `hingeStatus`/`hingeDegrees`
+                // above. Mounted right next to `ToolbarVerticalEdgeReader`
+                // — see `HingeReader`'s own comment for why its first
+                // delivery, unlike that reader's, may arrive after this
+                // frame.
+                HingeReader { status, degrees in
+                    hingeStatus = status
+                    hingeDegrees = degrees
+                }
+            }
+            content(safeAreaTop: safeAreaTop, fullscreenSafeArea: fullscreenSafeArea, duoLayout: duoLayout, containerSize: windowSize)
             // The whole global chrome layer (mute, the shrink progress
-            // capsule, the counters, the bin) hides while fullscreen is
-            // on. Each page's own `bottomScrim` and `FeedPageContent` in
-            // `pager` hide too.
-            overlayControls
-                .opacity(isFullscreen ? 0 : 1)
-                .allowsHitTesting(!isFullscreen)
-                .accessibilityHidden(isFullscreen)
+            // capsule, the counters, the bin) hides while `isFullscreen`
+            // (the rotation hack) is on — see `hidesGlobalChrome`'s own
+            // comment. Each page's own `bottomScrim` and `FeedPageContent`
+            // in `pager` hide on plain `isFullscreen` too.
+            overlayControls(duoLayout: duoLayout)
+                .opacity(hidesGlobalChrome ? 0 : 1)
+                .allowsHitTesting(!hidesGlobalChrome)
+                .accessibilityHidden(hidesGlobalChrome)
             // Mounted once here, in the global overlay, never inside
             // `FeedPageContent`. `FeedPageContent` is instantiated once
             // per mounted page and would produce up to three
             // `chin_nav_button` elements.
+            //
+            // `railBottom` is 0 (its default) on every other host
+            // (`SettingsView`, `PhotoFeedView`), which keeps the chin's
+            // plain fixed anchor there with no dependence on this
+            // view's own geometry at all. Only here, in Videos mode,
+            // is there a real rail for the chin to ever need to clear.
             ChinNavigation(bottomBand: StageGeometry.bottomBand(safeAreaTop: safeAreaTop,
-                                                               containerSize: rootProxy.size))
-                .opacity(isFullscreen ? 0 : 1)
-                .allowsHitTesting(!isFullscreen)
-                .accessibilityHidden(isFullscreen)
+                                                               containerSize: rootProxy.size),
+                           railBottom: duoLayout.railBottom(safeAreaTop: safeAreaTop, safeAreaBottom: fullscreenSafeArea.bottom, containerSize: rootProxy.size),
+                           railAlignedCenter: duoLayout.railAlignedChinCenter(safeAreaTop: safeAreaTop, safeAreaBottom: fullscreenSafeArea.bottom, containerSize: windowSize),
+                           railAlignedTopClamp: duoLayout.railAlignedTopClamp(containerSize: windowSize, safeAreaBottom: fullscreenSafeArea.bottom),
+                           safeAreaBottom: fullscreenSafeArea.bottom,
+                           isMirrored: duoLayout.isMirrored)
+                .opacity(hidesGlobalChrome ? 0 : 1)
+                .allowsHitTesting(!hidesGlobalChrome)
+                .accessibilityHidden(hidesGlobalChrome)
+                // "chin" is marked INSIDE `ChinNavigation`, on the
+                // small `switcher(...)` view itself, not here — this
+                // call site's own frame is the whole window (its
+                // `GeometryReader`/`ZStack(alignment: .bottomTrailing)`
+                // own body), not the visible button. Owner re-adapt
+                // (pose pass): the first round marked this coarser
+                // outer frame; tightened once the owner pointed out
+                // the box was far bigger than the circle on screen.
+            // Step 12: the book pose's (4/4W) right page — mounted once
+            // here, never inside `FeedPageContent`, for the same reason
+            // `ChinNavigation` is — see `DuoRightPage`'s own header
+            // comment. `currentAssetID` comes from the pager's own
+            // cursor (`currentPageID`), not `viewModel.currentIndex`:
+            // the two can disagree for a frame during a prune/reanchor,
+            // and `currentPageID` is what the pager itself is actually
+            // centred on right now.
+            if duoLayout.pose == .book,
+               let rightPageRect = duoLayout.rightPage(containerSize: windowSize, safeAreaTop: safeAreaTop),
+               let currentAssetID = currentPageID.flatMap({ id in viewModel.deck.first(where: { $0.id == id })?.assetID }) {
+                DuoRightPage(
+                    currentAssetID: currentAssetID,
+                    rect: rightPageRect,
+                    viewModel: viewModel,
+                    trashService: trashService,
+                    onPlay: playNextFromRightPage
+                )
+                // Round 2: `rightPageRect` is now in TRUE window space
+                // (`windowSize`, above). Without `.ignoresSafeArea()`
+                // here, this view's own `.position()` would still be
+                // read inside `rootProxy`'s own safe-area-shrunk local
+                // space — the same mismatch bug, just on this one
+                // mount — the same fix `ChinNavigation`'s own body
+                // already applies to itself, and the pager applies to
+                // the whole `ScrollView`.
+                .ignoresSafeArea()
+                .opacity(hidesGlobalChrome ? 0 : 1)
+                .allowsHitTesting(!hidesGlobalChrome)
+                .accessibilityHidden(hidesGlobalChrome)
+            }
             if viewModel.isApplyingOptions {
                 // A visible loading state while a filter or sort change
                 // re-deals the feed. Blocks taps under it. The pill
@@ -239,17 +609,92 @@ struct FeedView: View {
             // `pool_total_`, `pool_filtered_`, and `main_stalls_` need to
             // keep reading independent of which mode is on screen.
             // `trash_rows_` lives there for the same reason.
+            //
+            // Drawn last, above every other child in this ZStack
+            // (including `overlayControls`/`ChinNavigation`), so the
+            // guides are never hidden behind real chrome — see
+            // `duoGuidesOverlay`'s own comment.
+            if Self.showsDuoGuides {
+                // Owner (round-4 pass): every mark drew ~82pt (laptop)
+                // or ~59pt (pose 5) too low — exactly `safeAreaTop` for
+                // each pose. This whole overlay positions in TRUE
+                // window space (`windowSize`, every DuoLayout rect, and
+                // every `.duoGuideMark`'s own `.global` reading), but
+                // without `.ignoresSafeArea()` here, its own
+                // `.position()` calls were read inside `rootProxy`'s
+                // safe-area-SHRUNK local space instead — `(0,0)` there
+                // sits `safeAreaTop` below true window `(0,0)`. The
+                // exact mismatch `DuoRightPage`'s own mount comment
+                // already documents, and `ChinNavigation`'s own body
+                // and the pager's own `ScrollView` already both apply
+                // this same fix to themselves — this mount was simply
+                // missing it.
+                duoGuidesOverlay(duoLayout: duoLayout, safeAreaTop: safeAreaTop, safeAreaInsets: fullscreenSafeArea, containerSize: windowSize)
+                    .ignoresSafeArea()
+            }
             #endif
             }
             .frame(width: rootProxy.size.width, height: rootProxy.size.height)
+            // Smooths a real pose transition (a fold, an unfold, a
+            // Mirroring resize) instead of the removed 250 ms debounce —
+            // see `duoLayout`'s own comment above. A regular iPhone's
+            // `pose` never changes (always `.regularPhone`), so this is a
+            // no-op there: zero risk to the "byte-for-byte" promise.
+            .animation(.default, value: duoLayout.pose)
+            // See `duoRightGridBottomY`'s own comment. This ZStack is
+            // the nearest ancestor both `DuoRightPage` and the pager
+            // (which mounts `FeedPageContent`) sit inside as siblings,
+            // so it is where `DuoRightGridBottomKey`'s bubbled-up value
+            // is caught, once, and handed down from here.
+            .onPreferenceChange(DuoRightGridBottomKey.self) { duoRightGridBottomY = $0 }
+            // Same catch point, same reasoning, for pose 6's own pair
+            // of live measurements — see `laptopCaptionDateLineCenterY`/
+            // `laptopControlGroupFrame`'s own comments.
+            .onPreferenceChange(LaptopCaptionDateLineCenterKey.self) { laptopCaptionDateLineCenterY = $0 }
+            .onPreferenceChange(LaptopControlGroupFrameKey.self) { laptopControlGroupFrame = $0 }
+            // Same catch point, same reasoning, for pose 3/4/4W's own
+            // Bin capsule height — see `chromeBinCapsuleHeight`'s own
+            // comment.
+            .onPreferenceChange(ChromeBinCapsuleHeightKey.self) { chromeBinCapsuleHeight = $0 }
+            #if DEBUG
+            // Same catch point, same reasoning, for every
+            // `.duoGuideMark` reporting view — see `DuoGuideMarksKey`'s
+            // own comment.
+            .onPreferenceChange(DuoGuideMarksKey.self) { duoGuideMarks = $0 }
+            #endif
         }
-        // Hides the status bar and home indicator while fullscreen is on.
-        // This is safe for the stage geometry. The pager and
-        // `overlayControls` both already `.ignoresSafeArea()`, so
-        // `proxy.size` — the only input to the stage math — does not
-        // move when the inset does.
-        .statusBarHidden(isFullscreen)
-        .persistentSystemOverlays(isFullscreen ? .hidden : .automatic)
+        // Hides the status bar and home indicator while `hidesGlobalChrome`
+        // (`isFullscreen`) is on, the same chrome-hide condition
+        // `overlayControls`/`ChinNavigation` already use. This is safe
+        // for the stage geometry. The pager and `overlayControls` both
+        // already `.ignoresSafeArea()`, so `proxy.size` — the only
+        // input to the stage math — does not move when the inset does.
+        .statusBarHidden(hidesGlobalChrome)
+        .persistentSystemOverlays(hidesGlobalChrome ? .hidden : .automatic)
+        // R4: the one write site for `RotationPolicy.shared` — see
+        // `allowsLandscape`'s own comment. `initial: true` syncs the
+        // scene's mask the moment this view first appears, not only on
+        // the next change; a same-value write is already a no-op inside
+        // `RotationPolicy` itself. `RotationPolicy` needs no `#available`
+        // gate of its own — every API it calls (`UIWindowScene`,
+        // `setNeedsUpdateOfSupportedInterfaceOrientations`) predates this
+        // app's iOS 26.0 deployment target; only the SCENE DELEGATE
+        // method that reads `allowsLandscape` back out
+        // (`supportedInterfaceOrientations(for:)`) is iOS 27-gated, by
+        // the OS itself simply never calling it on an older one.
+        .onChange(of: allowsLandscape, initial: true) { _, newValue in
+            RotationPolicy.shared.update(allowsLandscape: newValue)
+        }
+        // `RootView`'s mode `switch` unmounts this view on a Photos/
+        // Settings switch (see that type's own comment) — the
+        // `.onChange` above never fires again once that happens, so a
+        // landscape grant made just before leaving would otherwise sit
+        // there forever. Clears it on the way out; `initial: true`
+        // above re-asserts the current page's own value the moment
+        // this view is mounted again.
+        .onDisappear {
+            RotationPolicy.shared.update(allowsLandscape: false)
+        }
         .task {
             viewModel.start()
             trashService.start()
@@ -259,7 +704,6 @@ struct FeedView: View {
             // the main actor.
             AlbumListCache.shared.prewarm()
             currentPageID = viewModel.currentEntryID
-            orientation.start()
             #if DEBUG
             // A no-op unless `-cloudfull-reset-stalls` was passed at
             // launch. When it was, the watchdog zeroes its counters and
@@ -268,24 +712,11 @@ struct FeedView: View {
             MainThreadWatchdog.shared.feedDidAppear()
             #endif
         }
-        .onDisappear {
-            orientation.stop()
-        }
-        // Device-orientation notifications do not arrive while the app is
-        // backgrounded. A user who rotates back to portrait while
-        // backgrounded would otherwise return to a stale landscape
-        // stance. This is the one place the monitor is polled rather than
-        // pushed. Returning to the foreground is exactly when a missed
-        // change must be reconciled.
+        // The cursor write happens off the page-change tick, so the app
+        // leaving the foreground is what makes it durable.
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active {
-                orientation.refresh()
-            } else {
-                // The cursor write happens off the page-change tick, so
-                // the app leaving the foreground is what makes it
-                // durable.
-                viewModel.flushPendingWrites()
-            }
+            guard phase != .active else { return }
+            viewModel.flushPendingWrites()
         }
         // `viewModel.currentEntryID` is the single source of truth for
         // which slot the view model considers current. This is the other
@@ -313,6 +744,15 @@ struct FeedView: View {
             if shareCoordinator.probeState == .preparing {
                 shareCoordinator.cancelShare()
             }
+            // Review fix: this used to also reset a stored
+            // `pageAllowsLandscape = false` here, racing the new
+            // centered page's own `onAllowsLandscapeChanged` report —
+            // see `pageAllowsLandscape`'s own comment. Nothing to reset
+            // any more: `pageAllowsLandscape` derives from comparing
+            // `landscapePageID` against `currentPageID` directly, so it
+            // already reads `false` the instant `currentPageID` no
+            // longer matches whichever page last claimed it, with no
+            // separate write needed on this edge.
         }
         // The one place options reach the deck. `apply` is idempotent, so
         // a duplicate notification costs nothing. `start()` reads the
@@ -357,6 +797,40 @@ struct FeedView: View {
             handleShrinkJobsChanged()
         }
         #if DEBUG
+        // Owner bug (closed pose ignores all touches): logs every
+        // touch's own location, under `-cloudfull-log-touches`, at
+        // the ROOT of this view — the outermost `GeometryReader` the
+        // whole of `body` sits inside — so a live capture can show
+        // whether a touch reaches this app's own view hierarchy AT
+        // ALL in the closed pose, ruling out a Device Hub/simulator
+        // input issue before chasing an app-side hit-testing
+        // regression. `simultaneousGesture` neither consumes the
+        // touch nor changes hit-testing on its own; it only reports
+        // whatever already reaches this view. Read with the same
+        // `xcrun simctl spawn <UDID> log stream --predicate
+        // 'subsystem == "com.cloudfull.app" and category == "Touch"'`
+        // pattern every other `-cloudfull-log-` flag already uses.
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { value in
+                    guard DiagnosticsGate.isOn("-cloudfull-log-touches") else { return }
+                    let message = "touch_\(Int(value.location.x)),\(Int(value.location.y))"
+                    Self.touchLog.notice("\(message, privacy: .public)")
+                    DiagnosticsLog.shared.log("Touch", message)
+                }
+        )
+        // Other half of the same owner bug: the root logger above shows
+        // a touch reaches this app's view hierarchy at all, but not
+        // WHICH UIKit view actually receives it. `HitTestProbeRecognizer`
+        // answers that, under the same `-cloudfull-log-touches` flag —
+        // see its own header comment in `DebugProbes.swift`. Attaching
+        // it here, on `body`'s own appear, is a no-op after the first
+        // call: `attachIfNeeded()` only ever goes unattached → attached.
+        .onAppear {
+            HitTestProbeRecognizer.attachIfNeeded()
+        }
+        #endif
+        #if DEBUG
         // Keys this `.task(id:)` off the newest completed job's own id
         // and state, not off `jobs` itself. `shrinkService.jobs`
         // republishes up to five times a second during an export, and
@@ -372,7 +846,7 @@ struct FeedView: View {
     }
 
     @ViewBuilder
-    private func content(safeAreaTop: CGFloat) -> some View {
+    private func content(safeAreaTop: CGFloat, fullscreenSafeArea: EdgeInsets, duoLayout: DuoLayout, containerSize: CGSize) -> some View {
         if !viewModel.hasDealtFirstDeck {
             // The first deal waits on a background library enumeration.
             // An empty deck means "no videos" only once the app has
@@ -414,14 +888,18 @@ struct FeedView: View {
                 noMatchesState
             }
         } else {
-            pager(safeAreaTop: safeAreaTop)
+            pager(safeAreaTop: safeAreaTop, fullscreenSafeArea: fullscreenSafeArea, duoLayout: duoLayout, containerSize: containerSize)
         }
     }
 
     /// `safeAreaTop` is the real inset, measured once in `body`. It is
     /// threaded into every `PlayerPageView` because their own readers sit
     /// under this pager's `.ignoresSafeArea()` and would otherwise read 0.
-    private func pager(safeAreaTop: CGFloat) -> some View {
+    /// `fullscreenSafeArea`/`duoLayout` are threaded the same way, for
+    /// the same reason: this pager's own `.ignoresSafeArea()` would
+    /// otherwise hide the bar column's safe-area inset, or the 1H ring's
+    /// own fullscreen insets, from a reader placed any lower.
+    private func pager(safeAreaTop: CGFloat, fullscreenSafeArea: EdgeInsets, duoLayout: DuoLayout, containerSize: CGSize) -> some View {
         ScrollViewReader { scrollProxy in
         ScrollView(.vertical) {
             LazyVStack(spacing: 0) {
@@ -448,10 +926,38 @@ struct FeedView: View {
                             isPreloadable: isPreloadable,
                             viewModel: viewModel,
                             onScrubbingChanged: { isScrubbing = $0 },
-                            deviceStance: orientation.stance,
                             fullscreenAllowed: fullscreenAllowed,
                             onFullscreenChanged: { isFullscreen = $0 },
+                            // Review fix: this used to `guard entry.id ==
+                            // currentPageID` before writing a shared
+                            // `pageAllowsLandscape` bool directly — a
+                            // live re-check against a value the parent's
+                            // own `.onChange(of: currentPageID)` could
+                            // still be in the middle of updating, so
+                            // which write landed last depended on
+                            // ordering between two different call sites.
+                            // This closure now only ever records THIS
+                            // page's own claim, by id, independent of
+                            // whatever `currentPageID` happens to read at
+                            // this exact moment; `pageAllowsLandscape`'s
+                            // own comparison against `currentPageID`
+                            // (see that computed property's comment) is
+                            // what decides whether it counts, every time
+                            // it is read, with no ordering to get wrong.
+                            // The `else if` only clears a claim this same
+                            // page made — a stale `false` from a page
+                            // that already lost the claim to a newer one
+                            // must not erase that newer one's `true`.
+                            onAllowsLandscapeChanged: { newValue in
+                                if newValue {
+                                    landscapePageID = entry.id
+                                } else if landscapePageID == entry.id {
+                                    landscapePageID = nil
+                                }
+                            },
                             safeAreaTop: safeAreaTop,
+                            fullscreenSafeArea: fullscreenSafeArea,
+                            duoLayout: duoLayout,
                             onDoubleTap: { doubleTapKeepNonces[entry.id, default: 0] += 1 },
                             isSuspended: isFeedSuspended
                         )
@@ -463,12 +969,16 @@ struct FeedView: View {
                         // slides out from under it.
                         //
                         // Hidden while fullscreen is on, alongside
-                        // `FeedPageContent` below and the global
-                        // `overlayControls`. Only the centered page can
-                        // ever be fullscreen. So gating every page's own
-                        // scrim and content on this one `FeedView`-level
-                        // flag works the same as gating just the active
-                        // page. Every other page is off screen once
+                        // `FeedPageContent` below — both on plain
+                        // `isFullscreen`, never `hidesGlobalChrome`.
+                        // `overlayControls` and the chin are the ones
+                        // that hide for that state; see
+                        // `hidesGlobalChrome`'s own comment. Only the
+                        // centered page can ever be fullscreen. So
+                        // gating every page's own scrim and content on
+                        // this one `FeedView`-level flag works the same
+                        // as gating just the active page. Every other
+                        // page is off screen once
                         // fullscreen fills the pager.
                         bottomScrim
                             .opacity(isFullscreen ? 0 : 1)
@@ -483,19 +993,26 @@ struct FeedView: View {
                             trashService: trashService,
                             shrinkService: shrinkService,
                             shareCoordinator: shareCoordinator,
-                            onRequestShrink: { assetID in
-                                Usage.shared.shrinkSheetOpened()
-                                shrinkTarget = ShrinkTarget(id: assetID)
-                            },
+                            onRequestShrink: requestShrink,
                             onAdvanceRequested: { advanceToNextPage(from: entry) },
                             onOpenBinRequested: { Usage.shared.binOpened(); showTrash = true },
                             safeAreaTop: safeAreaTop,
+                            safeAreaBottom: fullscreenSafeArea.bottom,
+                            duoLayout: duoLayout,
+                            duoRightGridBottomY: duoRightGridBottomY,
+                            laptopControlGroupFrame: laptopControlGroupFrame,
                             keepRequestNonce: doubleTapKeepNonces[entry.id] ?? 0
                         )
                         .opacity(isFullscreen ? 0 : 1)
                         .allowsHitTesting(!isFullscreen)
                         .accessibilityHidden(isFullscreen)
                     }
+                    // Named, not `.global` — see
+                    // `laptopCaptionDateLineCenterY`'s own comment for
+                    // why a per-page space is what keeps that
+                    // measurement from chasing a live scroll/pull on
+                    // this pager.
+                    .coordinateSpace(.named("duoPage"))
                     .containerRelativeFrame([.horizontal, .vertical])
                     .id(entry.id)
                     // Declares this page an accessibility container, rather
@@ -556,7 +1073,18 @@ struct FeedView: View {
             // to the user. See `dismissCalloutForScroll`.
             if newPhase != .idle { shareCoordinator.dismissCalloutForScroll() }
         }
-        .scrollPosition(id: $currentPageID)
+        // R4: `anchor: .top` (`design/duo/duo_audit_apple_checklist.md`
+        // §3's own risk note — "the pager must keep its page through the
+        // size change"). Each page fills the viewport exactly
+        // (`.containerRelativeFrame([.horizontal, .vertical])`), so
+        // pinning the current page's own top-leading edge to the
+        // viewport's own top-leading edge is what keeps it the page on
+        // screen, not some fraction of it, through the window's own
+        // resize during a real rotation — the same anchor the
+        // `reanchorNonce`/`advanceNonce` paths below already pass to
+        // `scrollProxy.scrollTo`, so every programmatic and
+        // gesture-driven re-anchor in this pager now agrees.
+        .scrollPosition(id: $currentPageID, anchor: .top)
         // No scroll indicator on a full-bleed, one-video-per-screen pager.
         // A scrollbar looks like a defect on this kind of vertical video
         // feed, not like a navigation aid.
@@ -570,9 +1098,14 @@ struct FeedView: View {
         // swipe, a fling, or a bounce while fullscreen is on does
         // nothing, reusing the same modifier instead of adding a second
         // one.
+        //
+        // `hidesGlobalChrome` reduces to plain `isFullscreen` now (step
+        // 2 build 1 fix removed its other term), so this is the same
+        // condition spelled out directly rather than through that name
+        // — the pager's own disable has nothing to do with chrome.
         .scrollDisabled(isScrubbing || isFullscreen)
         .ignoresSafeArea()
-        .background(Color.black)
+        .background(pagerBackground(duoLayout: duoLayout, safeAreaTop: safeAreaTop, containerSize: containerSize))
         // `initial: true` registers the page the deck restores onto, or
         // the first page of a fresh deck, as current immediately. Without
         // it, that first slot's cursor and exhaustion bookkeeping never
@@ -785,7 +1318,7 @@ struct FeedView: View {
     // pass and can stop the view graph from updating. The app then draws
     // its first frame and never re-renders again, even while other
     // state, such as the deck itself, keeps changing correctly.
-    private var overlayControls: some View {
+    private func overlayControls(duoLayout: DuoLayout) -> some View {
         // A `GeometryReader` placed under `.ignoresSafeArea()` reports
         // `safeAreaInsets == .zero`: the modifier consumes the inset
         // before the proxy sees it. Reading `.top` off such a proxy
@@ -796,17 +1329,63 @@ struct FeedView: View {
         // as size plus insets.
         GeometryReader { proxy in
             let realTopInset = proxy.safeAreaInsets.top
+            let realBottomInset = proxy.safeAreaInsets.bottom
             let fullWindow = CGSize(
                 width: proxy.size.width + proxy.safeAreaInsets.leading + proxy.safeAreaInsets.trailing,
                 height: proxy.size.height + proxy.safeAreaInsets.top + proxy.safeAreaInsets.bottom
             )
-            VStack(spacing: 0) {
-                topChrome(safeAreaTop: realTopInset, containerSize: fullWindow)
-                if let shrinkToastMessage {
-                    shrinkToast(shrinkToastMessage)
-                        .padding(.top, 8)
+            // Build 3: pose 3/4/4W (`DuoLayout.classify` → `.openWide`/
+            // `.book`) move Mute, Filter, and Bin off this row entirely,
+            // into their own column beside the rail/bar column — see
+            // `chromeColumn`'s own comment. `topChrome` itself still
+            // renders, for the shrink-progress capsule alone; see that
+            // function's own comment on why.
+            let usesChromeColumn = duoLayout.pose == .openWide || duoLayout.pose == .book
+            // Build 6: pose 5 (`.openTall`) moves the same three
+            // controls into one row, y-centred on `DuoLayout
+            // .statusBlock` — see `pose5TopRow`'s own comment.
+            //
+            // Owner re-adapt (pose pass, 1V): "Mute/Filter/Bin at the
+            // very top ... like pose 5's top row now does" — pose 1V
+            // (`.closed`) reuses this exact mechanism now too, rather
+            // than a parallel one. The name stays `pose5TopRow`
+            // (avoiding a sprawling rename across this file); see that
+            // function's own comment for why its row-building logic
+            // already generalizes to both poses untouched.
+            let usesPose5TopRow = duoLayout.pose == .openTall || duoLayout.pose == .closed
+            // Build 8b: pose 6 (laptop) mounts its own shared bottom
+            // deck here — the Mute/Filter/Bin group and
+            // Previous/Next are the two pieces of §2.6 genuinely
+            // global to the screen, not to any one page; see
+            // `laptopDeckControls`'s own comment and this group's
+            // header comment in `DuoLayout`.
+            let usesLaptopDeck = duoLayout.pose == .laptop
+            ZStack(alignment: .top) {
+                VStack(spacing: 0) {
+                    topChrome(duoLayout: duoLayout, safeAreaTop: realTopInset, containerSize: fullWindow)
+                    if let shrinkToastMessage {
+                        shrinkToast(shrinkToastMessage)
+                            .padding(.top, 8)
+                    }
+                    Spacer(minLength: 0)
                 }
-                Spacer(minLength: 0)
+                if usesChromeColumn {
+                    // No `.frame`/coordinate wrapper needed: each of
+                    // this `Group`'s children carries its own
+                    // `.position(_:)`, which already places it directly
+                    // within this `ZStack`'s own space — the same
+                    // "0 at the true window top" space `topChrome`'s
+                    // `containerSize: fullWindow` argument already
+                    // assumes, via this view's own `.padding(.top:)`/
+                    // `.frame` pair below.
+                    chromeColumn(duoLayout: duoLayout, safeAreaTop: realTopInset, safeAreaBottom: realBottomInset, containerSize: fullWindow)
+                }
+                if usesPose5TopRow {
+                    pose5TopRow(duoLayout: duoLayout, safeAreaTop: realTopInset, containerSize: fullWindow)
+                }
+                if usesLaptopDeck {
+                    laptopDeckControls(duoLayout: duoLayout, safeAreaBottom: realBottomInset, containerSize: fullWindow)
+                }
             }
             // The stack starts at the safe-area top, since this reader is
             // inside the safe area, but `topChromeTopPadding` measures
@@ -819,7 +1398,32 @@ struct FeedView: View {
 
     // MARK: - Top chrome
 
-    private func topChrome(safeAreaTop: CGFloat, containerSize: CGSize) -> some View {
+    /// Build 3: suppresses Mute, Filter, the counter, and Bin at pose
+    /// 3/4/4W — `chromeColumn` renders those instead, positioned at
+    /// `DuoLayout.zigzagCenters` rather than flowing left to right.
+    /// Build 6 adds pose 5 to the same suppression — `pose5TopRow`
+    /// renders those instead, y-centred on `DuoLayout.statusBlock`.
+    /// This function still renders for one thing even so: the
+    /// shrink-progress capsule, which the round-3 wireframes
+    /// (`DUO_POSES.md`) do not mention at all (a rare, transient
+    /// state, not a fixture of any one pose). Letting it keep this
+    /// row, rather than inventing a position the wireframes never
+    /// specified, is the smaller assumption. Its row no longer
+    /// reserves the chrome column's own width — see `duoLayout
+    /// .availableRect`'s comment — so this is a known, accepted
+    /// imperfection if a shrink is active while the chrome column or
+    /// pose-5 row also shows; flagged for the owner's own look at the
+    /// sim.
+    private func topChrome(duoLayout: DuoLayout, safeAreaTop: CGFloat, containerSize: CGSize) -> some View {
+        // Build 8b: pose 6 (laptop) adds to this suppression too. Mute,
+        // Filter, and Bin move into the bottom deck's own group
+        // (`laptopDeckControls`); nothing interactive belongs above the
+        // fold — the build-list's own check for this step, "Duo 6:
+        // nothing interactive above the fold." Pose 1V (`.closed`)
+        // joins them in the owner's own pose-pass re-adapt — see
+        // `usesPose5TopRow`'s own comment just above.
+        let suppressDefaultRow = duoLayout.pose == .openWide || duoLayout.pose == .book
+            || duoLayout.pose == .openTall || duoLayout.pose == .laptop || duoLayout.pose == .closed
         // Four independent glass pills. Do not wrap these in a
         // `GlassEffectContainer`. XCUITest then resolves the far-right
         // `bin_open` button's frame relative to the container. Its
@@ -829,20 +1433,395 @@ struct FeedView: View {
         // origin, so it keeps working and hides the problem. A finger
         // tap is always fine; only the synthesized XCUITest tap
         // coordinates are wrong.
-        HStack(alignment: .top, spacing: 8) {
-            // A tap on the video also toggles mute, with a center flash.
-            // This pill is the second mute control.
-            muteButton
-            FilterMenuView(store: optionsStore, isFullscreen: isFullscreen)
-            if let job = activeShrinkJob, let text = shrinkActiveProgressText {
-                shrinkProgressCapsule(text, assetID: job.id)
+        // Mirrored-layout round (item D, regular iPhone): the row's own
+        // child order reverses, same idea as `pose5TopRow`'s own
+        // mirror — "top row mirrored, Bin top-left." The shrink
+        // progress capsule (not suppressed on any pose) stays the
+        // child next to the `Spacer`, on whichever side that now is.
+        //
+        // Review fix: Bin must be the OUTERMOST control in the
+        // mirrored row, not the counter — the owner's own rule, "Bin
+        // outermost, same as the mirrored top row," confirmed against
+        // `pose5TopRow`'s own mirrored branch just below in this file
+        // (`binButton()` first, then `counterCapsule`). This row used
+        // to read counter-then-Bin, the one pair out of step with that
+        // rule.
+        return HStack(alignment: .top, spacing: 8) {
+            if duoLayout.isMirrored {
+                if !suppressDefaultRow {
+                    binButton()
+                    counterCapsule
+                }
+                Spacer(minLength: 8)
+                if let job = activeShrinkJob, let text = shrinkActiveProgressText {
+                    shrinkProgressCapsule(text, assetID: job.id)
+                }
+                if !suppressDefaultRow {
+                    FilterMenuView(store: optionsStore, hidesChrome: hidesGlobalChrome)
+                        .duoGuideMark("top.filter", color: .teal)
+                    muteButton
+                }
+            } else {
+                // A tap on the video also toggles mute, with a center
+                // flash. This pill is the second mute control.
+                if !suppressDefaultRow {
+                    muteButton
+                    FilterMenuView(store: optionsStore, hidesChrome: hidesGlobalChrome)
+                        .duoGuideMark("top.filter", color: .teal)
+                }
+                if let job = activeShrinkJob, let text = shrinkActiveProgressText {
+                    shrinkProgressCapsule(text, assetID: job.id)
+                }
+                Spacer(minLength: 8)
+                if !suppressDefaultRow {
+                    counterCapsule
+                    binButton()
+                }
             }
-            Spacer(minLength: 8)
-            counterCapsule
-            binButton
         }
         .padding(.horizontal, 12)
+        // Clamped to the stage's own available width — clear of the
+        // rail column, whichever case put one there (steps 3/5) —
+        // instead of the full window. On a regular iPhone, or an open
+        // Duo too narrow for a column, `availableRect` returns the
+        // full window unchanged, so `binButton`'s trailing edge lands
+        // exactly where it always has.
+        // Mirrored-layout round: `availableRect` already excludes the
+        // column from whichever edge it is on — this outer alignment
+        // must match that same edge (PhotoTopBar's identical call site
+        // has the same fix), or the row would still start at x=0 even
+        // with its own children already reversed above, landing on
+        // top of a mirrored column instead of clear of it.
+        .frame(width: duoLayout.availableRect(containerSize: containerSize, safeAreaTop: safeAreaTop).width,
+               alignment: duoLayout.isMirrored ? .trailing : .leading)
         .padding(.top, topChromeTopPadding(safeAreaTop: safeAreaTop, containerSize: containerSize))
+        // Keeps `muteButton` (the row's own leading edge) clear of the
+        // display's own rounded top corner — reported on the open-wide
+        // (landscape, bar-on) pose, where this row starts flush at the
+        // window's leading edge and the corner there is big enough to
+        // actually clip it. `containerCornerOffset`, not a hand-tuned
+        // margin: it is iOS 26's own API for exactly this (confirmed
+        // in the SwiftUICore swiftinterface — `GeometryProxy.
+        // containerCornerInsets`/`View.containerCornerOffset(_:sizeToFit:)`,
+        // both `@available(iOS 26.0, …)`, no gate needed against this
+        // app's own deployment target). A no-op on a regular iPhone
+        // and on the Duo's other poses, where the existing padding and
+        // safe area already clear the corner on their own; this only
+        // nudges the row further in when they do not.
+        .containerCornerOffset(.top)
+    }
+
+    // MARK: - Chrome column (build 3)
+
+    /// Pose 3/4/4W's replacement for `topChrome`'s own Mute, Filter,
+    /// and Bin: the same three controls, unchanged, each centred on
+    /// one of `DuoLayout.zigzagCenters`'s three points instead of
+    /// flowing left to right — "each button is level with a gap
+    /// between two rail buttons" (`DUO_POSES.md`).
+    ///
+    /// Owner re-adapt: this used to ALSO repeat the count as its own
+    /// line under Bin, "counter one line 4pt under Bin" — a real
+    /// doubled-badge bug, "it shows the count and space twice." Shown
+    /// once, below, not twice.
+    ///
+    /// Owner re-adapt (round-4 review, BLOCKER): `binButton`'s own
+    /// inline badge — the fix for that first doubled-badge report —
+    /// widens its capsule for "count · size," and `.position()` here
+    /// centres that WIDER capsule on a fixed point with no `HStack`
+    /// flow to push a neighbour out of the way the way `topChrome`/
+    /// `pose5TopRow`/`laptopDeckControls` all have; its own right half
+    /// ran over the rail's Shrink icon. An interim fix (`104c599`)
+    /// kept Bin a plain circle here and drew the count/size as a
+    /// separate, clamped label underneath it.
+    ///
+    /// Owner re-adapt (round-5 wireframe, "Bin open" row): replaces
+    /// that interim fix with the approved design —
+    /// `chromeColumnBinCapsule` grows DOWNWARD into a tall capsule
+    /// instead (icon, count, size, stacked), so it never needs to run
+    /// sideways into the rail at all. Because only Bin grows, Mute and
+    /// Filter both shift UP by half of whatever `chromeBinCapsuleHeight`
+    /// grows past `Rail.hit` (`extraShift` below) — Bin's own
+    /// `.position()` stays on `centers[2]` UNCHANGED: positioning a
+    /// view at its own centre means a capsule that grows by
+    /// `extraHeight` total already extends `extraHeight / 2` below
+    /// that unmoved point on its own, with no separate offset needed
+    /// here. The net result reads as "the whole group shifts up by
+    /// half the extra height, and Bin alone also grows down from
+    /// there" — group ↔ rail labels/video-edge clearance, Bin ↔ the
+    /// chin below it — without the two fighting each other.
+    private func chromeColumn(duoLayout: DuoLayout, safeAreaTop: CGFloat, safeAreaBottom: CGFloat, containerSize: CGSize) -> some View {
+        let centers = duoLayout.zigzagCenters(containerSize: containerSize, safeAreaTop: safeAreaTop, safeAreaBottom: safeAreaBottom)
+        let extraShift = max(0, chromeBinCapsuleHeight - Rail.hit) / 2
+        return Group {
+            if centers.count == 3 {
+                muteButton
+                    .position(x: centers[0].x, y: centers[0].y - extraShift)
+                FilterMenuView(store: optionsStore, hidesChrome: hidesGlobalChrome)
+                    .duoGuideMark("top.filter", color: .teal)
+                    .position(x: centers[1].x, y: centers[1].y - extraShift)
+                chromeColumnBinCapsule()
+                    .position(centers[2])
+            }
+        }
+    }
+
+    // MARK: - Pose 5 top row (build 6)
+
+    /// Pose 5's (open-tall) replacement for `topChrome`'s own Mute,
+    /// Filter, and Bin: "one row, y-centre = `statusBlock.midY`;
+    /// Mute at `stage.minX + 16` ... counter left of Bin"
+    /// (`DUO_POSES.md`'s per-pose table). Counter-left-of-Bin is
+    /// already this row's own child order — the same as `topChrome`'s
+    /// own `counterCapsule`, `binButton` pair — so nothing extra is
+    /// needed for that part.
+    ///
+    /// Anchored the same way `actionRailColumn`/`chromeColumn`'s own
+    /// siblings are: a target rect from the leading edge to the
+    /// trailing edge, `.frame(width:height:alignment:.center)` to
+    /// give the row a known box, then `.position(x: rect.midX, y:
+    /// statusBlock.midY)`. The row's own `Spacer(minLength: 8)`
+    /// between Mute/Filter and the counter/Bin pair pushes Bin's own
+    /// trailing edge out to fill `rect.width` exactly, the same way
+    /// `topChrome`'s identical `Spacer` already fills its own row.
+    ///
+    /// Owner re-adapt (pose pass, 1V): the trailing edge used to be
+    /// `statusBlock.minX − 8` — fine for pose 5, where that point
+    /// still falls inside the stage/video, but for pose 1V it does
+    /// not: `statusBlock` there is the small `.occlusion` camera
+    /// cutout, well inside the BAR column the video excludes, so
+    /// `statusBlock.minX − 8` landed past the video's own right edge
+    /// — the Bin pill the owner's own screenshot caught straddling
+    /// into the black bar column. Both edges now come from the stage
+    /// itself — `stage.maxX − 16`, the same 16pt margin `leading`
+    /// already gives Mute from `stage.minX` — so the row can never
+    /// read past the video it sits on, in either pose.
+    ///
+    /// Owner re-adapt (pose pass, 1V, second round): `y` used to be
+    /// `statusBlock.midY` for both poses — correct for pose 5, where
+    /// that is genuinely the real time/connectivity ring's own
+    /// vertical centre, but wrong for 1V: there `statusBlock` reads
+    /// the small `.occlusion` camera cutout instead (the ring itself
+    /// has no reserved-region API of its own there — see
+    /// `statusBlock`'s own comment), which the owner's own screenshot
+    /// showed centred around y 47pt, visibly below the screen's true
+    /// top edge. Pose 1V now pins `y` to `safeAreaTop + 8 + 20`
+    /// instead — this row's own fixed 40pt height means its top edge
+    /// lands exactly 8pt below the real top safe-area inset (0 in
+    /// 1V), "the very top of the video." Pose 5 is unchanged: it
+    /// keeps centring on `statusBlock.midY`, the owner's own explicit
+    /// "don't change pose 5."
+    private func pose5TopRow(duoLayout: DuoLayout, safeAreaTop: CGFloat, containerSize: CGSize) -> some View {
+        let statusBlock = duoLayout.statusBlock(containerSize: containerSize, safeAreaTop: safeAreaTop)
+        let stageRect = duoLayout.stageRect(containerSize: containerSize, safeAreaTop: safeAreaTop)
+        let leading = stageRect.minX + 16
+        // Owner re-adapt (Live Activity pass): a Live Activity's own
+        // pill grows the status block LEFTWARD on pose 5 (occlusion
+        // itself widens — unlike the closed display, this pose DOES
+        // see it) and used to cover Bin, since `stage.maxX - 16` alone
+        // never read it. Clamped to `occlusion.minX - 8`, whatever
+        // width that region reports this frame, so Bin stays clear at
+        // any pill width instead of only the un-grown one. `nil`
+        // occlusion (no status block at all) leaves the plain
+        // stage-edge trailing unchanged.
+        //
+        // Review fix: this reads `duoLayout.occlusion` directly, not
+        // `duoLayout.statusBlock(...)` — so `statusBlock`'s own new
+        // containment check against a stale cross-display occlusion
+        // frame (see that function's own comment) does not cover this
+        // call site. A stale frame here is a separate failure mode
+        // from the `nil` case just above — real, non-nil, but
+        // wrong — and still reaches `occlusionClamp` unfiltered; this
+        // comment used to claim `statusBlock` already covered it,
+        // which was never true for a direct read like this one.
+        //
+        // Review fix (1H): the clamp above only ever makes sense when
+        // the occlusion genuinely sits PAST `leading` — a real Live
+        // Activity pill grown leftward on the trailing side. In 1H the
+        // reported occlusion sits at `x = 29`, well left of `leading`
+        // itself, so the old unconditional clamp read `29 - 8 = 21`
+        // and collapsed this whole row to zero width. Only applying
+        // the clamp when `occlusion.minX > leading` keeps that
+        // unrelated, near-leading-edge occlusion from ever touching
+        // this row's own trailing edge.
+        //
+        // NIT: a stale cross-display occlusion reading — same failure
+        // mode `DuoLayout.current`'s own `windowBounds.contains(frame)`
+        // filter already guards `occlusionFrame`/`divisionFrame`
+        // against, but this call site reads `duoLayout.occlusion`
+        // directly (the comment above already explains why), so it
+        // needs its own containment check. `containerSize` here is
+        // `fullWindow` (this function's own caller passes it), the
+        // same true window-space rect `occlusion` is itself already
+        // reported in, with the same 1pt rounding tolerance.
+        let windowOcclusion = duoLayout.occlusion.flatMap { CGRect(origin: .zero, size: containerSize).insetBy(dx: -1, dy: -1).contains($0) ? $0 : nil }
+        let occlusionClamp = windowOcclusion.map { $0.minX > leading ? $0.minX - 8 : .infinity } ?? .infinity
+        let trailing = min(stageRect.maxX - 16, occlusionClamp)
+        let width = max(0, trailing - leading)
+        let rowHeight: CGFloat = 40
+        let centerY = duoLayout.pose == .closed ? safeAreaTop + 8 + rowHeight / 2 : statusBlock.midY
+        // Mirrored-layout round: "Bin top-left, Mute/Filter top-right"
+        // — the row's own child order simply reverses. The counter
+        // stays the child immediately next to Bin either way (it reads
+        // left of Bin unmirrored, right of Bin mirrored), since
+        // reversing the whole sequence keeps every pair's own relative
+        // order, just read from the other end.
+        return HStack(spacing: Rail.spacing) {
+            if duoLayout.isMirrored {
+                binButton()
+                counterCapsule
+                Spacer(minLength: 8)
+                FilterMenuView(store: optionsStore, hidesChrome: hidesGlobalChrome)
+                    .duoGuideMark("top.filter", color: .teal)
+                muteButton
+            } else {
+                muteButton
+                FilterMenuView(store: optionsStore, hidesChrome: hidesGlobalChrome)
+                    .duoGuideMark("top.filter", color: .teal)
+                Spacer(minLength: 8)
+                counterCapsule
+                binButton()
+            }
+        }
+        .frame(width: width, height: rowHeight, alignment: .center)
+        .position(x: leading + width / 2, y: centerY)
+    }
+
+    // MARK: - Laptop deck globals (build 8b, re-adapted R4)
+
+    /// Pose 6's (laptop) own two screen-global pieces of the shared
+    /// bottom deck — `design/duo/duo_build_spec.md` §2.6: the Mute/
+    /// Filter/Bin group, and Previous/Next. Mounted here, not in
+    /// `FeedPageContent`, for the same reason `chromeColumn`/
+    /// `pose5TopRow` already are: these describe the SCREEN, not the
+    /// current page — a shrink's progress capsule, mute state, and
+    /// paging the feed are all facts this view already owns, and
+    /// hoisting them is the one deliberate exception the audit's own
+    /// Decision/§2 calls for in the laptop pose (every other pose's
+    /// rail/caption/scrubber stays per-page). The rail row and the
+    /// caption, which DO describe the current item, stay in
+    /// `FeedPageContent`/`PlayerPageView` instead — see
+    /// `FeedPageContent.laptopHorizontalRail`/`duoLaptopCaption`.
+    ///
+    /// Owner re-adapt (round 4): "put the filters in the top right of
+    /// the bottom section, across and aligned from the date and
+    /// time." The group now shares band 0 with the caption instead of
+    /// owning its own row — `DuoLayout.laptopControlGroupTrailingX`
+    /// gives the X axis (band 0's own trailing margin); `y` is
+    /// `laptopCaptionDateLineCenterY`, this launch's latest real
+    /// measurement of the caption's own date line — see that
+    /// property's own comment (round-4 review) for why a nil reading
+    /// now hides the group outright instead of guessing a Y. The
+    /// `HStack`/`.frame(width: trailingX, alignment: .trailing)`/
+    /// `.position(x: trailingX / 2, y:)` trio is the same
+    /// "zero-anchored box, aligned content" technique
+    /// `duoLaptopCaption`'s own `rect` already uses: the box's right
+    /// edge always sits at `trailingX` regardless of the group's own
+    /// rendered width, so `binBadgeText` widening the group shifts it
+    /// LEFT on its own — "when it appears the group shifts left so it
+    /// stays inside" — with no gap arithmetic here at all. The
+    /// `background` `GeometryReader` reports that real, just-laid-out
+    /// frame back up through `LaptopControlGroupFrameKey`,
+    /// attached to the `HStack` itself (before the outer `.frame`
+    /// inflates it to the box's own full width), so what bubbles up
+    /// is the group's own tight bounds, not the box's.
+    private func laptopDeckControls(duoLayout: DuoLayout, safeAreaBottom: CGFloat, containerSize: CGSize) -> some View {
+        Group {
+            if let nearX = duoLayout.laptopControlGroupTrailingX(containerSize: containerSize, safeAreaBottom: safeAreaBottom) {
+                // Owner re-adapt (round-4 review): no more guessed
+                // `fallbackY` — hidden instead for the one frame
+                // before `laptopCaptionDateLineCenterY` reports its
+                // first real value, rather than drawn at a guessed Y
+                // and then jumped once the real one lands.
+                //
+                // Mirrored-layout round: `nearX` is the group's own
+                // LEADING edge, not trailing, once mirrored — the box
+                // spans `[nearX, containerWidth]` instead of `[0,
+                // nearX]`, content leading-aligned, growing rightward.
+                //
+                // Owner correction (relayed, pose pass): the ORDER
+                // inside the `HStack` flips too — "Bin outermost, same
+                // as the mirrored top row." Unmirrored reads Mute,
+                // Filter, Bin left to right (Bin innermost, next to
+                // the group's own trailing edge); mirrored reads Bin,
+                // Filter, Mute (Bin now innermost on the LEADING side
+                // instead — still the edge closest to the rail, just
+                // the other one).
+                let width = duoLayout.isMirrored ? containerSize.width - nearX : nearX
+                HStack(spacing: 12) {
+                    if duoLayout.isMirrored {
+                        binButton()
+                        FilterMenuView(store: optionsStore, hidesChrome: hidesGlobalChrome)
+                            .duoGuideMark("top.filter", color: .teal)
+                        muteButton
+                    } else {
+                        muteButton
+                        FilterMenuView(store: optionsStore, hidesChrome: hidesGlobalChrome)
+                            .duoGuideMark("top.filter", color: .teal)
+                        binButton()
+                    }
+                    // Owner re-adapt: this used to ALSO repeat the
+                    // count/size trailing of Bin, inside the deck's
+                    // own margin — the same doubled-badge bug
+                    // `chromeColumn`'s identical comment now
+                    // documents, "it shows the count and space
+                    // twice." Shown once now, the pill's own inline
+                    // badge — the `trailingX`-anchored frame below
+                    // still keeps the group inside its own margin
+                    // when that inline badge alone widens the pill,
+                    // the same real-measurement mechanism as before,
+                    // just with one fewer thing making it wider.
+                }
+                .background(
+                    GeometryReader { proxy in
+                        Color.clear.preference(key: LaptopControlGroupFrameKey.self, value: proxy.frame(in: .global))
+                    }
+                )
+                .frame(width: width, alignment: duoLayout.isMirrored ? .leading : .trailing)
+                .position(x: duoLayout.isMirrored ? nearX + width / 2 : width / 2, y: laptopCaptionDateLineCenterY ?? 0)
+                .opacity(laptopCaptionDateLineCenterY == nil ? 0 : 1)
+            }
+            if let pager = duoLayout.laptopPagerCenters(containerSize: containerSize, safeAreaBottom: safeAreaBottom) {
+                laptopPagerButton(title: "← Previous", identifier: "duo_prev",
+                                   center: pager.previous, width: pager.width, height: pager.height,
+                                   isEnabled: laptopPagerIndex.map { $0 > 0 } ?? false,
+                                   action: { laptopGoToPreviousPage() })
+                laptopPagerButton(title: "Next →", identifier: "duo_next",
+                                   center: pager.next, width: pager.width, height: pager.height,
+                                   isEnabled: laptopPagerIndex.map { $0 + 1 < viewModel.deck.count } ?? false,
+                                   action: { laptopGoToNextPage() })
+            }
+        }
+    }
+
+    /// One pill of the Previous/Next pair — `DuoLayout
+    /// .laptopPagerCenters`'s own live width/height, disabled and
+    /// dimmed at either end of the deck.
+    private func laptopPagerButton(title: String, identifier: String, center: CGPoint, width: CGFloat, height: CGFloat, isEnabled: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: width, height: height)
+                .feedGlassButton(in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .disabled(!isEnabled)
+        .opacity(isEnabled ? 1 : 0.4)
+        .position(center)
+        .accessibilityIdentifier(identifier)
+        .accessibilityLabel(title == "← Previous" ? "Previous video" : "Next video")
+        .accessibilityHint("Pose 6's own paging control — plays the \(title == "← Previous" ? "previous" : "next") video without touching the upright half")
+    }
+
+    /// The deck's own index into `viewModel.deck` — `currentPageID`'s
+    /// own live lookup, the same one `advanceToNextPage(from:)` already
+    /// performs from an `entry`, just entered from the pager's own
+    /// cursor instead of a tapped page. `nil` only when the pager has
+    /// no current page at all (an empty deck, already excluded upstream
+    /// by `content(safeAreaTop:fullscreenSafeArea:duoLayout:)`).
+    private var laptopPagerIndex: Int? {
+        guard let currentPageID else { return nil }
+        return viewModel.deck.firstIndex(where: { $0.id == currentPageID })
     }
 
     /// Height of the empty band the fixed 9:16 stage leaves above and below
@@ -869,14 +1848,34 @@ struct FeedView: View {
 
     /// Returns the fixed chrome top from
     /// `StageGeometry.chromeTop(safeAreaTop:)`, just under the Dynamic
-    /// Island.
+    /// Island — except when this frame has no top status bar to clear
+    /// at all. Owner ask (pose 1V): "can the archive, filter and
+    /// volume buttons go all the way to the top of the Duo screen?"
+    /// The closed Duo's own outer display has no Dynamic Island or
+    /// status bar of its own — its own status lives in the bar column
+    /// instead — so it reports a `safeAreaTop` far below a real status
+    /// bar's. Below `StageGeometry.chromeTop`'s own `safeAreaTop >= 44`
+    /// threshold (reused here, not reinvented, for "is there a real
+    /// one to clear"), this row sits flush at `0`:
+    /// `.containerCornerOffset(.top)`, already chained after this
+    /// padding at the call site, is the only clearance left —
+    /// "the corner clearance from `containerCornerOffset(.top)`," the
+    /// owner's own words. A regular iPhone's own `safeAreaTop` is
+    /// always well above 44, so it never takes this branch — decided
+    /// purely by the real inset this frame reports, never a device
+    /// check. Scoped to this one row, not `StageGeometry.chromeTop`
+    /// itself, which `downShift`/`PhotoTopBar` also read for the
+    /// stage's own positioning and Photos' own top bar — neither asked
+    /// for by the owner here, so neither changes.
     private func topChromeTopPadding(safeAreaTop: CGFloat, containerSize: CGSize) -> CGFloat {
-        // The chrome sits at one fixed spot, just under the island
-        // capsule. `StageGeometry.downShift` grows the band by exactly
-        // enough for the video to start `chromeToVideoGap` below it.
-        // Both numbers come from the same `StageGeometry` helpers, so
-        // the pills and the video can never disagree.
-        StageGeometry.chromeTop(safeAreaTop: safeAreaTop)
+        // Below the threshold: `StageGeometry.downShift` grows the top
+        // band by exactly enough for the video to start
+        // `chromeToVideoGap` below `StageGeometry.chromeTop`'s OWN
+        // reading, not this row's actual `0` — the two can disagree by
+        // design here, since the video's own downward shift still
+        // follows the shared, unmodified formula; only this specific
+        // row (Mute/Filter/Bin) moves to the true edge.
+        safeAreaTop >= 44 ? StageGeometry.chromeTop(safeAreaTop: safeAreaTop) : 0
     }
 
     private var muteButton: some View {
@@ -893,11 +1892,48 @@ struct FeedView: View {
         .buttonBorderShape(.circle)
         .controlSize(.small)
         .tint(.white)
-        // Identifier gated directly on `isFullscreen`, the same pattern
+        // Owner re-adapt (Opus wireframe compare): `.controlSize(.small)`
+        // draws this glass circle at about 32pt — under Apple's own
+        // 44×44pt minimum tap target. One definition, every pose that
+        // mounts `muteButton` — topChrome, pose5TopRow, chromeColumn,
+        // laptopDeckControls — picks this up without its own fix.
+        //
+        // Owner re-adapt (18 Pro regression check, round-4 pass): the
+        // comment above claimed `.frame(minWidth: 44, minHeight: 44)`
+        // "grows the hit area alone" — not true. `minWidth`/`minHeight`
+        // are a real layout constraint: they grow this view's own
+        // REPORTED size too, which shifted `topChrome`'s own HStack
+        // (regular iPhone/tent) ~5pt — the regular iPhone must look
+        // pixel-identical to pre-Duo, and did not. The standard
+        // "padding, then `.contentShape`, then the same padding
+        // negated" trick below instead grows the TAPPABLE area without
+        // growing what the parent measures: the inner `.padding(6)`
+        // expands the region `.contentShape` then captures, and the
+        // matching `.padding(-6)` reports this view's own size back to
+        // its parent exactly as before — 2×6 = 12pt added each
+        // dimension, landing a 32pt circle at 44pt tappable, the same
+        // floor the old `minWidth`/`minHeight` gave a bare circle,
+        // while a badge/count still grows the control past 44 on its
+        // own, unclipped, same as before.
+        .padding(6)
+        .contentShape(Rectangle())
+        .padding(-6)
+        // Identifier gated directly on `hidesGlobalChrome`, the same
+        // condition that actually hides this row — the same pattern
         // every other top-chrome control uses.
-        .accessibilityIdentifier(isFullscreen ? "" : "feed_mute_toggle")
+        .accessibilityIdentifier(hidesGlobalChrome ? "" : "feed_mute_toggle")
         .accessibilityLabel(muteProbeState ? "Sound off" : "Sound on")
         .accessibilityHint("Double tap to turn sound \(muteProbeState ? "on" : "off")")
+        // Owner re-adapt (pose pass): marked ONCE here, not at each of
+        // the 4 call sites above — this is the one shared `muteButton`
+        // every one of them mounts, so its own real frame is correct
+        // regardless of which row actually placed it this pose. The
+        // guide tool used to read `zigzagCenters` directly instead —
+        // `chromeColumn`'s OWN geometry source, wrong for every pose
+        // `pose5TopRow`/`topChrome`/`laptopDeckControls` serve instead
+        // (1V's own real row reported "mid-screen," the owner's
+        // report).
+        .duoGuideMark("top.mute", color: .teal)
     }
 
     // MARK: - Shrink progress capsule
@@ -1009,12 +2045,22 @@ struct FeedView: View {
     //
     // The glyph is `archivebox.fill`.
 
-    private var binButton: some View {
+    /// `showsInlineBadge` (owner re-adapt, pose 3/4/4W BLOCKER):
+    /// `false` only for `chromeColumn`'s own call — this button's
+    /// capsule otherwise WIDENS for "count · size," which ran its own
+    /// right half over the rail's Shrink icon once `chromeColumn`
+    /// centres this on a fixed point in that narrow column, with no
+    /// row to push a neighbour out of the way the way `topChrome`/
+    /// `pose5TopRow`/`laptopDeckControls`'s own `HStack` flow does.
+    /// `chromeColumn` instead keeps this a plain circle and draws the
+    /// same text as its own separate, clamped label under it — see
+    /// that function's own comment.
+    private func binButton(showsInlineBadge: Bool = true) -> some View {
         Button { Usage.shared.binOpened(); showTrash = true } label: {
             HStack(spacing: 5) {
                 Image(systemName: "archivebox.fill")
                     .font(.system(size: 15, weight: .medium))
-                if let binBadgeText {
+                if showsInlineBadge, let binBadgeText {
                     Text(binBadgeText)
                         .font(.system(size: 14, weight: .semibold))
                         .monospacedDigit()
@@ -1040,9 +2086,22 @@ struct FeedView: View {
         // modifier the Photos top bar uses, so the two bars cannot
         // disagree about the threshold or the intensity.
         .binShake(count: trashService.count)
-        // See `FilterMenuView`'s identical `isFullscreen`-gated
+        // Owner re-adapt (Opus wireframe compare): see `muteButton`'s
+        // identical comment for why — the icon-only (empty bin) case
+        // drew at about 32pt wide, under the 44pt minimum.
+        //
+        // Owner re-adapt (18 Pro regression check, round-4 pass): see
+        // `muteButton`'s identical comment — `.frame(minWidth:
+        // minHeight:)` grew this view's own LAYOUT size too, shifting
+        // `topChrome`'s own row. Same padding/contentShape/negated-
+        // padding trick: a queued count or byte figure still grows the
+        // capsule past 44pt on its own, unclipped, same as before.
+        .padding(6)
+        .contentShape(Rectangle())
+        .padding(-6)
+        // See `FilterMenuView`'s identical `hidesGlobalChrome`-gated
         // identifier pattern.
-        .accessibilityIdentifier(isFullscreen ? "" : "bin_open")
+        .accessibilityIdentifier(hidesGlobalChrome ? "" : "bin_open")
         // The count lives in the label itself, not a separate
         // `.accessibilityValue`. `XCUIElement.label` is what a VoiceOver
         // user hears first, and what `M2TrashTests` reads to confirm the
@@ -1058,6 +2117,83 @@ struct FeedView: View {
         // invisible `space_counter` text above.
         .accessibilityLabel(trashService.count > 0 ? "Bin, \(trashService.count) queued" : "Bin")
         .accessibilityHint("Opens the list of videos queued for deletion")
+        // See `muteButton`'s identical comment: one shared view, one
+        // mark, correct for every one of its 4 call sites.
+        .duoGuideMark("top.bin", color: .teal)
+    }
+
+    /// Pose 3/4/4W's own Bin button (round-5 wireframe, the "Bin open"
+    /// row): replaces `104c599`'s interim fix — a plain circle plus a
+    /// separate label drawn underneath it — with the approved design.
+    /// An empty bin is the same plain circle `binButton` draws, same
+    /// width as Mute/Filter. Once the bin has items, this grows
+    /// DOWNWARD into a tall capsule instead of widening sideways the
+    /// way `binButton`'s own inline badge does everywhere else: icon,
+    /// then the count, then the size, stacked — sideways would run the
+    /// capsule straight into the rail's own Shrink/Delete in this
+    /// narrow column, the exact collision `104c599` was built to dodge
+    /// in the first place (`chromeColumn`'s own history has the
+    /// detail). `chromeColumn` reads this view's own real rendered
+    /// height back through `ChromeBinCapsuleHeightKey` to shift the
+    /// whole Mute/Filter/Bin group up by half of whatever this grows
+    /// past `Rail.hit` — see that property's own comment.
+    ///
+    /// Width pinned to 32pt — `muteButton`'s own measured circle width
+    /// (`.controlSize(.small)`'s own glass-circle size for a bare
+    /// 20×20 glyph; see that button's own comment) — so the grown
+    /// capsule never reads wider than Mute/Filter beside it. The count
+    /// and size lines are clamped to that same width minus 2pt on each
+    /// side, with `.minimumScaleFactor` to shrink rather than clip a
+    /// wide byte figure ("1.2 GB") that does not fit at full size.
+    private func chromeColumnBinCapsule() -> some View {
+        let capsuleWidth: CGFloat = 32
+        return Button { Usage.shared.binOpened(); showTrash = true } label: {
+            VStack(spacing: 2) {
+                Image(systemName: "archivebox.fill")
+                    .font(.system(size: 15, weight: .medium))
+                if trashService.count > 0 {
+                    Text("\(trashService.count)")
+                        .font(.system(size: 13, weight: .semibold))
+                        .monospacedDigit()
+                        .contentTransition(.numericText())
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                        .frame(maxWidth: capsuleWidth - 4)
+                    if let binSizeText {
+                        Text(binSizeText)
+                            .font(.system(size: 9, weight: .medium))
+                            .monospacedDigit()
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.6)
+                            .frame(maxWidth: capsuleWidth - 4)
+                    }
+                }
+            }
+            .foregroundStyle(.white)
+            .frame(width: capsuleWidth)
+            .padding(.vertical, trashService.count > 0 ? 6 : 0)
+        }
+        .buttonStyle(.glass)
+        .buttonBorderShape(.capsule)
+        .controlSize(.small)
+        .tint(.white)
+        .binShake(count: trashService.count)
+        // Same padding/contentShape/negated-padding tap-target trick
+        // as `binButton`/`muteButton` — see either one's own comment.
+        .padding(6)
+        .contentShape(Rectangle())
+        .padding(-6)
+        .accessibilityIdentifier(hidesGlobalChrome ? "" : "bin_open")
+        // Same label/hint pair as `binButton` — see that view's own
+        // comment on why the byte figure never joins this string.
+        .accessibilityLabel(trashService.count > 0 ? "Bin, \(trashService.count) queued" : "Bin")
+        .accessibilityHint("Opens the list of videos queued for deletion")
+        .duoGuideMark("top.bin", color: .teal)
+        .background(
+            GeometryReader { proxy in
+                Color.clear.preference(key: ChromeBinCapsuleHeightKey.self, value: proxy.size.height)
+            }
+        )
     }
 
     /// The bin pill's own on-screen text: just the count when nothing is
@@ -1070,6 +2206,16 @@ struct FeedView: View {
         let showPending = trashService.pendingBytes > 0 && activeShrinkJob == nil
         guard showPending else { return "\(trashService.count)" }
         return "\(trashService.count) · \(Fmt.bytes(trashService.pendingBytes))"
+    }
+
+    /// `binBadgeText`'s own byte figure, split out on its own —
+    /// `chromeColumnBinCapsule` stacks count and size as two separate
+    /// lines instead of `binBadgeText`'s single "count · size" line.
+    /// Same `showPending` rule, so the two never disagree about
+    /// whether a figure is showing right now.
+    private var binSizeText: String? {
+        guard trashService.count > 0, trashService.pendingBytes > 0, activeShrinkJob == nil else { return nil }
+        return Fmt.bytes(trashService.pendingBytes)
     }
 
     #if DEBUG
@@ -1174,7 +2320,492 @@ struct FeedView: View {
                 "backfill_\(backfill.state.rawValue)_\(backfill.resolved)_\(backfill.pending)_\(backfill.total)"
             )
     }
+
+    // MARK: - Duo alignment guides (debug overlay)
+    //
+    // `showsDuoGuides` and `pagerBackground` used to live in this block
+    // too, but `pagerBackground` is called unconditionally from `body`
+    // (outside any `#if DEBUG`), so a Release build could never see its
+    // declaration. Both now sit just after this block's own `#endif`,
+    // compiled in every configuration; `pagerBackground`'s own internal
+    // `#if DEBUG` still keeps the coloured-guide branch DEBUG-only.
+
+    /// `body`'s own root touch logger (`-cloudfull-log-touches`) —
+    /// see that `simultaneousGesture`'s own comment.
+    private static let touchLog = Logger(subsystem: "com.cloudfull.app", category: "Touch")
+
+    /// Geometry sources this file's own Duo math is built from, drawn
+    /// directly instead of trusted: `.occlusion` (red), `.division`
+    /// (blue), the REAL system bar column — `barEdge`/`barWidth`
+    /// construct this directly; there is no reserved-region API for
+    /// it, and it does not exist at all on a bar-off pose (green,
+    /// closed-bar poses only), `railColumnRect` (orange — every pose
+    /// with a column, real bar or computed) — and the one x value
+    /// `ringCenteredColumnX` actually hands the rail and chin (yellow,
+    /// a 1pt line). Each draws its own live numbers as a small label,
+    /// so one screenshot is enough to compare this file's own math
+    /// against Apple's, with no second source of truth to keep in
+    /// sync by hand.
+    ///
+    /// Owner, direct: "these lines are useful! can you add more so we
+    /// can use them as conversation references?" Extended with: a
+    /// faint 50pt reference grid (`duoReferenceGrid`), dashed
+    /// safe-area lines (`duoSafeAreaGuides`), every element a pose fix
+    /// has ever needed to talk about — the top row and the right
+    /// page's grid/deck/pager read straight off the same pure
+    /// `DuoLayout` functions the real views use (no per-page state
+    /// involved, so no risk of drawing a stale neighbour's copy); the
+    /// video stage, its caption, its scrubber, its iCloud ring, the
+    /// chin, and each rail item instead report their own REAL
+    /// rendered frame through `.duoGuideMark` (`DuoGuideMarksKey`'s
+    /// own comment) — a measurement, not a second derivation, the
+    /// exact distinction the pose 5 ring-x round needed the hard way —
+    /// and a small legend in the corner.
+    @ViewBuilder
+    private func duoGuidesOverlay(duoLayout: DuoLayout, safeAreaTop: CGFloat, safeAreaInsets: EdgeInsets, containerSize: CGSize) -> some View {
+        duoReferenceGrid(containerSize: containerSize)
+        duoSafeAreaGuides(containerSize: containerSize, safeAreaInsets: safeAreaInsets)
+        if let occlusion = duoLayout.occlusion {
+            duoGuideRect(occlusion, color: .red, label: "occlusion \(duoGuideFormat(occlusion))")
+        }
+        if let division = duoLayout.division {
+            duoGuideRect(division, color: .blue, label: "division \(duoGuideFormat(division))")
+        }
+        if let barRect = duoGuideBarRect(duoLayout: duoLayout, containerSize: containerSize) {
+            duoGuideRect(barRect, color: .green, label: "bar \(duoGuideFormat(barRect))")
+        }
+        if let columnRect = duoLayout.railColumnRect(containerSize: containerSize, safeAreaTop: safeAreaTop) {
+            duoGuideRect(columnRect, color: .orange, label: "railColumn \(duoGuideFormat(columnRect))")
+        }
+        if let x = duoLayout.ringCenteredColumnX(containerSize: containerSize, safeAreaTop: safeAreaTop) {
+            Rectangle()
+                .fill(Color.yellow)
+                .frame(width: 1, height: containerSize.height)
+                .position(x: x, y: containerSize.height / 2)
+                .allowsHitTesting(false)
+            Text("ringX \(Int(x))")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(.yellow)
+                .padding(2)
+                .background(Color.black.opacity(0.6))
+                .fixedSize()
+                .position(x: x, y: 40)
+                .allowsHitTesting(false)
+        }
+        // The Mute/Filter/Bin row — owner bug (pose pass, 1V): this
+        // used to read `zigzagCenters` directly, `chromeColumn`'s own
+        // geometry source (pose 3/4/4W only) — wrong for every other
+        // pose, which mounts the SAME `muteButton`/`FilterMenuView`/
+        // `binButton` through `topChrome`, `pose5TopRow`, or
+        // `laptopDeckControls` instead. 1V's own report: the guide
+        // boxes sat "mid-screen next to the rail" while the real row
+        // sits at the top. `top.mute`/`top.filter`/`top.bin` are now
+        // marked at the shared views themselves (`muteButton`'s own
+        // comment), so they read correctly regardless of which of the
+        // four layouts actually placed them this pose.
+        // The right page's grid rect — pure `DuoLayout`, drawn
+        // directly like `occlusion`/`division` above. Its date line
+        // and the grid's own tiles still report through
+        // `.duoGuideMark` (`DuoRightPage`), since this rect alone does
+        // not know where the real content laid out inside it.
+        if let rightPage = duoLayout.rightPage(containerSize: containerSize, safeAreaTop: safeAreaTop) {
+            duoGuideRect(rightPage, color: .pink, label: "grid \(duoGuideFormat(rightPage))")
+        }
+        // The laptop deck's three bands (round 4: down from four — the
+        // Mute/Filter/Bin group folded into band 0, see
+        // `DuoLayout.laptopControlGroupTrailingX`'s own comment) — same
+        // `bottom.height / 3` split `DuoLayout.laptopBand` (private)
+        // already uses internally, read back here for the outline
+        // alone; every laptop-deck function in `DuoLayout` already
+        // reads ITS OWN band straight from `laptopBottomRect`, so this
+        // is not a second description of their placement, only of the
+        // band lines themselves.
+        if let bottom = duoLayout.laptopBottomRect(containerSize: containerSize, safeAreaBottom: safeAreaInsets.bottom) {
+            let bandHeight = bottom.height / 3
+            let names = ["deck1 (scrubber/caption/group)", "deck2 (rail/chin)", "deck3 (prev/next)"]
+            ForEach(0..<3, id: \.self) { index in
+                let band = CGRect(x: bottom.minX, y: bottom.minY + CGFloat(index) * bandHeight,
+                                   width: bottom.width, height: bandHeight)
+                duoGuideRect(band, color: .gray, label: "\(names[index]) \(duoGuideFormat(band))", labelAlignment: .topTrailing)
+            }
+        }
+        // The Mute/Filter/Bin group's own real rendered box (round 4)
+        // — unlike `top.mute`/`top.filter`/`top.bin` above, which mark
+        // each BUTTON, this marks the GROUP as a whole, so the guide
+        // shows whether the group is actually staying inside band 0's
+        // own margin (and shifting left for `binBadgeText`) rather
+        // than just where its buttons landed.
+        //
+        // Mirrored-layout round: reads `laptopControlGroupFrame`
+        // directly now — the real, measured frame, whichever edge the
+        // group grew from — rather than reconstructing a box from a
+        // separately-computed `trailingX`, which only ever described
+        // the unmirrored (trailing-anchored) case correctly.
+        if let frame = laptopControlGroupFrame {
+            duoGuideRect(frame, color: .teal, label: "deck.group \(duoGuideFormat(frame))")
+        }
+        if let pager = duoLayout.laptopPagerCenters(containerSize: containerSize, safeAreaBottom: safeAreaInsets.bottom) {
+            let prevRect = CGRect(x: pager.previous.x - pager.width / 2, y: pager.previous.y - pager.height / 2,
+                                   width: pager.width, height: pager.height)
+            let nextRect = CGRect(x: pager.next.x - pager.width / 2, y: pager.next.y - pager.height / 2,
+                                   width: pager.width, height: pager.height)
+            duoGuideRect(prevRect, color: .gray, label: "prev \(duoGuideFormat(prevRect))")
+            duoGuideRect(nextRect, color: .gray, label: "next \(duoGuideFormat(nextRect))")
+        }
+        // Every production view's own real rendered frame — the
+        // stage, its caption (all four per-pose variants share the
+        // one "caption" name), its scrubber, its iCloud ring, the
+        // chin, the grid's date line, and each rail item (both the
+        // vertical and the laptop's horizontal row share the one
+        // "rail.*" name) — reported through `.duoGuideMark` at each
+        // real call site. See `DuoGuideMarksKey`'s own comment.
+        ForEach(duoGuideMarks, id: \.id) { mark in
+            duoGuideRect(mark.rect, color: mark.color, label: "\(mark.id) \(duoGuideFormat(mark.rect))")
+        }
+        duoGuideLegend(duoLayout: duoLayout, containerSize: containerSize)
+    }
+
+    /// One guide's own outline + label, positioned the same way every
+    /// other absolute-positioned overlay in this file already is —
+    /// `.frame(width:height:)` then `.position(x: rect.midX, y:
+    /// rect.midY)` — so these guides sit in exactly the window space
+    /// every real caller already reads `occlusion`/`division`/
+    /// `railColumnRect` in, with no translation of their own to get
+    /// wrong.
+    ///
+    /// `labelAlignment` (round-4 review): the deck band labels
+    /// ("deck1 (scrubber/caption/group)", …) sat on top of the real
+    /// caption's own metadata line at the band's own top-leading
+    /// corner, the one spot that box always has real content at.
+    /// Defaults to `.topLeading`, unchanged for every other caller.
+    private func duoGuideRect(_ rect: CGRect, color: Color, label: String, labelAlignment: Alignment = .topLeading) -> some View {
+        ZStack(alignment: labelAlignment) {
+            Rectangle()
+                .stroke(color, lineWidth: 1)
+            // Owner re-adapt (pose pass): a small (icon-sized) box's
+            // own label used to `.fixedSize()`, the same as every
+            // other box here — fine for a wide box with clear room
+            // around it, but a tiny 40×40 top-row/rail-item box sits
+            // close enough to its neighbours that the UNCLIPPED label
+            // ran straight across the next box's own label. Clipping
+            // to the box's own width ONLY below this 60pt threshold
+            // keeps every other, roomier label exactly as it was.
+            duoGuideLabel(label, color: color, maxWidth: rect.width > 0 && rect.width < 60 ? max(rect.width, 20) : nil)
+        }
+        .frame(width: max(0, rect.width), height: max(0, rect.height), alignment: .topLeading)
+        .position(x: rect.midX, y: rect.midY)
+        .allowsHitTesting(false)
+    }
+
+    @ViewBuilder
+    private func duoGuideLabel(_ label: String, color: Color, maxWidth: CGFloat?) -> some View {
+        if let maxWidth {
+            Text(label)
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(color)
+                .padding(2)
+                .background(Color.black.opacity(0.6))
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: maxWidth, alignment: .leading)
+        } else {
+            Text(label)
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(color)
+                .padding(2)
+                .background(Color.black.opacity(0.6))
+                .fixedSize()
+        }
+    }
+
+    private func duoGuideFormat(_ rect: CGRect) -> String {
+        "\(Int(rect.minX)),\(Int(rect.minY)) \(Int(rect.width))×\(Int(rect.height)) midX=\(Int(rect.midX))"
+    }
+
+    /// The REAL system bar column's own rect — `barEdge`/`barWidth`
+    /// construct this directly, the same way `railColumn`'s own
+    /// closed-bar branch does; there is no reserved-region API for a
+    /// "bar" kind to read it from instead. `nil` on any bar-off pose
+    /// (no real bar to draw), kept as a plain (non-`@ViewBuilder`)
+    /// function since the `switch` it needs cannot live inside
+    /// `duoGuidesOverlay`'s own view-builder body.
+    private func duoGuideBarRect(duoLayout: DuoLayout, containerSize: CGSize) -> CGRect? {
+        guard let barEdge = duoLayout.barEdge, duoLayout.barWidth > 0 else { return nil }
+        switch barEdge {
+        case .leading:
+            return CGRect(x: 0, y: 0, width: duoLayout.barWidth, height: containerSize.height)
+        case .trailing:
+            return CGRect(x: containerSize.width - duoLayout.barWidth, y: 0, width: duoLayout.barWidth, height: containerSize.height)
+        }
+    }
+
+    /// A faint 50pt reference grid — column letters (A, B, C…) along
+    /// the top edge, row numbers (1, 2, 3…) down the leading edge —
+    /// owner, direct: "these lines are useful! can you add more so we
+    /// can use them as conversation references?" Lets a conversation
+    /// say "move Bin to C2" instead of a raw point pair. Deliberately
+    /// the faintest marks in this whole overlay, so the real UI stays
+    /// readable underneath.
+    @ViewBuilder
+    private func duoReferenceGrid(containerSize: CGSize) -> some View {
+        let step: CGFloat = 50
+        let columns = max(0, Int(containerSize.width / step))
+        let rows = max(0, Int(containerSize.height / step))
+        ForEach(0...columns, id: \.self) { i in
+            let x = CGFloat(i) * step
+            Rectangle()
+                .fill(Color.white.opacity(0.08))
+                .frame(width: 1, height: containerSize.height)
+                .position(x: x, y: containerSize.height / 2)
+                .allowsHitTesting(false)
+            if i < columns {
+                Text(Self.duoGuideColumnLetter(i))
+                    .font(.system(size: 8, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.4))
+                    .position(x: x + step / 2, y: 6)
+                    .allowsHitTesting(false)
+            }
+        }
+        ForEach(0...rows, id: \.self) { i in
+            let y = CGFloat(i) * step
+            Rectangle()
+                .fill(Color.white.opacity(0.08))
+                .frame(width: containerSize.width, height: 1)
+                .position(x: containerSize.width / 2, y: y)
+                .allowsHitTesting(false)
+            if i < rows {
+                Text("\(i + 1)")
+                    .font(.system(size: 8, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.4))
+                    .position(x: 6, y: y + step / 2)
+                    .allowsHitTesting(false)
+            }
+        }
+    }
+
+    /// A, B, C, … Z, AA, AB, … — spreadsheet-style column naming, for
+    /// however wide a window this grid ever needs to label.
+    private static func duoGuideColumnLetter(_ index: Int) -> String {
+        var n = index
+        var letters = ""
+        repeat {
+            letters = String(UnicodeScalar(65 + n % 26)!) + letters
+            n = n / 26 - 1
+        } while n >= 0
+        return letters
+    }
+
+    /// The four safe-area insets, as dashed lines — "safe-area insets
+    /// as dashed lines (label 'safe T/L/B/R = n')," the owner's own
+    /// spec. `safeAreaInsets` is `fullscreenSafeArea`, the real
+    /// per-frame reading `railAlignedChinCenter` and every other
+    /// Duo-aware call in this file already uses — never a flat
+    /// constant.
+    @ViewBuilder
+    private func duoSafeAreaGuides(containerSize: CGSize, safeAreaInsets: EdgeInsets) -> some View {
+        if safeAreaInsets.top > 0 {
+            duoGuideDashedLine(horizontalAt: safeAreaInsets.top, containerSize: containerSize, label: "safe T=\(Int(safeAreaInsets.top))")
+        }
+        if safeAreaInsets.bottom > 0 {
+            duoGuideDashedLine(horizontalAt: containerSize.height - safeAreaInsets.bottom, containerSize: containerSize, label: "safe B=\(Int(safeAreaInsets.bottom))")
+        }
+        if safeAreaInsets.leading > 0 {
+            duoGuideDashedLine(verticalAt: safeAreaInsets.leading, containerSize: containerSize, label: "safe L=\(Int(safeAreaInsets.leading))")
+        }
+        if safeAreaInsets.trailing > 0 {
+            duoGuideDashedLine(verticalAt: containerSize.width - safeAreaInsets.trailing, containerSize: containerSize, label: "safe R=\(Int(safeAreaInsets.trailing))")
+        }
+    }
+
+    private func duoGuideDashedLine(horizontalAt y: CGFloat, containerSize: CGSize, label: String) -> some View {
+        ZStack(alignment: .topLeading) {
+            Path { path in
+                path.move(to: CGPoint(x: 0, y: y))
+                path.addLine(to: CGPoint(x: containerSize.width, y: y))
+            }
+            .stroke(Color.white.opacity(0.6), style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+            Text(label)
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .foregroundStyle(.white)
+                .padding(2)
+                .background(Color.black.opacity(0.6))
+                .fixedSize()
+                .position(x: 36, y: max(8, y - 8))
+        }
+        .allowsHitTesting(false)
+    }
+
+    private func duoGuideDashedLine(verticalAt x: CGFloat, containerSize: CGSize, label: String) -> some View {
+        ZStack(alignment: .topLeading) {
+            Path { path in
+                path.move(to: CGPoint(x: x, y: 0))
+                path.addLine(to: CGPoint(x: x, y: containerSize.height))
+            }
+            .stroke(Color.white.opacity(0.6), style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+            Text(label)
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .foregroundStyle(.white)
+                .padding(2)
+                .background(Color.black.opacity(0.6))
+                .fixedSize()
+                .position(x: x, y: 70)
+        }
+        .allowsHitTesting(false)
+    }
+
+    /// A small legend — colours, the current pose, and the window
+    /// size (e.g. "pose openTall 669x951"), the owner's own spec.
+    ///
+    /// Owner (pose pass, round 2): top-leading still wasn't free —
+    /// pose 5's own `pose5TopRow` sits top-LEADING there (Mute/Filter
+    /// near `stageRect.minX`), the same corner top-leading moved TO
+    /// after pose 3's caption bumped it off bottom-leading. No fixed
+    /// corner is free in every pose today, and the round-4 agents are
+    /// changing the laptop/column layouts as this is written, so a
+    /// third hardcoded guess could just as easily collide with
+    /// whatever they land on. Collapsible instead: starts as a small
+    /// tap target at top-CENTRE (clear of every pose's own leading or
+    /// trailing content in every capture so far), expands in place on
+    /// tap, never drawn without a deliberate tap asking for it.
+    @ViewBuilder
+    private func duoGuideLegend(duoLayout: DuoLayout, containerSize: CGSize) -> some View {
+        if duoGuideLegendExpanded {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("pose \(duoLayout.pose.rawValue) \(Int(containerSize.width))×\(Int(containerSize.height)) (tap to hide)")
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .foregroundStyle(.white)
+                    .padding(.bottom, 2)
+                duoGuideLegendRow(.red, "occlusion")
+                duoGuideLegendRow(.blue, "division")
+                duoGuideLegendRow(.green, "bar")
+                duoGuideLegendRow(.orange, "railColumn")
+                duoGuideLegendRow(.yellow, "ringX")
+                duoGuideLegendRow(.teal, "top row")
+                duoGuideLegendRow(.purple, "stage")
+                duoGuideLegendRow(.pink, "caption / grid")
+                duoGuideLegendRow(.mint, "chin")
+                duoGuideLegendRow(.cyan, "cloud ring")
+                duoGuideLegendRow(.indigo, "rail item")
+                duoGuideLegendRow(.gray, "deck / prev-next")
+                duoGuideLegendRow(.white, "safe area")
+            }
+            .padding(6)
+            .background(Color.black.opacity(0.85))
+            .cornerRadius(4)
+            .fixedSize()
+            .position(x: containerSize.width / 2, y: 110)
+            .onTapGesture { duoGuideLegendExpanded = false }
+        } else {
+            Text("legend")
+                .font(.system(size: 8, weight: .bold, design: .monospaced))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .background(Color.black.opacity(0.85))
+                .cornerRadius(4)
+                .fixedSize()
+                .position(x: containerSize.width / 2, y: 12)
+                .onTapGesture { duoGuideLegendExpanded = true }
+        }
+    }
+
+    private func duoGuideLegendRow(_ color: Color, _ name: String) -> some View {
+        HStack(spacing: 4) {
+            Rectangle().fill(color).frame(width: 8, height: 8)
+            Text(name)
+                .font(.system(size: 8, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.85))
+        }
+    }
     #endif
+
+    // MARK: - Pager background
+    //
+    // Compiled in every configuration — `pagerBackground` is called
+    // unconditionally from `body`'s `.background(...)` — unlike the
+    // guide overlay above, which only ever runs from inside DEBUG.
+
+    /// Owner, direct: "if you have to add a helper box or line to the
+    /// UI in dev that's fine, cause you're not nailing the network
+    /// status icon alignment at all." DEBUG-only, on only behind
+    /// `-cloudfull-duo-guides` — deliberately a bare launch-argument
+    /// check, not `DiagnosticsGate`/`DiagnosticsSwitch`: those also
+    /// turn on from the in-app diagnostics toggle, which would put
+    /// this on screen in an otherwise-normal DEBUG session. This must
+    /// never appear by accident, and never in a shipped build.
+    ///
+    /// Now a plain alias for `DuoGuides.isOn` — the shared flag every
+    /// `.duoGuideMark` call site across the app reads too, so there is
+    /// one source of truth instead of two bare launch-argument checks
+    /// that could drift.
+    private static var showsDuoGuides: Bool { DuoGuides.isOn }
+
+    /// `pager`'s own background — plain black outside
+    /// `-cloudfull-duo-guides`, unchanged. Owner: "I can't tell if the
+    /// laptop video sits flush on the fold." A video is opaque and
+    /// exactly fills whatever rect layout actually gave it — the only
+    /// way to SEE a gap between that rect and where it was supposed to
+    /// reach is to colour the destination differently from its
+    /// surroundings and let the video cover whatever it actually
+    /// reaches: any colour still showing through once it is on screen
+    /// IS the gap.
+    ///
+    /// `blue` is the whole window — "everything else behind controls."
+    /// `red` is this pose's own STRUCTURAL stage area — the box a video
+    /// is FIT into, not the aspect-dependent FITted rect itself (that
+    /// would always exactly equal the video's own rect, by definition,
+    /// and could never show a gap). `.laptop`/`.book` draw their own
+    /// `division` as a third, dim grey band on top of both, so the
+    /// fold's own edges stay visible against whichever colour is
+    /// under them.
+    ///
+    /// Pose by pose: `.laptop` — red is `[0, W] × [0, division.minY]`,
+    /// the SAME box `stageRect`'s own `.laptop` branch FITs into (see
+    /// that branch's own comment for why its bottom is `division.minY`
+    /// itself now, no separate gap) — the owner's own ask, stated
+    /// directly: "the upright half (window top → division.minY) RED,
+    /// the flat half (division.maxY → window bottom) BLUE." `.book`
+    /// (4/4W) — red is the left page, `[0, division.minX] × [0, H]`,
+    /// the same box `stageRect`'s own `.book` tall-video branch FITs
+    /// into; the right page (the grid) stays blue, unmarked, matching
+    /// the owner's own "left page red, right page blue." Every other
+    /// Duo pose (1V, 3, 5) — red is `availableRect`, the structural
+    /// box every one of THEIR OWN stage branches FITs into before an
+    /// aspect ratio narrows it (pose 3's own wide-video box additionally
+    /// excludes the chrome column and the caption band — `availableRect`
+    /// alone over-states that one pose's own red area slightly; flagged
+    /// here rather than adding a second, pose-3-only box, since the
+    /// owner's own ask was for the fold-flush check specifically).
+    /// `.tent` falls to the same `availableRect` default — no rail
+    /// column there either, so it reduces to the full container and red
+    /// sits exactly over blue, harmless, nothing to see either way.
+    /// `.regularPhone` draws no red at all (`nil`) — this tool is for
+    /// Duo pose work specifically, and a regular iPhone's own stage is
+    /// never in question here.
+    /// `stageArea`/`division` come from `DuoLayout.debugStageArea` — see
+    /// that method's own comment for the red rect's own pose-by-pose
+    /// definition and the `availableRect`/pose-3 caveat.
+    ///
+    /// This is the PAGER's own shared background, behind the whole
+    /// `ScrollView` — mostly covered in practice by each page's own
+    /// opaque background (`PlayerPageView`'s identical use of this same
+    /// pair, which is what actually shows through around a video in
+    /// normal use). Kept here too for whatever this layer alone ever
+    /// shows (between pages, before the first page lays out) so it
+    /// never reads plain black while guides are on.
+    @ViewBuilder
+    private func pagerBackground(duoLayout: DuoLayout, safeAreaTop: CGFloat, containerSize: CGSize) -> some View {
+        #if DEBUG
+        if Self.showsDuoGuides && DuoGuideColours.isOn {
+            DuoGuideColouredBackground(duoLayout: duoLayout, safeAreaTop: safeAreaTop, containerSize: containerSize)
+                .ignoresSafeArea()
+        } else {
+            Color.black
+        }
+        #else
+        Color.black
+        #endif
+    }
 
     // MARK: - Actions
     //
@@ -1202,6 +2833,64 @@ struct FeedView: View {
         // landing that pruning mid-flight causes.
         isAdvancing = true
         advanceTargetID = nextID
+        advanceNonce += 1
+    }
+
+    /// §3d's own mirror of `advanceToNextPage(from:)`: `index − 1`, the
+    /// same `advanceNonce` path, disabled at index 0 (the pager button
+    /// itself checks that through `laptopPagerIndex`, this is just the
+    /// action). Pose 6's own Previous pill is the one caller.
+    private func retreatToPreviousPage(from entry: DeckEntry) {
+        guard let index = viewModel.deck.firstIndex(where: { $0.id == entry.id }) else { return }
+        let previousIndex = index - 1
+        guard viewModel.deck.indices.contains(previousIndex) else { return }
+        let previousID = viewModel.deck[previousIndex].id
+        isAdvancing = true
+        advanceTargetID = previousID
+        advanceNonce += 1
+    }
+
+    /// Pose 6's Previous/Next pills act on the centred page
+    /// (`currentPageID`), not a tapped-from page — there is no
+    /// per-page `entry` in scope at the pill's own call site, unlike
+    /// `advanceToNextPage(from:)`'s other caller (`FeedPageContent
+    /// .onAdvanceRequested`, the exhausted card). These two small
+    /// wrappers resolve that entry once and hand it to the shared
+    /// action, so `laptopDeckControls` stays a plain view builder.
+    private func laptopGoToNextPage() {
+        guard let currentPageID, let entry = viewModel.deck.first(where: { $0.id == currentPageID }) else { return }
+        advanceToNextPage(from: entry)
+    }
+
+    private func laptopGoToPreviousPage() {
+        guard let currentPageID, let entry = viewModel.deck.first(where: { $0.id == currentPageID }) else { return }
+        retreatToPreviousPage(from: entry)
+    }
+
+    // MARK: - Step 12: DuoRightPage actions
+
+    /// `FeedPageContent`'s own inline `onRequestShrink` closure,
+    /// pulled out so `DuoRightPage`'s Shrink button reaches the exact
+    /// same sheet through the exact same path — "the same paths the
+    /// rail's shrinkButton … use" (`design/duo/duo_build_spec.md`
+    /// §3b).
+    private func requestShrink(assetID: String) {
+        Usage.shared.shrinkSheetOpened()
+        shrinkTarget = ShrinkTarget(id: assetID)
+    }
+
+    /// Plays `assetID` next on the left page — §3b: "`DeckViewModel
+    /// .insertNext` … F then runs the existing `advanceTargetID`/
+    /// `advanceNonce` scroll," the same path a trash tap's own advance
+    /// and the laptop pose's Next pill already use.
+    /// `insertNext` itself already no-ops (returns the current page's
+    /// own id, unchanged) for the current video or a stale/queued tile,
+    /// so this needs no guard of its own before scrolling.
+    private func playNextFromRightPage(assetID: String) {
+        let targetID = viewModel.insertNext(assetID: assetID)
+        guard !targetID.isEmpty else { return }
+        isAdvancing = true
+        advanceTargetID = targetID
         advanceNonce += 1
     }
 
@@ -1474,6 +3163,57 @@ struct FeedView: View {
     #endif
 }
 
+/// `FeedView.laptopCaptionDateLineCenterY`'s own anchor — see that
+/// property's comment, and `DuoRightGridBottomKey`'s identical pattern
+/// (`Cloudfull/Feed/DuoRightPage.swift`) this mirrors for the same
+/// cross-view geometry problem: a value only a real, laid-out view can
+/// report, needed by a sibling that cannot read it any other way.
+/// Reported only by the ACTIVE page's own `FeedPageContent
+/// .duoLaptopCaption` (gated on `isActive` at that call site, through
+/// `captionTexts(measureDateLineCenter:)`); a preloaded neighbor page
+/// reports nothing at all, so it can never win the `reduce` below and
+/// steal this value mid-swipe.
+struct LaptopCaptionDateLineCenterKey: PreferenceKey {
+    static let defaultValue: CGFloat? = nil
+    static func reduce(value: inout CGFloat?, nextValue: () -> CGFloat?) {
+        if let next = nextValue() { value = next }
+    }
+}
+
+/// `FeedView.laptopControlGroupFrame`'s own anchor — the Mute/
+/// Filter/Bin group's real rendered frame, reported by `FeedView
+/// .laptopDeckControls` itself. That view mounts once, globally, never
+/// per page, so — unlike `LaptopCaptionDateLineCenterKey` above —
+/// there is no second contributor this `reduce` ever needs to guard
+/// against.
+///
+/// Mirrored-layout round: carries the whole frame, not only `minX` —
+/// renamed from `LaptopControlGroupLeadingXKey`. Unmirrored,
+/// `duoLaptopCaption` still only ever needs `.minX` (the group's own
+/// leading edge, the caption's own clearance point on its trailing
+/// side); mirrored, it needs `.maxX` instead (the group now sits on
+/// the LEADING side, and the caption must clear its trailing edge).
+struct LaptopControlGroupFrameKey: PreferenceKey {
+    static let defaultValue: CGRect? = nil
+    static func reduce(value: inout CGRect?, nextValue: () -> CGRect?) {
+        if let next = nextValue() { value = next }
+    }
+}
+
+/// `FeedView.chromeBinCapsuleHeight`'s own anchor — pose 3/4/4W's Bin
+/// capsule's real rendered height, reported by `chromeColumnBinCapsule`
+/// itself. That view mounts once, globally (inside `chromeColumn`,
+/// never per page), so — same as `LaptopControlGroupLeadingXKey` above
+/// — there is no second contributor this `reduce` ever needs to guard
+/// against. `max`, not "last write wins": a height can only ever grow
+/// from real content, never arrive smaller by mistake.
+struct ChromeBinCapsuleHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = Rail.hit
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
 /// One page's own bottom-band content: its caption — date, resolution,
 /// duration, size — and its action rail (Keep, Share, Shrink, Delete).
 /// Both scroll with that page's video instead of staying fixed to the
@@ -1521,6 +3261,35 @@ private struct FeedPageContent: View {
     /// `StageGeometry.bottomBand` put the rail's bottom edge exactly
     /// where `PlayerPageView` puts the video's bottom edge.
     let safeAreaTop: CGFloat
+    /// The real bottom safe-area inset, threaded the same way
+    /// `safeAreaTop` is — build 8b's own addition, read only by
+    /// `duoLaptopCaption`/`laptopHorizontalRail` through
+    /// `DuoLayout.laptopBottomRect`/`laptopRailRow`. `0` on every
+    /// regular-iPhone or non-laptop call site; those functions never
+    /// read it there.
+    let safeAreaBottom: CGFloat
+    /// This frame's iPhone Duo geometry, threaded the same way
+    /// `safeAreaTop` is — see `PlayerPageView.duoLayout`'s identical
+    /// comment. `DuoLayout.none` on a regular iPhone, which keeps
+    /// `body`'s overlay layout exactly what it was before this
+    /// parameter existed. See `DuoLayout.railColumnRect` and this
+    /// file's `body`/`actionRailColumn` for how it is used.
+    let duoLayout: DuoLayout
+    /// The book pose's (4/4W) right-page grid's own real bottom edge,
+    /// threaded the same way `safeAreaTop` is — see `FeedView
+    /// .duoRightGridBottomY`'s own comment. Read only by
+    /// `duoBookCaption`. `nil` on every pose but book, and on book
+    /// itself until `DuoRightPage`'s own grid has laid out at least
+    /// once this launch.
+    let duoRightGridBottomY: CGFloat?
+    /// Pose 6 (laptop), round 4: the Mute/Filter/Bin group's own real
+    /// rendered frame, threaded the same way `duoRightGridBottomY` is
+    /// — see `FeedView.laptopControlGroupFrame`'s own comment. Read
+    /// only by `duoLaptopCaption`, to keep the caption's own text
+    /// clear of the group sharing its row — `.minX` unmirrored,
+    /// `.maxX` mirrored. `nil` on every pose but laptop, and on laptop
+    /// itself until the group has laid out at least once this launch.
+    let laptopControlGroupFrame: CGRect?
     /// Bumped by `FeedView` on every double tap of this page's video — see
     /// `FeedView.doubleTapKeepNonces`. Watched below; each bump is one
     /// `keepFromDoubleTap()`.
@@ -1698,6 +3467,51 @@ private struct FeedPageContent: View {
         // size that view feeds `StageGeometry`.
         GeometryReader { proxy in
             let bottomBand = StageGeometry.bottomBand(safeAreaTop: safeAreaTop, containerSize: proxy.size)
+            // Build 5: the REAL band below the stage, from the real
+            // stage height (`duoLayout.stageRect`'s own `.height`),
+            // not `bottomBand`'s width-derived assumption above —
+            // identical to it on a regular iPhone (width always
+            // binds there), but different once a Duo pose's own
+            // excluded column makes HEIGHT the binding side instead.
+            // `captionZone` compares this against
+            // `ScrubberView.minimumSeamBand` (50) to decide whether
+            // the on-video scrubber line this pose falls back to
+            // (`PlayerPageView.bottomSpace` the same size) needs the
+            // caption lifted clear of it — see that function's own
+            // comment.
+            let realStageHeight = duoLayout.stageRect(containerSize: proxy.size, safeAreaTop: safeAreaTop).height
+            // Owner re-adapt (pose pass, 1V): matches
+            // `PlayerPageView`'s identical `.closed` term on its own
+            // `ScrubberView.bandHeight` — the scrubber line is forced
+            // onto the video's own bottom edge for this pose now, so
+            // `captionZone`'s own `liftsForScrubber` check (below)
+            // must see the same `0`, not the generically-computed real
+            // band, to agree about whether the caption needs lifting
+            // clear of it.
+            let realBottomBand = duoLayout.pose == .closed ? 0 : StageGeometry.bottomBand(
+                safeAreaTop: safeAreaTop, stageHeight: realStageHeight, containerHeight: proxy.size.height
+            )
+            // `nil` on a regular iPhone, and on an open Duo too narrow
+            // for one: every call below falls back to the pre-Duo
+            // overlay, unchanged. Non-`nil` on the closed Duo (the
+            // system's own bar column) and on an open Duo wide enough
+            // (a computed column) — see `DuoLayout.railColumn`'s own
+            // comment for why those two share this one rectangle.
+            let railColumnRect = duoLayout.railColumnRect(containerSize: proxy.size, safeAreaTop: safeAreaTop)
+            // Build 4: pose 3 (openWide) and pose 4/4W (book) place the
+            // caption at their own fixed point off the stage —
+            // `duoOpenWideCaption`/`duoBookCaption`, rendered as their
+            // own absolute-positioned siblings below, never through
+            // this VStack's flow layout. Both poses already have a
+            // non-nil `railColumnRect` (the bar is on for them too —
+            // see `DUO_POSES.md`), so without this guard the `if let
+            // railColumnRect` branch below would ALSO render a second,
+            // flow-positioned caption for them.
+            //
+            // Build 8b: pose 6 (laptop) joins the same guard —
+            // `duoLaptopCaption`'s own fixed point below the fold,
+            // never this VStack's flow layout either.
+            let usesDuoCaption = duoLayout.pose == .openWide || duoLayout.pose == .book || duoLayout.pose == .laptop
             VStack(spacing: 0) {
                 Spacer(minLength: 0)
                 // `exhaustedCard` sits directly above the caption and
@@ -1707,18 +3521,100 @@ private struct FeedPageContent: View {
                     exhaustedCard
                         .padding(.bottom, 24)
                 }
-                HStack(alignment: .bottom, spacing: 0) {
-                    captionZone
-                    VStack(alignment: .trailing, spacing: 0) {
-                        if isActive, let calloutMessage = shareCoordinator.calloutMessage {
-                            railCallout(calloutMessage)
+                if !usesDuoCaption {
+                    if let railColumnRect {
+                        // The rail lives in its own column
+                        // (`actionRailColumn` below), not over the
+                        // stage, so the caption only needs to stay
+                        // clear of that column, not of a rail that is
+                        // no longer on the video.
+                        //
+                        // Owner re-adapt (pose 5, right-align): a
+                        // height-bound video's own leading edge now
+                        // sits wherever `stageRect` right-aligned it
+                        // to, not always 0 — "caption leading =
+                        // stage.minX + 16." 1V reads the same
+                        // `railColumnRect` branch but never moves its
+                        // own video off the leading edge, so this is a
+                        // no-op there (`stageRect.minX` is already 0).
+                        //
+                        // Mirrored-layout round: `captionZone`'s own
+                        // `leadingClearance` is really "the gap on the
+                        // side AWAY from the rail" — it lands on the
+                        // trailing edge once mirrored (see that
+                        // function's own comment), so this must read
+                        // whichever side of `stageRect` is now the
+                        // away-from-rail one too: `stage.minX` when
+                        // the video left-aligns (unmirrored), the gap
+                        // past `stage.maxX` to the window's own
+                        // trailing edge when it right-aligns
+                        // (mirrored) instead.
+                        // A plain closure, invoked at once — an
+                        // `if/else` with no trailing View expression,
+                        // written directly in this `@ViewBuilder`
+                        // body, is read as a view branch and fails to
+                        // type-check (see `duoLaptopCaption`'s
+                        // identical note).
+                        let leadingClearance: CGFloat = {
+                            guard duoLayout.pose == .openTall else { return 16 }
+                            let stage = duoLayout.stageRect(containerSize: proxy.size, safeAreaTop: safeAreaTop)
+                            return duoLayout.isMirrored
+                                ? proxy.size.width - stage.maxX + 16
+                                : stage.minX + 16
+                        }()
+                        captionZone(leadingClearance: leadingClearance, trailingClearance: railColumnRect.width + 16, hidden: false, bandHeight: realBottomBand)
+                    } else {
+                        // Mirrored-layout round: this HStack is a true
+                        // two-pane layout, caption and rail each their
+                        // own side-by-side child — not one row whose
+                        // own internal padding/alignment can flip in
+                        // place, the way every other mirrored piece in
+                        // this file works. Mirrored, the PANES
+                        // themselves swap order, and the rail's own
+                        // `VStack` alignment swaps with them (leading,
+                        // hugging the screen's own true left bezel,
+                        // instead of trailing). `captionZone`'s own
+                        // call is UNCHANGED either way — its own
+                        // internal mirror logic (that function's own
+                        // comment) already reads correctly once it is
+                        // simply the HStack's other child.
+                        let railColumn = VStack(alignment: duoLayout.isMirrored ? .leading : .trailing, spacing: 0) {
+                            if isActive, let calloutMessage = shareCoordinator.calloutMessage {
+                                railCallout(calloutMessage)
+                            }
+                            actionRail(bottomBand: bottomBand)
                         }
-                        actionRail(bottomBand: bottomBand)
+                        .animation(.easeInOut(duration: 0.2), value: shareCoordinator.calloutMessage)
+                        HStack(alignment: .bottom, spacing: 0) {
+                            if duoLayout.isMirrored {
+                                railColumn
+                                captionZone(trailingClearance: 16, hidden: false, bandHeight: realBottomBand)
+                            } else {
+                                captionZone(trailingClearance: 16, hidden: false, bandHeight: realBottomBand)
+                                railColumn
+                            }
+                        }
                     }
-                    .animation(.easeInOut(duration: 0.2), value: shareCoordinator.calloutMessage)
                 }
             }
             .frame(width: proxy.size.width, height: proxy.size.height)
+            // Build 8b: pose 6 never uses the vertical rail column —
+            // `laptopHorizontalRail` below draws its own five buttons
+            // in a row instead, so this must not also render
+            // `actionRailColumn` even on a wide enough laptop window
+            // where `railColumn`'s own generic (bar/occlusion-based)
+            // gate happens to pass.
+            if let railColumnRect, duoLayout.pose != .laptop {
+                actionRailColumn(rect: railColumnRect, containerSize: proxy.size)
+            }
+            if duoLayout.pose == .openWide {
+                duoOpenWideCaption(containerSize: proxy.size, safeAreaTop: safeAreaTop)
+            } else if duoLayout.pose == .book {
+                duoBookCaption(containerSize: proxy.size, safeAreaTop: safeAreaTop)
+            } else if duoLayout.pose == .laptop {
+                duoLaptopCaption(containerSize: proxy.size, safeAreaBottom: safeAreaBottom)
+                laptopHorizontalRail(containerSize: proxy.size, safeAreaBottom: safeAreaBottom)
+            }
             #if DEBUG
             pageFactsProbe
             #endif
@@ -1804,8 +3700,34 @@ private struct FeedPageContent: View {
             .joined(separator: " · ")
     }
 
-    private var captionZone: some View {
-        VStack(alignment: .leading, spacing: 3) {
+    /// The caption's own two lines, with no outer positioning — shared
+    /// by `captionZone` (every pose but 3/4/4W) and, as of build 4,
+    /// `duoOpenWideCaption`/`duoBookCaption`, which each wrap this in
+    /// their own absolute-positioned frame instead of `captionZone`'s
+    /// flow-based padding.
+    ///
+    /// `measureDateLineCenter` (round 4, default `false`, every call
+    /// site but `duoLaptopCaption`'s own): reports the date line's
+    /// real, just-laid-out vertical centre through
+    /// `LaptopCaptionDateLineCenterKey` — see that key's own comment,
+    /// and `FeedView.laptopCaptionDateLineCenterY`'s. `duoLaptopCaption`
+    /// passes `isActive` here, so only the one page genuinely on
+    /// screen (not a preloaded neighbor) ever reports a position.
+    ///
+    /// Review fix: the `VStack`'s own `alignment` used to stay
+    /// `.leading` regardless of `duoLayout.isMirrored` — every call
+    /// site already flips its OWN outer `.frame(alignment:)` to put
+    /// the box on the trailing side when mirrored (see
+    /// `duoOpenWideCaption`/`duoLaptopCaption`'s own bodies), but the
+    /// text's own reading edge inside that box stayed leading either
+    /// way — wrong once the two lines genuinely differ in width (a
+    /// long place name on the date line, say): the shorter line should
+    /// hug the TRAILING edge when mirrored, matching the comment near
+    /// `duoLaptopCaption`'s own mirrored branch ("the TEXT's own
+    /// reading edge within it" flips too, not only the block's
+    /// position).
+    private func captionTexts(measureDateLineCenter: Bool = false) -> some View {
+        VStack(alignment: duoLayout.isMirrored ? .trailing : .leading, spacing: 3) {
             Text(dateLine)                           // "<date> · <time> · <place>"
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(.white)
@@ -1814,21 +3736,123 @@ private struct FeedPageContent: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
                 .truncationMode(.tail)
+                .background(alignment: .center) {
+                    if measureDateLineCenter {
+                        GeometryReader { proxy in
+                            Color.clear.preference(key: LaptopCaptionDateLineCenterKey.self, value: proxy.frame(in: .named("duoPage")).midY)
+                        }
+                    }
+                }
             Text(meta.detailText)                    // "4K · 1:12 · 428 MB"
                 .font(.system(size: 14))
                 .monospacedDigit()
                 .foregroundStyle(.white.opacity(0.85))
                 .lineLimit(1)
         }
-        .feedShadow()
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.leading, 16)
-        .padding(.bottom, 20)
-        // The caption uses the full width because the rail is on the
-        // video, not in the chin.
-        .padding(.trailing, 16)
-        .opacity(isScrubbing ? 0 : 1)
+    }
+
+    /// `trailingClearance` is how far the caption must stay off the
+    /// trailing edge: the overlay rail's own 16pt margin when the rail
+    /// is on the video (a regular iPhone, or an open Duo too narrow
+    /// for a column), or the rail COLUMN's full width plus that same
+    /// 16pt when the rail has moved there instead. See
+    /// `FeedPageContent.body` for which case applies, and
+    /// `DuoLayout.railColumnRect` for where the column's width comes
+    /// from.
+    /// `hidden` is always `false` from both call sites below, as of
+    /// step 2's build 1 fix: the old round's `isLandscapeFit` used to
+    /// pass `true` here for a real-rotation horizontal video on an
+    /// open Duo, but the round-3 wireframes (`DUO_POSES.md`) keep the
+    /// caption visible for pose 3's wide video too. Kept as its own
+    /// parameter, rather than deleted outright, since the caption
+    /// hiding the same way `isScrubbing` already does — opacity, plus
+    /// its own accessibility bits below, independent of the outer
+    /// `hideForFullscreen` path — is a real, reusable shape a later
+    /// pose could still need.
+    ///
+    /// `bandHeight` is build 5's own addition: the REAL band below
+    /// the stage (`FeedPageContent.body`'s own `realBottomBand`),
+    /// compared against `ScrubberView.minimumSeamBand` the same way
+    /// that view compares it, to decide the bottom padding. Below 50,
+    /// `ScrubberView` itself falls back from the seam to the on-video
+    /// placement — the hairline sits inside its own 28pt track box,
+    /// drawn over the video's own bottom pixels rather than below
+    /// them. The plain 20pt padding below is exactly what
+    /// `StageGeometry.captionCenterFromBottom`'s own header comment
+    /// derives from, with no such line to clear; once that line is on
+    /// the video instead, this adds the track box's own height (28)
+    /// on top of it — 48pt total — so the caption lifts clear of it.
+    /// Pose 1V (closed) and pose 5 (open-tall) are the two poses
+    /// where the real band can fall under 50 today — the build-list's
+    /// own check for this step, "Duo 1V + 5: no scrubber line crosses
+    /// the text."
+    ///
+    /// Re-adapted (`design/duo/duo_audit_apple_checklist.md` §5): this
+    /// used to be described as "(Duo only)," which reads like a device
+    /// check. It is not one — `duoLayout.pose != .regularPhone` is
+    /// `DuoLayout.classify`'s own SPACE-derived result (R1, Decision
+    /// B), the same hard-rule gate every new Duo branch in this app
+    /// already follows, never a device name or model check. Without
+    /// it, a regular iPhone whose own band happens to fall under 50
+    /// (an iPhone SE, close to 16:9) would also read 48pt here instead
+    /// of its today's flat 20pt — a real behaviour change on a device
+    /// this branch must leave untouched. The gate stays for that
+    /// reason; only the "(Duo only)" framing was ever imprecise.
+    ///
+    /// Owner re-adapt (pose pass, pose 1V): "the line's slightly above
+    /// the bottom — it should be on the bezel... [caption] lower it
+    /// the same amount, keep its gap." Pose 1V's own `ScrubberView`
+    /// now pins its line flush to the true bottom edge
+    /// (`PlayerPageView`'s own `pinsToBottomEdge`), not `trackBoxHeight`
+    /// above it, so the `+ 28` term — which existed only to clear that
+    /// 28pt box's own height — no longer applies there: a plain 20pt
+    /// gap from the page's own bottom edge already measures "20pt
+    /// above the line" directly, once the line IS the bottom edge.
+    /// Pose 5 is untouched — its own scrubber still rests at the top
+    /// of its 28pt box, so it keeps the `20 + 28` sum unchanged.
+    private func captionZone(leadingClearance: CGFloat = 16, trailingClearance: CGFloat, hidden: Bool, bandHeight: CGFloat) -> some View {
+        let liftsForScrubber = duoLayout.pose != .regularPhone && bandHeight < 50
+        let bottomPadding: CGFloat = duoLayout.pose == .closed ? 20 : (liftsForScrubber ? 20 + 28 : 20)
+        // Mirrored-layout round: "caption bottom-trailing" — the
+        // caption reads from the TRAILING edge instead, the SAME two
+        // clearance values just reflected: `leadingClearance` (the
+        // plain, small default every unmirrored caller leaves at 16)
+        // becomes the TRAILING padding, and `trailingClearance` (the
+        // caller's own rail/chrome-clearance amount) becomes the
+        // LEADING padding, clearing the rail/chrome now sitting there
+        // instead. Callers do not need their own mirrored branch —
+        // they already compute "the small gap" and "the gap that
+        // clears the rail" as two numbers; this is the one place that
+        // decides which edge each lands on.
+        let mirrored = duoLayout.isMirrored
+        return captionTexts()
+            .feedShadow()
+            // Marked HERE, before `.frame(maxWidth: .infinity,
+            // alignment: .leading)` just below — marking after that
+            // frame reported the whole page (951×669 for pose 3, the
+            // SAME chin/cloud mistake: an unconstrained expanding
+            // frame with nothing downstream to size it back down).
+            // Seen live only for a neighbour page caught mid pose
+            // transition (this function does not even mount for the
+            // active page once `usesDuoCaption` picks a different
+            // caption), but the same structural bug regardless of
+            // when it shows.
+            .duoGuideMark("caption", color: .pink, active: isActive)
+            .frame(maxWidth: .infinity, alignment: mirrored ? .trailing : .leading)
+            .padding(mirrored ? .trailing : .leading, leadingClearance)
+            .padding(.bottom, bottomPadding)
+            .padding(mirrored ? .leading : .trailing, trailingClearance)
+        // Keeps this block clear of the display's own rounded bottom
+        // corner — reported on the open-wide (landscape, bar-on) pose,
+        // where this caption sits flush at the window's leading edge
+        // and the corner there is big enough to actually clip it. See
+        // `FeedView.topChrome`'s identical `.containerCornerOffset`
+        // for the API itself; a no-op everywhere the existing padding
+        // and safe area already clear the corner on their own.
+        .containerCornerOffset(.bottom)
+        .opacity((isScrubbing || hidden) ? 0 : 1)
         .animation(.easeOut(duration: 0.15), value: isScrubbing)
+        .animation(.easeOut(duration: 0.15), value: hidden)
         .allowsHitTesting(false)
         .accessibilityElement(children: .combine)
         // This is the one identifier in `FeedPageContent` that can stay
@@ -1845,11 +3869,281 @@ private struct FeedPageContent: View {
         // directly on the synthesized node, and removes the identifier
         // in fullscreen. Off-center pages still render, fully
         // interactive, just without the identifier.
-        .accessibilityHidden(hideForFullscreen)
-        .accessibilityIdentifier(isActive && !hideForFullscreen ? "feed_caption" : "")
+        //
+        // `hidden` folds in here too, for whichever future caller
+        // passes `true` — see this function's own comment on `hidden`.
+        .accessibilityHidden(hideForFullscreen || hidden)
+        .accessibilityIdentifier(isActive && !hideForFullscreen && !hidden ? "feed_caption" : "")
         .accessibilityLabel(meta.placeText.map { "\($0). " + meta.voiceOverLabel } ?? meta.voiceOverLabel)
     }
 
+    // MARK: - Pose 3/4/4W caption (build 4)
+
+    /// Pose 3's own caption: off the video, bottom-leading at the
+    /// PAGE's own edges — "leading 24, bottom 30" (`DUO_POSES.md`'s
+    /// per-pose table) — rather than `captionZone`'s flow-based
+    /// leading 16/bottom 20 inside the VStack every other pose
+    /// shares. `maxWidth` clears the video's own leading edge by
+    /// 40pt, computed from the TALL-video stage box
+    /// (`duoLayout.stageRect`'s default aspect ratio) regardless of
+    /// which video shape is actually loaded: this view has no way to
+    /// read `PlayerPageView.videoIsLandscape` (a sibling view's own
+    /// `@State`), and the per-pose table's own clamp is spelled out
+    /// for the tall-video sub-case only. For the wide-video sub-case
+    /// this is a deliberate approximation — a narrower caption than
+    /// the table's own "under the video" row strictly needs, since
+    /// that row names no clamp at all — accepted rather than plumbing
+    /// the loaded video's shape across two views for one number;
+    /// flagged for the owner's own look at the sim.
+    ///
+    /// Positioned the same way `actionRailColumn` already is: a
+    /// target rect, `.frame(width:height:alignment:)` to give the
+    /// text a well-defined box, then `.position(x: rect.midX, y:
+    /// rect.midY)` — `.bottomLeading` alignment inside a box reaching
+    /// from the page's own top to `H − 30` is what lands the text's
+    /// OWN bottom-leading corner at `(24, H − 30)` regardless of its
+    /// rendered height, with no need to measure that height first.
+    private func duoOpenWideCaption(containerSize: CGSize, safeAreaTop: CGFloat) -> some View {
+        // Mirrored-layout round: this caption sits off the video, on
+        // the SAME bezel the stage itself touches — `openWideWideVideoBox`
+        // already moves that bezel to the trailing edge when mirrored,
+        // so this reads `stageMaxX` and the window's own trailing
+        // margin instead of `stageMinX`/leading.
+        let stage = duoLayout.stageRect(containerSize: containerSize, safeAreaTop: safeAreaTop)
+        let mirrored = duoLayout.isMirrored
+        let near: CGFloat = 24
+        let width = max(0, mirrored ? (containerSize.width - stage.maxX - 40 - near) : (stage.minX - 40 - near))
+        let rect = CGRect(x: mirrored ? containerSize.width - near - width : near, y: 0,
+                           width: width, height: max(0, containerSize.height - 30))
+        return captionTexts()
+            .feedShadow()
+            .frame(width: rect.width, alignment: mirrored ? .trailing : .leading)
+            .opacity(isScrubbing ? 0 : 1)
+            .animation(.easeOut(duration: 0.15), value: isScrubbing)
+            .allowsHitTesting(false)
+            .accessibilityElement(children: .combine)
+            .accessibilityHidden(hideForFullscreen)
+            .accessibilityIdentifier(isActive && !hideForFullscreen ? "feed_caption" : "")
+            .accessibilityLabel(meta.placeText.map { "\($0). " + meta.voiceOverLabel } ?? meta.voiceOverLabel)
+            .frame(width: rect.width, height: rect.height, alignment: mirrored ? .bottomTrailing : .bottomLeading)
+            .position(x: rect.midX, y: rect.midY)
+            .duoGuideMark("caption", color: .pink, active: isActive)
+    }
+
+    /// Pose 4/4W's own caption: the right page, "leading
+    /// `rightPage.minX + 20`" (`DUO_POSES.md`). Renders nothing when
+    /// `DuoLayout.rightPage` itself is `nil` (no active division this
+    /// frame). No `maxWidth` clamp in the per-pose table here: the
+    /// right page's own trailing edge (the rail/bar or chrome column
+    /// beyond it) already bounds the available width the same way
+    /// `captionZone`'s `trailingClearance` bounds every other pose's
+    /// caption, so `rightPage.maxX` is the clamp.
+    ///
+    /// Owner re-adapt (pose pass): was bottom-anchored at the screen's
+    /// own bottom edge ("bottom 30"); the wireframe puts it directly
+    /// UNDER the grid instead, a small gap below the last tile row.
+    ///
+    /// Owner re-adapt (pose pass, second round): `duoRightGridBottomY`
+    /// — see `FeedView`'s own property of that name — replaces an
+    /// earlier version that read an async singleton `DuoRightPage
+    /// .reload()` published by hand; that value could lag or race a
+    /// page change and leave this reading stale data, the owner's own
+    /// "sits at the bottom, not under the grid" report. This one comes
+    /// from a `GeometryReader`/`PreferenceKey` pair instead — always
+    /// whatever `DuoRightPage`'s own grid is actually showing, this
+    /// frame, never stale. Falls back to the old screen-bottom anchor
+    /// only when nothing has ever laid out yet (this launch's first
+    /// frame), or the grid came back empty.
+    @ViewBuilder
+    private func duoBookCaption(containerSize: CGSize, safeAreaTop: CGFloat) -> some View {
+        if let rightPage = duoLayout.rightPage(containerSize: containerSize, safeAreaTop: safeAreaTop) {
+            // Review fix (finding 4): `rightPage` itself already flips
+            // which physical side it occupies when mirrored (grid on
+            // the LEFT instead of the right — see that function's own
+            // comment), so `rightPage.minX`/`.maxX` swap which edge is
+            // "near the fold" and which is "the window's own outer
+            // edge" too. Unmirrored, `rightPage.minX` is the fold-
+            // adjacent edge (the wireframe's own `rightPage.minX + 20`)
+            // and `rightPage.maxX` is the outer edge, bare, no inset.
+            // Mirrored, that is reversed: `rightPage.maxX` is now the
+            // fold-adjacent edge (gets the 20pt inset instead) and
+            // `rightPage.minX` is the outer edge (stays bare) — using
+            // the unmirrored formula's bare `rightPage.minX + 20` here
+            // would have inset the wrong (outer) edge by 20pt and left
+            // the fold-adjacent edge at the bare `rightPage.maxX`,
+            // the exact opposite of "sits near the fold." A plain
+            // value closure, like `duoLaptopCaption`'s own
+            // `(leading, trailing)` — not an `if/else` written directly
+            // in this `@ViewBuilder` body, which the builder would try
+            // to read as a view branch (`duoLaptopCaption`'s own
+            // comment on this exact pattern).
+            let (leading, width): (CGFloat, CGFloat) = {
+                if duoLayout.isMirrored {
+                    let trailing = rightPage.maxX - 20
+                    return (rightPage.minX, max(0, trailing - rightPage.minX))
+                }
+                let leading = rightPage.minX + 20
+                return (leading, max(0, rightPage.maxX - leading))
+            }()
+            let captionHeight: CGFloat = 40
+            let top = duoRightGridBottomY.map { $0 + 16 } ?? max(0, containerSize.height - 30 - captionHeight)
+            let rect = CGRect(x: leading, y: top, width: width, height: captionHeight)
+            captionTexts()
+                .feedShadow()
+                .frame(width: rect.width, alignment: duoLayout.isMirrored ? .trailing : .leading)
+                .opacity(isScrubbing ? 0 : 1)
+                .animation(.easeOut(duration: 0.15), value: isScrubbing)
+                .allowsHitTesting(false)
+                .accessibilityElement(children: .combine)
+                .accessibilityHidden(hideForFullscreen)
+                .accessibilityIdentifier(isActive && !hideForFullscreen ? "feed_caption" : "")
+                .accessibilityLabel(meta.placeText.map { "\($0). " + meta.voiceOverLabel } ?? meta.voiceOverLabel)
+                .frame(width: rect.width, height: rect.height, alignment: duoLayout.isMirrored ? .topTrailing : .topLeading)
+                .position(x: rect.midX, y: rect.midY)
+                .duoGuideMark("caption", color: .pink, active: isActive)
+        }
+    }
+
+    // MARK: - Pose 6 (laptop) caption + rail (build 8b)
+
+    /// Pose 6's own caption, in the shared bottom deck's own band 0
+    /// (`design/duo/duo_build_spec.md` §2.6) — the same
+    /// `.bottomLeading`-positioned-rect technique `duoOpenWideCaption`/
+    /// `duoBookCaption` already use, so the text's own natural height
+    /// never has to be hand-measured. Renders nothing when
+    /// `DuoLayout.laptopCaptionBottomY` is `nil` (no active division
+    /// this frame).
+    ///
+    /// Owner re-adapt (round 4): "put the filters in the top right of
+    /// the bottom section, across and aligned from the date and
+    /// time." This row now has a second occupant — the Mute/Filter/
+    /// Bin group (`FeedView.laptopDeckControls`) — so it can no
+    /// longer claim the row's whole width. Unmirrored, `trailing` stops
+    /// short of the group's own real left edge
+    /// (`laptopControlGroupFrame.minX`, a live measurement — see that
+    /// property's own comment), with `DuoLayout.pagePad` clear between
+    /// them; mirrored, the caption reads from the TRAILING side
+    /// instead, `leading` stopping short of the group's own real right
+    /// edge (`.maxX`) the same way — see this function's own body.
+    ///
+    /// Owner re-adapt (round-4 review): the fallback for the one
+    /// frame before the group has ever reported was the OLD
+    /// near-full-width edge — wrong once the group actually has a
+    /// trailing margin to fit inside. It is now that same trailing
+    /// margin (`DuoLayout.laptopControlGroupTrailingX`) minus the
+    /// group's own three-button width at rest (`3 * 44 + 2 * 12`,
+    /// `Rail`'s own 44pt minimum tap target and the group's own 12pt
+    /// `HStack` spacing) minus one more `pagePad` of clearance — the
+    /// same number the real, measured edge converges to once it
+    /// lands, so there is no visible jump between the guess and the
+    /// real value. The date line's own `lineLimit(1)`/
+    /// `minimumScaleFactor` (`captionTexts`) already does the actual
+    /// truncating when it loses this race — "the group wins its
+    /// space and the caption truncates," the owner's own call.
+    ///
+    /// Owner re-adapt (round-4 review): leading is `DuoLayout.pagePad`
+    /// (16), not a locally hand-picked 24 — the wireframe's own "line
+    /// up with the scrubber's left edge," which `laptopScrubberRect`
+    /// already insets by `pagePad`. Top is `laptopScrubberRect.maxY +
+    /// 8` — directly under the scrubber, the wireframe's own
+    /// placement — not `laptopCaptionBottomY` (band 0's own bottom
+    /// edge), which left a roughly 60pt dead gap between the scrubber
+    /// and a bottom-anchored date line. The box still ends at
+    /// `laptopCaptionBottomY`, now as its own bottom edge rather than
+    /// the text's own anchor, so `.topLeading` places the text right
+    /// under the scrubber instead of `.bottomLeading` pinning it to
+    /// band 0's own far edge.
+    @ViewBuilder
+    private func duoLaptopCaption(containerSize: CGSize, safeAreaBottom: CGFloat) -> some View {
+        if let scrubberRect = duoLayout.laptopScrubberRect(containerSize: containerSize, safeAreaBottom: safeAreaBottom),
+           let bottomY = duoLayout.laptopCaptionBottomY(containerSize: containerSize, safeAreaBottom: safeAreaBottom) {
+            // Mirrored-layout round: the group moved to the LEADING
+            // side, so the caption now reads from the TRAILING side
+            // instead — "caption + iCloud ring bottom-trailing," the
+            // same opposite-the-rail principle as everywhere else.
+            // `nearX` is `laptopControlGroupTrailingX`'s own value,
+            // whichever edge it now measures from (see that
+            // function's own comment); the `3 * 44 + 2 * 12` estimate
+            // (`Rail`'s own 44pt tap target × 3 buttons, the group's
+            // own 12pt `HStack` spacing × 2 gaps) is unchanged, only
+            // which edge it is subtracted from or added to flips.
+            let nearX = duoLayout.laptopControlGroupTrailingX(containerSize: containerSize, safeAreaBottom: safeAreaBottom)
+            let groupWidthEstimate: CGFloat = 3 * 44 + 2 * 12
+            // A plain closure, invoked at once: an `if/else` with no
+            // trailing View expression, written directly in this
+            // `@ViewBuilder` function's body, is read as a VIEW branch
+            // by the builder and fails to type-check (`()` is not a
+            // `View`) — this keeps the branch a plain value
+            // computation, outside the builder's own transform.
+            let (leading, trailing): (CGFloat, CGFloat) = {
+                if duoLayout.isMirrored {
+                    let fallbackLeading = (nearX ?? 0) + groupWidthEstimate + DuoLayout.pagePad
+                    let leading = laptopControlGroupFrame.map { $0.maxX + DuoLayout.pagePad } ?? fallbackLeading
+                    return (leading, containerSize.width - DuoLayout.pagePad)
+                }
+                let fallbackTrailing = (nearX ?? containerSize.width) - groupWidthEstimate - DuoLayout.pagePad
+                let trailing = laptopControlGroupFrame.map { $0.minX - DuoLayout.pagePad } ?? fallbackTrailing
+                return (DuoLayout.pagePad, trailing)
+            }()
+            let width = max(0, trailing - leading)
+            let top = scrubberRect.maxY + 8
+            let rect = CGRect(x: leading, y: top, width: width, height: max(0, bottomY - top))
+            // Owner call (relayed, item 3): "caption right-aligned on
+            // that line" once mirrored — the group sits on the LEFT of
+            // band 0's own date line, so the caption now reads from
+            // the RIGHT instead of the left, both the block's own
+            // position (handled above, by `leading`/`trailing`) and
+            // the TEXT's own reading edge within it.
+            captionTexts(measureDateLineCenter: isActive)
+                .feedShadow()
+                .frame(width: rect.width, alignment: duoLayout.isMirrored ? .trailing : .leading)
+                .opacity(isScrubbing ? 0 : 1)
+                .animation(.easeOut(duration: 0.15), value: isScrubbing)
+                .allowsHitTesting(false)
+                .accessibilityElement(children: .combine)
+                .accessibilityHidden(hideForFullscreen)
+                .accessibilityIdentifier(isActive && !hideForFullscreen ? "feed_caption" : "")
+                .accessibilityLabel(meta.placeText.map { "\($0). " + meta.voiceOverLabel } ?? meta.voiceOverLabel)
+                .frame(width: rect.width, height: rect.height, alignment: duoLayout.isMirrored ? .topTrailing : .topLeading)
+                .position(x: rect.midX, y: rect.midY)
+                .duoGuideMark("caption", color: .pink, active: isActive)
+        }
+    }
+
+    /// Pose 6's own horizontal action rail, centred in
+    /// `DuoLayout.laptopRailRow`'s own band — the same five buttons
+    /// `actionRail`/`actionRailColumn` draw everywhere else, this time
+    /// at that row's own points — per-page, like every other pose's
+    /// rail, since it describes the current item, not the screen (see
+    /// `FeedView.laptopDeckControls`'s own comment on which pieces of
+    /// §2.6 are global instead). The vertical hairline at
+    /// `hairlineX`/`hairlineY` is this row's own divider, between
+    /// Delete and the chin, clamped to `Rail.itemHeight` tall — owner
+    /// re-adapt: "a SHORT divider only as tall as the rail row," not
+    /// the whole deck (the first build's own bug, spanning
+    /// `bottom.height` and cutting through the Next pill below it).
+    @ViewBuilder
+    private func laptopHorizontalRail(containerSize: CGSize, safeAreaBottom: CGFloat) -> some View {
+        if let row = duoLayout.laptopRailRow(containerSize: containerSize, safeAreaBottom: safeAreaBottom),
+           row.centers.count == 5 {
+            Rectangle()
+                .fill(Color.white.opacity(0.2))
+                .frame(width: 1, height: Rail.itemHeight)
+                .position(x: row.hairlineX, y: row.hairlineY)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+            likeButton(rail).position(row.centers[0])
+                .duoGuideMark("rail.keep", color: .indigo, active: isActive)
+            shareButton.position(row.centers[1])
+                .duoGuideMark("rail.share", color: .indigo, active: isActive)
+            albumButton.position(row.centers[2])
+                .duoGuideMark("rail.album", color: .indigo, active: isActive)
+            shrinkButton(rail).position(row.centers[3])
+                .duoGuideMark("rail.shrink", color: .indigo, active: isActive)
+            deleteButton(rail).position(row.centers[4])
+                .duoGuideMark("rail.delete", color: .indigo, active: isActive)
+        }
+    }
 
     // MARK: - Rail callout
     //
@@ -1889,6 +4183,12 @@ private struct FeedPageContent: View {
     /// rail's bottom edge sits `Rail.seamClearance` above the video's
     /// bottom edge, the playhead seam — on the video, not in the chin.
     private func actionRail(bottomBand: CGFloat) -> some View {
+        // Mirrored-layout round (item D, left-handed regular iPhone):
+        // the whole point of the setting — the rail itself moves to
+        // the LEADING edge. No rail COLUMN exists here (this is the
+        // pre-Duo overlay, `railColumnRect == nil`), so this is the
+        // one place that reads `isMirrored` directly rather than
+        // through `DuoLayout.railColumn`'s own edge.
         VStack(spacing: Rail.spacing) {
             likeButton(rail)
             shareButton
@@ -1896,8 +4196,63 @@ private struct FeedPageContent: View {
             shrinkButton(rail)
             deleteButton(rail)
         }
-        .padding(.trailing, 10)
+        .padding(duoLayout.isMirrored ? .leading : .trailing, 10)
         .padding(.bottom, bottomBand + Rail.seamClearance)
+    }
+
+    /// `actionRail`'s column layout (steps 3/5): the same five
+    /// buttons, the same `Rail.spacing`, placed inside the rail
+    /// column instead of over the stage.
+    ///
+    /// X-centred on `DuoLayout.ringCenteredColumnX` — on the closed
+    /// bar, the ring's own real `.occlusion` midX (owner re-adapt,
+    /// pose pass: the bar rect's own naive midpoint sat measurably off
+    /// the real ring — see that function's own comment for the
+    /// measured numbers); on the open-tall column,
+    /// `DuoLayout.railColumn`'s own open-branch already centres the
+    /// column on the same `.occlusion` midX by construction (F6), so
+    /// this reads the same value there too, just by a different route.
+    ///
+    /// Anchored top or bottom per `DuoLayout.railVerticalExtent`, not
+    /// decided here: bar ON anchors from the bottom (the ring sits
+    /// above the rail there, with no SDK API to say by how much, but
+    /// the chin's own position below is exactly known); bar OFF
+    /// (open-tall) anchors from the top, flush with the stage's own
+    /// top edge, since in THAT pose the ring sits above the whole
+    /// stage rather than above the rail specifically — an earlier
+    /// version bottom-anchored this pose too and left a dead gap above
+    /// the rail, which was the owner's own report.
+    ///
+    /// `rect` is in `FeedPageContent.body`'s own `GeometryReader`
+    /// coordinate space — the same space `captionZone` and
+    /// `pageFactsProbe` already render in — so `.position(x:y:)`
+    /// below lands this exactly on `rect` without needing its own
+    /// `GeometryReader`. `containerSize` is that same reader's
+    /// `proxy.size`, needed separately because `railVerticalExtent`
+    /// measures from the page's own top and bottom, not from `rect`.
+    private func actionRailColumn(rect: CGRect, containerSize: CGSize) -> some View {
+        let extent = duoLayout.railVerticalExtent(containerSize: containerSize, safeAreaTop: safeAreaTop, safeAreaBottom: safeAreaBottom)
+        let top = extent?.top ?? 0
+        let centerX = duoLayout.ringCenteredColumnX(containerSize: containerSize, safeAreaTop: safeAreaTop) ?? rect.midX
+        return VStack(spacing: extent?.spacing ?? Rail.spacing) {
+            if isActive, let calloutMessage = shareCoordinator.calloutMessage {
+                railCallout(calloutMessage)
+            }
+            likeButton(rail)
+                .duoGuideMark("rail.keep", color: .indigo, active: isActive)
+            shareButton
+                .duoGuideMark("rail.share", color: .indigo, active: isActive)
+            albumButton
+                .duoGuideMark("rail.album", color: .indigo, active: isActive)
+            shrinkButton(rail)
+                .duoGuideMark("rail.shrink", color: .indigo, active: isActive)
+            deleteButton(rail)
+                .duoGuideMark("rail.delete", color: .indigo, active: isActive)
+        }
+        .animation(.easeInOut(duration: 0.2), value: shareCoordinator.calloutMessage)
+        .padding(.top, top)
+        .frame(width: rect.width, height: rect.height, alignment: .top)
+        .position(x: centerX, y: rect.midY)
     }
 
     /// Adding to an album is also possible through the system share sheet

@@ -45,6 +45,112 @@ struct ChinNavigation: View {
     /// band; other hosts pass `0`.
     let bottomBand: CGFloat
 
+    /// The rail's own lowest reach this frame, in this view's own
+    /// coordinate space (0 at the top) — see `DuoLayout.railBottom`.
+    ///
+    /// `0`, the default: no rail shares this screen (`SettingsView`,
+    /// `PhotoFeedView`, and every build below iOS 27.1 or on a regular
+    /// iPhone). The chin keeps its plain, fixed anchor unconditionally,
+    /// with no dependence on this view's own geometry at all — see
+    /// `resolvedBottomPadding`'s guard.
+    ///
+    /// A positive value: `FeedView`'s Videos mode, the one place a
+    /// rail actually exists. The chin derives a minimum gap below it
+    /// instead, only pulling its own anchor closer to the page bottom
+    /// when the plain fixed anchor would not already clear the rail —
+    /// see `resolvedBottomPadding`. On every device this has been
+    /// measured against so far, the plain anchor already clears it, so
+    /// this is a safety net for a short or unusually shaped screen,
+    /// not an observed change on today's iPhones.
+    let railBottom: CGFloat
+
+    /// When non-nil, the collapsed button's own resting position:
+    /// `resolvedTrailingPadding`/`resolvedBottomPadding` solve for the
+    /// `.padding(.trailing:)` + `.padding(.bottom:)` pair that puts
+    /// this view's own trailing edge and vertical centre on this
+    /// point while collapsed, instead of the usual bottom-trailing
+    /// anchor (plain 12pt trailing + `resolvedBottomPadding`'s fixed
+    /// anchor), and `collapsedHeight` becomes `Rail.hit` instead of
+    /// the plain default, to match a rail button's own size. The SAME
+    /// point also anchors the EXPANDED capsule — see this property's
+    /// own comment below for why.
+    ///
+    /// Solved as padding on the ordinary view, not a separate
+    /// `.position()` on a separate branch: a `.position()` branch that
+    /// only applied while collapsed, falling through to the padding
+    /// branch the instant `isExpanded` turned true, swapped the view's
+    /// own identity mid-tap. SwiftUI had nothing to interpolate across
+    /// that swap, so the capsule jumped to its expanded spot instead of
+    /// growing out of the rail-aligned circle — main's morph lost.
+    /// Padding on one unconditional view keeps the identity stable
+    /// across the whole gesture, so the same `expand()`/`collapse()`
+    /// springs that animate every other host's trailing/bottom padding
+    /// now animate this one's too.
+    ///
+    /// `nil` everywhere but five Duo poses: 1V (`.closed`), pose 3
+    /// (`.openWide`), pose 4/4W (`.book`), pose 5 (`.openTall`, bar
+    /// off) — the owner's own review there, "the buttons are too
+    /// high," and separately, "[the chin] should at least be bigger
+    /// and align with the other rail items" — and, since build 8b,
+    /// the laptop pose's own horizontal rail row (`.laptop`, pose 6,
+    /// §2.6, "chin collapsed centre (600, v 236)"). All five ask for
+    /// this control to sit at a specific point near the rail, rather
+    /// than at the fixed bottom-trailing spot every regular iPhone
+    /// still uses unconditionally; see `DuoLayout.railAlignedChinCenter`
+    /// for which point each pose supplies, and that function's own
+    /// comment for why every host that mounts this control (`FeedView`,
+    /// `PhotoFeedView`, `SettingsView`) reads the SAME one instead of
+    /// each solving its own copy.
+    ///
+    /// Read while EXPANDED too, not only collapsed (owner report, pose
+    /// 6: "when I tap the tab switcher it doesn't expand in place, it
+    /// moves to the bottom of the screen"). `resolvedTrailingPadding`/
+    /// `resolvedBottomPadding` grow the capsule out of this exact
+    /// point in every state: the trailing edge stays where the
+    /// collapsed button's own trailing edge sat, and the vertical
+    /// centre stays this point's own `y`, clamped only to keep the
+    /// capsule on screen (`resolvedTrailingPadding`'s own leading-edge
+    /// clamp) and, on pose 6, below the fold (`railAlignedTopClamp`).
+    /// This used to fall back to the ordinary bottom-trailing anchor
+    /// the moment `isExpanded` turned true — a different point with no
+    /// relation to where the collapsed button had just been, which is
+    /// what the owner saw as "it moves to the bottom of the screen."
+    let railAlignedCenter: CGPoint?
+
+    /// Pose 6 (laptop) only: the fold's own `y`, in this view's
+    /// coordinate space — `DuoLayout.laptopBottomRect`'s own `minY`,
+    /// the bottom-of-fold panel's top edge. `resolvedBottomPadding`
+    /// clamps the expanded capsule's own top edge to never rise above
+    /// this line, so growing it out of `railAlignedCenter` (itself
+    /// already well clear of the fold, centred in the rail row's own
+    /// band) can never put glass above the fold even on an unusually
+    /// short window. `nil` everywhere else — there is no fold to clamp
+    /// against on 1V or pose 5, and the plain bottom-trailing poses
+    /// never read this at all.
+    let railAlignedTopClamp: CGFloat?
+
+    /// The real home-indicator inset, read the same "pass the real
+    /// proxy value, never a constant" way every other Duo-aware number
+    /// in this app is — `resolvedBottomPadding` floors the EXPANDED
+    /// capsule's own bottom clearance at `max(safeAreaBottom, 8)`
+    /// (review follow-up), so a rail-aligned anchor sitting close to
+    /// the window's own bottom edge (1V/5's own Search-spot point) can
+    /// never grow the capsule out of that point and past the safe
+    /// area, or flush against a screen with no inset at all. `0` by
+    /// default: a regular iPhone's own plain bottom-trailing anchor
+    /// (`railAlignedCenter == nil`) never reads this at all.
+    let safeAreaBottom: CGFloat
+
+    /// Mirrored-layout round: true when this host's own `DuoLayout
+    /// .isMirrored` reads true — see that property's own comment.
+    /// Flips which edge this control anchors to and grows from:
+    /// LEADING instead of TRAILING, in every state this file already
+    /// handles collapsed or expanded, rail-aligned or the plain
+    /// default. `false` by default (every call site but the three real
+    /// hosts, and any host that has not read `DuoLayout` at all),
+    /// which keeps this pixel-identical to before this round.
+    let isMirrored: Bool
+
     @State private var isExpanded = false
     @ObservedObject private var modeStore = AppModeStore.shared
     // Collapses the switcher when either pager starts to scroll.
@@ -88,16 +194,24 @@ struct ChinNavigation: View {
         case shell
     }
 
-    init(bottomBand: CGFloat) {
+    init(
+        bottomBand: CGFloat, railBottom: CGFloat = 0, railAlignedCenter: CGPoint? = nil,
+        railAlignedTopClamp: CGFloat? = nil, safeAreaBottom: CGFloat = 0, isMirrored: Bool = false
+    ) {
         self.bottomBand = bottomBand
+        self.railBottom = railBottom
+        self.railAlignedCenter = railAlignedCenter
+        self.railAlignedTopClamp = railAlignedTopClamp
+        self.safeAreaBottom = safeAreaBottom
+        self.isMirrored = isMirrored
     }
 
     var body: some View {
         // Uses its own `GeometryReader`, the same pattern as
         // `FeedView.body`'s root reader. The expanded capsule's width
-        // formula (`min(containerWidth - 32, 252)`) needs the real screen
-        // width. This view mounts as a leaf overlay, with no proxy of its
-        // own to borrow.
+        // formula (`Self.expandedWidth(containerWidth:)`) needs the real
+        // screen width. This view mounts as a leaf overlay, with no proxy
+        // of its own to borrow.
         //
         // `.ignoresSafeArea()` below: `FeedView`'s `rootProxy` does not
         // ignore the safe area. Without `.ignoresSafeArea()`, `proxy.size`
@@ -105,7 +219,12 @@ struct ChinNavigation: View {
         // ignores the safe area. This reader does the same, so
         // `captionCenterFromBottom` is the same distance in both places.
         GeometryReader { proxy in
-            ZStack(alignment: .bottomTrailing) {
+            // Mirrored-layout round: `isMirrored` flips this whole
+            // ZStack's own alignment to `.bottomLeading` — the chin
+            // anchors to, and expands from, the LEADING edge instead,
+            // the capsule's own leading edge fixed in place — see
+            // `resolvedNearPadding`'s own comment.
+            ZStack(alignment: isMirrored ? .bottomLeading : .bottomTrailing) {
                 // A clear full-screen catcher mounts only while the
                 // switcher is expanded. A tap or a short drag on it
                 // collapses the switcher. Declared first, so the capsule
@@ -151,16 +270,50 @@ struct ChinNavigation: View {
                         .accessibilityHidden(true)
                 }
 
+                // One modifier chain for every host and pose —
+                // `railAlignedCenter`'s own spot (1V, the open-tall rail
+                // column, the laptop rail row) and the ordinary
+                // bottom-trailing anchor both resolve down to
+                // trailing/bottom padding on the SAME view, never a
+                // `.position()` on a separate branch, and never a
+                // branch that swaps to a different anchor on expand.
+                //
+                // That used to be two mutually exclusive branches: a
+                // `.position()` one while collapsed-and-rail-aligned,
+                // and this padding one everywhere else, including the
+                // moment that same control expands. Switching branches
+                // mid-animation swaps the view's identity, so SwiftUI
+                // had nothing to interpolate — the capsule jumped
+                // straight to its expanded spot instead of growing out
+                // of the rail-aligned circle, breaking main's morph.
+                // Resolving both cases to padding on one unconditional
+                // view keeps the identity stable, so `expand()`'s and
+                // `collapse()`'s own springs (unchanged below) morph it
+                // exactly as they do on a regular iPhone, from
+                // whichever spot this pose uses.
                 switcher(containerWidth: proxy.size.width)
-                    // 12pt from the right edge, so the control does not
-                    // sit under the trash can. The bottom padding centers
-                    // the shape on `captionCenterFromBottom`. The
-                    // control's center then aligns with the caption text
-                    // in Videos and Photos.
-                    .padding(.trailing, 12)
-                    .padding(.bottom, StageGeometry.captionCenterFromBottom - currentHeight / 2)
+                    // 12pt from the near edge (trailing, or leading
+                    // when mirrored) on every host that has no
+                    // rail-aligned spot — the control does not sit
+                    // under the trash can. A rail-aligned pose pulls
+                    // this in instead, to its own measured spot, in
+                    // EVERY state, collapsed or expanded — see
+                    // `resolvedNearPadding`.
+                    .padding(isMirrored ? .leading : .trailing, resolvedNearPadding(containerWidth: proxy.size.width))
+                    // The bottom padding centers the shape on
+                    // `captionCenterFromBottom` by default — pulled
+                    // closer to the page bottom only if the rail's own
+                    // reach this frame would otherwise sit under it,
+                    // or replaced outright by a rail-aligned pose's own
+                    // spot, in every state — see `resolvedBottomPadding`.
+                    // The control's center then aligns with the caption
+                    // text in Videos and Photos, exactly as before, on
+                    // every screen that does not need either
+                    // adjustment.
+                    .padding(.bottom, resolvedBottomPadding(containerHeight: proxy.size.height))
+                    .duoGuideMark("chin", color: .mint)
             }
-            .frame(width: proxy.size.width, height: proxy.size.height, alignment: .bottomTrailing)
+            .frame(width: proxy.size.width, height: proxy.size.height, alignment: isMirrored ? .bottomLeading : .bottomTrailing)
         }
         .ignoresSafeArea()
         // The switcher is always expanded on the Settings screen. Seeding
@@ -206,12 +359,161 @@ struct ChinNavigation: View {
     // what the finger actually has to hit to 44pt, Apple's own minimum.
     // The glass circle stays the size it looks, so the wider tap target
     // costs nothing visually.
-    private static let collapsedHeight: CGFloat = 36
+    //
+    // `collapsedHeight` is an instance property, not `static`, only
+    // because every `railAlignedCenter` pose — 1V, 3, 4/4W, 5, and
+    // the laptop rail row alike — needs a different collapsed size —
+    // see that property's own comment. Every other host keeps the
+    // plain 36pt default, since `railAlignedCenter` is `nil` there.
+    private var collapsedHeight: CGFloat { railAlignedCenter != nil ? Rail.hit : 36 }
     /// The invisible square the collapsed button answers to. Apple's
-    /// Human Interface Guidelines set the minimum tap target at 44pt.
-    private static let collapsedTapTarget: CGFloat = 44
-    private static let expandedHeight: CGFloat = 56
-    private var currentHeight: CGFloat { isExpanded ? Self.expandedHeight : Self.collapsedHeight }
+    /// Human Interface Guidelines set the minimum tap target at 44pt —
+    /// `collapsedHeight` can grow past that (`Rail.hit`, 40pt, still
+    /// does not) but this never shrinks below it.
+    private var collapsedTapTarget: CGFloat { max(44, collapsedHeight) }
+    // Access only, not `private`, from here down: `DuoLayout
+    // .photosChinCenter`'s own 1H landscapeRight branch (code change 3,
+    // the owner's review) reads this to lift the expanded capsule clear
+    // of the camera on every frame — a Design-level read of a
+    // Feed-level constant, the same cross-layer read `railGap`/
+    // `pagePad` above already accept rather than duplicate.
+    static let expandedHeight: CGFloat = 56
+    private var currentHeight: CGFloat { isExpanded ? Self.expandedHeight : collapsedHeight }
+
+    /// Minimum gap kept between this control's own top edge and the
+    /// rail's last button (`railBottom`), when one exists on this
+    /// screen. A visual gap, 8pt, declared independently of
+    /// `DuoLayout` — this is a Feed-level view and that is a
+    /// Design-level type, so neither should import the other just to
+    /// read one number — not a safety margin the rail's own geometry
+    /// does not already guarantee.
+    private static let railGap: CGFloat = 8
+
+    /// The page's own leading/trailing margin, matching `DuoLayout
+    /// .pagePad`'s value (16pt) — redeclared here, not imported, for
+    /// the same reason `railGap` just above is: this is a Feed-level
+    /// view, `DuoLayout` is a Design-level type, and neither should
+    /// import the other to read one number. Used only to clamp the
+    /// EXPANDED capsule's own leading edge (`resolvedTrailingPadding`)
+    /// so growing it out of a rail-aligned pose's own anchor can never
+    /// push it past the page's own left margin.
+    private static let pagePad: CGFloat = 16
+
+    /// This control's own NEAR-edge padding — trailing, ordinarily; the
+    /// distance between its own leading edge and the page's instead,
+    /// once `isMirrored` flips `body`'s own alignment and padding edge
+    /// to match (renamed from `resolvedTrailingPadding`, mirrored-layout
+    /// round).
+    ///
+    /// `railAlignedCenter == nil`: the plain 12pt every host has
+    /// always used, unconditionally, in every state — pixel-identical
+    /// to what this control has always done, on whichever edge `body`
+    /// applies it to.
+    ///
+    /// `railAlignedCenter != nil`: solved for the padding that puts
+    /// this view's own NEAR edge — the ZStack aligns it to that same
+    /// corner — exactly `collapsedTapTarget / 2` past
+    /// `railAlignedCenter.x`, the same point `.position(x:,y:)` used
+    /// to be handed directly. Mirrored, that is `railAlignedCenter.x`
+    /// itself, measured in from the LEADING edge; unmirrored, it is
+    /// `containerWidth - railAlignedCenter.x`, measured in from the
+    /// TRAILING edge — the same formula, reflected. This is the SAME
+    /// value whether collapsed or expanded: since a fixed-edge padding
+    /// holds the view's own near edge in place regardless of its
+    /// width, holding this padding constant through the expand/collapse
+    /// morph is what keeps the capsule's own near edge exactly where
+    /// the collapsed button's near edge was, growing only into the
+    /// container — "expand in place" (owner report, pose 6: "it moves
+    /// to the bottom of the screen" instead). Expressing the pose's own
+    /// spot as padding on the ordinary view, instead of a separate
+    /// `.position()` on a separate branch, is what lets
+    /// `expand()`/`collapse()`'s springs (unchanged) animate the move —
+    /// see `body`'s own comment.
+    ///
+    /// Clamped while expanded so the capsule's own FAR edge never
+    /// passes `Self.pagePad`: a rail-aligned anchor can sit close
+    /// enough to the page's own far edge (pose 5, portrait, the
+    /// ring-centred column, on either edge once mirrored) that growing
+    /// a full 252pt-wide capsule into it, with no clamp, would push
+    /// part of the glass off screen. The clamp only ever pulls the
+    /// padding DOWN (pushing the capsule back on screen); it never
+    /// fires at any measured pose today, since every rail-aligned
+    /// anchor already leaves more than `pagePad` clear on its far
+    /// side.
+    private func resolvedNearPadding(containerWidth: CGFloat) -> CGFloat {
+        guard let railAlignedCenter else { return 12 }
+        let anchored = isMirrored
+            ? railAlignedCenter.x - collapsedTapTarget / 2
+            : containerWidth - railAlignedCenter.x - collapsedTapTarget / 2
+        guard isExpanded else { return anchored }
+        let expandedWidth = Self.expandedWidth(containerWidth: containerWidth)
+        let maxNearForOnScreenFarEdge = containerWidth - expandedWidth - Self.pagePad
+        return min(anchored, maxNearForOnScreenFarEdge)
+    }
+
+    /// This control's own bottom padding — the distance between its
+    /// own bottom edge and the page's.
+    ///
+    /// `railAlignedCenter != nil`: solved the same way
+    /// `resolvedTrailingPadding` solves for `x`, this time keeping the
+    /// view's own VERTICAL CENTRE — not its bottom edge — fixed at
+    /// `railAlignedCenter.y` in every state, collapsed or expanded,
+    /// using each state's own real height (`collapsedTapTarget` or
+    /// `Self.expandedHeight` — never `currentHeight`, which is
+    /// `collapsedHeight`, not `collapsedTapTarget`, while collapsed;
+    /// see `switcher(containerWidth:)`'s own frame for why the tap
+    /// target, not the visual circle, is this view's real collapsed
+    /// height). This is the other half of "expand in place": the
+    /// capsule grows taller/shorter around the same centre point
+    /// instead of sliding to a different one.
+    ///
+    /// Clamped while expanded two ways, both floors on how far DOWN
+    /// the capsule's own bottom edge may sit — never a ceiling, so
+    /// they only ever push the capsule UP, back on screen:
+    ///
+    /// 1. On pose 6 only (`railAlignedTopClamp` non-nil), so the
+    ///    capsule's own TOP edge never rises above the fold — see
+    ///    that property's own comment. `nil` on 1V, 5, and 3/4/4W,
+    ///    which have no fold to clamp against.
+    /// 2. Review follow-up, every rail-aligned pose alike: the
+    ///    capsule's own BOTTOM edge never sits closer than
+    ///    `max(safeAreaBottom, 8)` to the window's own bottom edge —
+    ///    1V/5's own Search-spot anchor sits close enough to that edge
+    ///    already that an EXPANDED capsule grown straight out of it
+    ///    could otherwise cross into, or flush against, the home
+    ///    indicator's own safe area.
+    ///
+    /// Otherwise (`railAlignedCenter == nil` — a regular iPhone's own
+    /// plain bottom-trailing anchor; every rail-aligned Duo pose this
+    /// app knows today — 1V, 3, 4/4W, 5, 6 alike — now reads
+    /// `DuoLayout.railAlignedChinCenter` instead, through whichever of
+    /// `FeedView`/`PhotoFeedView`/`SettingsView` mounts this control):
+    /// returns the plain, fixed anchor unconditionally, with no
+    /// dependence on `containerHeight` at all — pixel-identical to
+    /// what this control has always done. `railBottom > 0` still
+    /// pulls that anchor toward the page bottom instead, whenever the
+    /// rail's own reach this frame would otherwise sit under it,
+    /// capped at 0 (flush with the bottom edge, never past it) — the
+    /// case on every iPhone and iPhone Duo screen this has been
+    /// measured against so far leaves this a no-op safety net, not an
+    /// observed change.
+    private func resolvedBottomPadding(containerHeight: CGFloat) -> CGFloat {
+        if let railAlignedCenter {
+            let halfHeight = (isExpanded ? Self.expandedHeight : collapsedTapTarget) / 2
+            let anchored = containerHeight - railAlignedCenter.y - halfHeight
+            guard isExpanded else { return anchored }
+            let minBottomInset = max(safeAreaBottom, 8)
+            let flooredForBottomInset = max(anchored, minBottomInset)
+            guard let railAlignedTopClamp else { return flooredForBottomInset }
+            let maxBottomForClampedTop = containerHeight - Self.expandedHeight - railAlignedTopClamp
+            return min(flooredForBottomInset, maxBottomForClampedTop)
+        }
+        let fixedAnchor = StageGeometry.captionCenterFromBottom - currentHeight / 2
+        guard railBottom > 0 else { return fixedAnchor }
+        let railClearFromBottom = containerHeight - railBottom
+        let maxAnchor = railClearFromBottom - Self.railGap - currentHeight
+        return min(fixedAnchor, max(0, maxAnchor))
+    }
 
     /// Inset between the expanded capsule's edge and the segmented control
     /// inside it, per side. FabBar uses the same 2pt around its own
@@ -249,8 +551,22 @@ struct ChinNavigation: View {
 
     // MARK: - The control
 
+    /// The expanded capsule's own width: `pagePad`-equivalent margins
+    /// (16pt each side — `Self.pagePad`, redeclared from `DuoLayout
+    /// .pagePad`'s own value; see that constant's own comment for why
+    /// this file does not import `DuoLayout` to read it directly) on a
+    /// narrow container, capped at 252pt on a wide one. Shared by
+    /// `switcher(containerWidth:)`, which draws the capsule at this
+    /// width, and `resolvedTrailingPadding(containerWidth:)`, which
+    /// clamps the expanded capsule's own leading edge against it — the
+    /// two must agree on the same number or the clamp would check a
+    /// width the capsule is not actually drawn at.
+    private static func expandedWidth(containerWidth: CGFloat) -> CGFloat {
+        min(containerWidth - Self.pagePad * 2, 252)
+    }
+
     private func switcher(containerWidth: CGFloat) -> some View {
-        let width = min(containerWidth - 32, 252)
+        let width = Self.expandedWidth(containerWidth: containerWidth)
 
         return ZStack {
             shellGlass(width: width)
@@ -280,8 +596,8 @@ struct ChinNavigation: View {
         // that margin actually answer touches, instead of being empty
         // space.
         .frame(
-            width: isExpanded ? width : Self.collapsedTapTarget,
-            height: isExpanded ? Self.expandedHeight : Self.collapsedTapTarget
+            width: isExpanded ? width : collapsedTapTarget,
+            height: isExpanded ? Self.expandedHeight : collapsedTapTarget
         )
         .contentShape(Rectangle())
     }
@@ -303,7 +619,7 @@ struct ChinNavigation: View {
             // two objects with a gap between them. One animated frame
             // gives a continuous shrink.
             Color.clear
-                .frame(width: isExpanded ? width : Self.collapsedHeight, height: currentHeight)
+                .frame(width: isExpanded ? width : collapsedHeight, height: currentHeight)
                 .feedGlass(in: Capsule())
                 .glassEffectID(GlassPart.shell, in: glassNamespace)
         }
@@ -362,7 +678,7 @@ struct ChinNavigation: View {
                 // element attached to it, would stay clipped to 36pt.
                 // The button would then be missing from the
                 // accessibility tree.
-                .frame(width: Self.collapsedHeight, height: Self.collapsedHeight)
+                .frame(width: collapsedHeight, height: collapsedHeight)
                 .contentShape(Circle())
         }
         // `.plain`, not `.glass`: the circle's glass is drawn by
