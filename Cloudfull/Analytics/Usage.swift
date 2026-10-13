@@ -12,6 +12,7 @@ import CloudKit
 import CoreTelephony
 import Network
 import Photos
+import StoreKit
 import UIKit
 
 /// Records anonymous usage counts and uploads them to CloudKit.
@@ -639,6 +640,7 @@ final class Usage {
     /// counts each default once, not on every tap.
     func appOpened(cold: Bool, defaultTab: String, openMuted: Bool, liveDefaultOn: Bool, reminderOn: Bool, reminderHour: Int?) {
         beginSession(cold: cold)
+        noteInstallChannel()
         set("defaultTabSetting", defaultTab)
         set("openMutedSetting", openMuted ? "1" : "0")
         set("liveDefaultSetting", liveDefaultOn ? "1" : "0")
@@ -970,6 +972,35 @@ final class Usage {
             current.counts["\(key)@\(poseNow.rawValue)", default: 0] += 1
         }
         markDirty()
+    }
+
+    /// Where this copy of the app came from, read once per launch:
+    /// `appStore`, `testFlight` (StoreKit's sandbox), `debug` (a Debug
+    /// build run from Xcode), or `unknown` when StoreKit cannot say.
+    /// Uses `AppTransaction.shared`, which never shows a sign-in sheet
+    /// (only `refresh()` can).
+    private static var installChannel: String?
+    private func noteInstallChannel() {
+        #if DEBUG
+        set("installChannel", "debug")
+        #else
+        if let channel = Self.installChannel { set("installChannel", channel); return }
+        Task { @MainActor in
+            var channel = "unknown"
+            if let result = try? await AppTransaction.shared {
+                let environment: AppStore.Environment
+                switch result {
+                case .verified(let transaction): environment = transaction.environment
+                case .unverified(let transaction, _): environment = transaction.environment
+                }
+                if environment == .production { channel = "appStore" }
+                else if environment == .sandbox { channel = "testFlight" }
+                else if environment == .xcode { channel = "debug" }
+            }
+            Self.installChannel = channel
+            self.set("installChannel", channel)
+        }
+        #endif
     }
 
     private func set(_ key: String, _ value: String) {
