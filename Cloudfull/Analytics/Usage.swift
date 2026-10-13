@@ -419,7 +419,9 @@ final class Usage {
     /// would otherwise tag this event with the OLD pose.
     func fullscreenEntered(pose: Pose) {
         bump("video.rotatedToFullscreen", poseTwin: false)   // the unchanged total
-        bump("video.rotatedToFullscreenIn.\(pose.rawValue)", poseTwin: false)
+        // A regular iPhone is always `phone`, so its split would only
+        // repeat the total. The split is written for Duo shapes only.
+        if pose != .phone { bump("video.rotatedToFullscreenIn.\(pose.rawValue)", poseTwin: false) }
     }
     func quickAction(mode: Mode) { bump("quickAction.\(mode.rawValue)") }
     /// The book pose's (4/4W) right-page grid. A tile tap does not close

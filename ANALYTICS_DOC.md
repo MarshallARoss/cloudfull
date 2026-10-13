@@ -144,8 +144,7 @@ change, so a short frame in the middle of a fold or an unfold is not
 recorded as its own shape. On a regular iPhone the shape itself never
 changes. The exact new keys a regular iPhone's record carries are
 `secondsInPose.phone`, `foldable`, `startPose`, `runsOn`,
-`leftHandedSetting`, `modeSwitcherCancelled`, and
-`video.rotatedToFullscreenIn.phone`. A crash or a kill loses the seconds
+`leftHandedSetting`, and `modeSwitcherCancelled`. A crash or a kill loses the seconds
 of whichever shape was current when it happened, the same way a crash
 loses the last few seconds of `secondsIn.<mode>` — both are credited only
 on a change of shape/mode or at the end of a session.
@@ -203,7 +202,7 @@ on a change of shape/mode or at the end of a session.
 | `video.fastForwardHold` | A fast-forward hold gesture on a video. | Exact integer, running total. |
 | `video.scrub` | A scrub gesture on a video's timeline. | Exact integer, running total. |
 | `video.rotatedToFullscreen` | A video was rotated into fullscreen. | Exact integer, running total. |
-| `video.rotatedToFullscreenIn.<pose>` | The same event, split by the iPhone Duo phone shape it happened in. | Exact integer, running total. |
+| `video.rotatedToFullscreenIn.<pose>` | The same event, split by the iPhone Duo phone shape it happened in. Not written on a regular iPhone, where it would only repeat `video.rotatedToFullscreen`. | Exact integer, running total. |
 | `laptopPager.next` / `.previous` | The Duo's laptop pose (6) Previous/Next button was tapped. | Exact integer, running total. |
 | `duoGrid.tap.day` / `.tap.week` | A tap on a tile in the Duo book pose's (4) right-page grid, by whether the grid fell back from "Same day" to "Same week". | Exact integer, running total. |
 | `duoGrid.scroll` | A drag on the Duo book pose's (4) right-page grid. | Exact integer, running total. |

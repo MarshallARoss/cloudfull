@@ -331,10 +331,9 @@ def main():
         if sum(msCancelled.values()): print("    cancelled (same tab) by pose: " + "  ".join(f"{p}={n}" for p, n in msCancelled.items() if n))
         fsTotal = DC.get("video.rotatedToFullscreen", 0)
         # `video.rotatedToFullscreenIn.<pose>` is its own dedicated bump
-        # (not a `@`-suffixed twin), written for `phone` too — read it
-        # over `POSES_WITH_PHONE`, not `POSES`, or the phone's own share
-        # goes missing from the breakdown entirely.
-        fsByPose = {p: DC.get(f"video.rotatedToFullscreenIn.{p}", 0) for p in POSES_WITH_PHONE}
+        # (not a `@`-suffixed twin), written for Duo shapes only — a
+        # regular iPhone's share is the total itself.
+        fsByPose = {p: DC.get(f"video.rotatedToFullscreenIn.{p}", 0) for p in POSES}
         print(f"  fullscreen (sideways) total={fsTotal}   " + "  ".join(f"{p}={n}" for p, n in fsByPose.items() if n))
         # Fold playback: whether a video kept playing across a fold/
         # unfold, and, when it stopped, how long until it played again.
