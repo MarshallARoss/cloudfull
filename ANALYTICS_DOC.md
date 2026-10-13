@@ -177,6 +177,7 @@ on a change of shape/mode or at the end of a session.
 |---|---|---|
 | `action.<mode>.<kind>` | An action taken on an item, by feed and kind (`kind` = `keep`, `unkeep`, `delete`, `share`, `album`, `shrink`). | Exact integer, running total. |
 | `keepSource.<mode>.<source>` | A Keep, by how it was done (`source` = `rail` or `doubleTap`). | Exact integer, running total. |
+| `keepTapOnAlreadyKept.<mode>` | A double tap to Keep on an item that is already kept, so nothing changed (`mode` = `videos`, `photos`). | Exact integer, running total. |
 | `afterPhotoKeep.<result>` | What the user did right after a photo Keep (`result` = `swipe`, `stay`, `back`). | Exact integer, running total. |
 | `modeSwitch.<via>` | A switch between the Videos and Photos feeds, by how it was triggered (`via` = `chin`, `quickAction`, `notification`, `endPage`). | Exact integer, running total. |
 | `modeSwitchTo.<mode>` | Which feed a mode switch landed on. | Exact integer, running total. |
