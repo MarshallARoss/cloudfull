@@ -748,7 +748,9 @@ struct ChinNavigation: View {
         selectionToken += 1
         let token = selectionToken
 
-        if mode == displayMode { Usage.shared.switcherCancelled() }
+        // On Settings the switcher is always open, so a re-tap there is
+        // not a cancel.
+        if mode == displayMode, mode != .settings { Usage.shared.switcherCancelled() }
 
         // Re-picking the tab already selected is not a mode change. There
         // is nothing to commit, so this only puts the capsule away. On
