@@ -170,7 +170,7 @@ def main():
     if fe: print(f"  free space GB at end   avg {sum(fe)/len(fe):.1f}  (start minus end, summed: {sum(fs)-sum(fe):.1f} GB freed while in the app)" if len(fe) == len(fs) else f"  free space GB at end   avg {sum(fe)/len(fe):.1f}")
     for k in ("defaultTabSetting","openMutedSetting","liveDefaultSetting","dailyReminderSetting","dailyReminderHourSetting","albumSort","keepsAlbumSetting","appIconSetting",
               "sort.videos","filters.videos","types.videos","sort.photos","filters.photos","types.photos",
-              "photoPermissionAtStart","photoPermissionAfterSettings","daysSinceInstall","runsOn","leftHandedSetting",
+              "photoPermissionAtStart","photoPermissionAfterSettings","daysSinceInstall","runsOn","installChannel","leftHandedSetting",
               "darkModeSetting","reduceMotion","lowPowerAtStart","textSize","language","country","timeZone","utcOffsetMinutes","startHour","startWeekday",
               "audioRouteAtStart","audioRouteAtEnd","networkAtStart","networkExpensive","lowDataMode","networkAtEnd"):
         c = F.get(k, {}); t = sum(c.values())

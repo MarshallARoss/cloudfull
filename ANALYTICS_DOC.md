@@ -59,6 +59,7 @@ to the key.
 | `openedFromNotification` | Whether this session was opened by tapping a notification. | Boolean, `0` or `1`. |
 | `notificationKind` | Which notification type opened the session. | Fixed value, `daily`. |
 | `runsOn` | What kind of hardware the app runs on. | One of `iPhone`, `iPadCompat` (an iPad running the iPhone app in compatibility mode), `mac`, `other`. |
+| `installChannel` | Where this copy of the app came from. | One of `appStore`, `testFlight`, `debug` (a Debug build run from Xcode), `unknown`. |
 | `leftHandedSetting` | Whether the Left-handed controls setting is on. Read only when `foldable` is `0`; the Duo hides this setting. | Boolean, `0` or `1`. |
 | `foldable` | Whether this phone is an iPhone Duo. | Boolean, `0` or `1`. |
 
