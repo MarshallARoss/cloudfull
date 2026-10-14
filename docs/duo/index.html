@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cloudfull iPhone Duo</title>
+<meta name="description" content="A tour of the Cloudfull layout for every iPhone Duo pose: closed, wide, book, tall, and laptop.">
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0e0f12;
+    --fg: #f2f2f4;
+    --muted: #9a9aa2;
+    --card: #17191e;
+    --border: #2a2d34;
+    --accent: #81D3FE;
+    --accent-fg: #000000;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--fg);
+  }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.5;
+    -webkit-text-size-adjust: 100%;
+  }
+  main {
+    max-width: 680px;
+    margin: 0 auto;
+    padding: 32px 16px 64px;
+  }
+  a.back {
+    color: var(--accent);
+    text-decoration: none;
+    font-weight: 600;
+    font-size: 14px;
+  }
+  a {
+    color: var(--accent);
+  }
+  h1 {
+    font-size: 32px;
+    font-weight: 700;
+    margin: 20px 0 6px;
+  }
+  .pitch {
+    font-size: 19px;
+    color: var(--muted);
+    margin: 0 0 24px;
+  }
+  h2 {
+    font-size: 15px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+    color: var(--muted);
+    margin: 36px 0 12px;
+  }
+  h3 {
+    font-size: 17px;
+    font-weight: 700;
+    margin: 0 0 4px;
+  }
+  .hero-video {
+    display: block;
+    width: 100%;
+    border-radius: 16px;
+    background: var(--card);
+    border: 1px solid var(--border);
+  }
+  ul.features {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  ul.features li {
+    padding: 12px 14px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    margin-bottom: 8px;
+  }
+  .pose-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 16px;
+  }
+  .pose-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+  .pose-card img {
+    display: block;
+    width: 100%;
+    aspect-ratio: 4 / 3;
+    object-fit: contain;
+    background: var(--border);
+  }
+  .pose-body {
+    padding: 12px 14px 14px;
+  }
+  .pose-body p {
+    margin: 0;
+    color: var(--muted);
+    font-size: 15px;
+  }
+  .built-link {
+    margin: 12px 0 0;
+    color: var(--muted);
+  }
+  .appstore {
+    display: inline-block;
+    margin-top: 4px;
+  }
+  .appstore img {
+    display: block;
+    height: 54px;
+    width: auto;
+  }
+  footer {
+    margin-top: 48px;
+    padding-top: 24px;
+    border-top: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 13px;
+  }
+  footer .source {
+    margin: 16px 0 0;
+  }
+  footer .copyright {
+    margin: 12px 0 0;
+  }
+</style>
+</head>
+<body>
+<main>
+  <a class="back" href="../">&larr; Cloudfull</a>
+  <h1>Cloudfull on iPhone Duo</h1>
+  <p class="pitch">Your camera roll, one video at a time. Layouts for the Duo’s poses, on day one.</p>
+
+  <!--
+    Pitch video and poster are produced separately (the "Every pose. One app."
+    pitch render) and will be dropped in at docs/duo/cloudfull-duo-pitch.mp4
+    and docs/duo/cloudfull-duo-pitch.jpg before this page goes live. Do not
+    fabricate these files.
+  -->
+  <video class="hero-video" autoplay muted loop playsinline poster="/duo/cloudfull-duo-pitch.jpg">
+    <source src="/duo/cloudfull-duo-pitch.mp4" type="video/mp4">
+  </video>
+
+  <h2>Every pose</h2>
+  <!--
+    Pose photos are produced separately from the app's real interface and
+    will be dropped in at docs/duo/pose-1.png through pose-6.png. The
+    numbering matches Apple's pose names below and the raw capture numbering
+    used elsewhere in this project (pose1 = closed, pose3 = wide, pose4 =
+    book, pose5 = tall, pose6 = laptop). Do not fabricate these files.
+  -->
+  <div class="pose-grid">
+    <article class="pose-card">
+      <img src="/duo/pose-1.png" alt="Cloudfull closed on iPhone Duo, with playback controls in the outer system column.">
+      <div class="pose-body">
+        <h3>Closed</h3>
+        <p>The controls sit in the system column, next to the status ring.</p>
+      </div>
+    </article>
+    <article class="pose-card">
+      <img src="/duo/pose-2.png" alt="Cloudfull closed and turned sideways on iPhone Duo, a wide video filling the outer screen.">
+      <div class="pose-body">
+        <h3>Closed and turned sideways</h3>
+        <p>A wide video fills the whole outer screen.</p>
+      </div>
+    </article>
+    <article class="pose-card">
+      <img src="/duo/pose-3.png" alt="Cloudfull open in a wide layout on iPhone Duo, with a video and its controls side by side.">
+      <div class="pose-body">
+        <h3>Open in a wide layout</h3>
+        <p>Tall videos fit the full height. Wide videos fit with every control visible.</p>
+      </div>
+    </article>
+    <article class="pose-card">
+      <img src="/duo/pose-4.png" alt="Cloudfull partially folded like a book on iPhone Duo, with a video on the left page and a grid of videos on the right page.">
+      <div class="pose-body">
+        <h3>Partially folded, like a book</h3>
+        <p>The video plays on the left page. The right page shows the other moments from the same day, or the same week.</p>
+      </div>
+    </article>
+    <article class="pose-card">
+      <img src="/duo/pose-5.png" alt="Cloudfull open in a tall layout on iPhone Duo, with a tall video filling the full height of the screen.">
+      <div class="pose-body">
+        <h3>Open in a tall layout</h3>
+        <p>The closed layout, bigger. Tall videos are never cropped.</p>
+      </div>
+    </article>
+    <article class="pose-card">
+      <img src="/duo/pose-6.png" alt="Cloudfull folded like a laptop on iPhone Duo, with a video on the top half and controls on the bottom half.">
+      <div class="pose-body">
+        <h3>Folded like a laptop</h3>
+        <p>Video on top. Keep, Share, Shrink, Delete and Previous / Next on the bottom half.</p>
+      </div>
+    </article>
+  </div>
+
+  <h2>How it is built</h2>
+  <ul class="features">
+    <li>Real interface rotation, not a fixed layout.</li>
+    <li>Size classes, not device checks.</li>
+    <li>Reserved regions for the fold and the camera.</li>
+    <li>Hinge status, so the layout knows when the phone is folding.</li>
+    <li>No <code>UIScreen.main</code> anywhere in the code.</li>
+    <li>The layout on a regular iPhone is unchanged.</li>
+    <li>Built and tested in Xcode 27.1 Device Hub.</li>
+  </ul>
+  <p class="built-link">Cloudfull follows <a href="https://developer.apple.com/iphone-duo/">Apple's iPhone Duo guidance</a>.</p>
+
+  <h2>Private by design</h2>
+  <p>Cloudfull never uploads your photos or videos. There is no account, no sign-in, no ads, and no tracking. Your photos and videos stay on your phone, in every iPhone Duo pose.</p>
+
+  <footer>
+    <a class="appstore" href="https://apps.apple.com/app/id6816547769">
+      <img src="../app-store-badge.svg" alt="Download on the App Store">
+    </a>
+    <p class="source"><a href="https://github.com/MarshallARoss/cloudfull">View the source on GitHub</a></p>
+    <p class="copyright">&copy; 2026 Marshall Ross</p>
+  </footer>
+</main>
+</body>
+</html>
