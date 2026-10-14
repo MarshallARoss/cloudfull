@@ -3,232 +3,514 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Cloudfull iPhone Duo</title>
-<meta name="description" content="A tour of the Cloudfull layout for every iPhone Duo pose: closed, wide, book, tall, and laptop.">
+<title>Cloudfull on iPhone Duo</title>
+<meta name="description" content="Cloudfull on iPhone Duo: your camera roll, one video at a time.">
+<meta name="theme-color" content="#0e0f12">
+<meta property="og:title" content="Cloudfull on iPhone Duo">
+<meta property="og:description" content="Your camera roll, one video at a time.">
+<meta property="og:image" content="https://cloudfull.app/duo/cloudfull-duo-pitch.jpg">
+<meta property="og:type" content="website">
+<meta name="twitter:card" content="summary_large_image">
 <style>
   :root {
     color-scheme: dark;
     --bg: #0e0f12;
+    --bg-2: #060708;
     --fg: #f2f2f4;
     --muted: #9a9aa2;
-    --card: #17191e;
+    --muted-2: #6c6c74;
+    --card: #15161a;
+    --card-2: #1a1c21;
     --border: #2a2d34;
     --accent: #81D3FE;
     --accent-fg: #000000;
   }
   * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
   html, body {
     margin: 0;
     padding: 0;
     background: var(--bg);
     color: var(--fg);
   }
+  html { overflow-x: hidden; }
   body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-family: -apple-system, "SF Pro Display", BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     line-height: 1.5;
     -webkit-text-size-adjust: 100%;
+    overflow-x: hidden;
   }
-  main {
-    max-width: 680px;
-    margin: 0 auto;
-    padding: 32px 16px 64px;
+  img, video { max-width: 100%; }
+
+  a { color: var(--accent); }
+
+  /* ---------- top nav ---------- */
+  .nav {
+    position: static;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 22px clamp(16px, 4vw, 48px);
   }
-  a.back {
-    color: var(--accent);
+  .nav a.back {
+    color: #fff;
     text-decoration: none;
     font-weight: 600;
     font-size: 14px;
+    opacity: 0.85;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
   }
-  a {
-    color: var(--accent);
-  }
-  h1 {
-    font-size: 32px;
-    font-weight: 700;
-    margin: 20px 0 6px;
-  }
-  .pitch {
-    font-size: 19px;
-    color: var(--muted);
-    margin: 0 0 24px;
-  }
-  h2 {
-    font-size: 15px;
+  .nav a.back:hover { opacity: 1; }
+  .nav .brand {
+    color: #fff;
+    opacity: 0.7;
+    font-size: 13px;
     font-weight: 600;
-    text-transform: uppercase;
     letter-spacing: 0.02em;
-    color: var(--muted);
-    margin: 36px 0 12px;
   }
-  h3 {
-    font-size: 17px;
-    font-weight: 700;
-    margin: 0 0 4px;
+
+  /* ---------- hero ---------- */
+  .hero {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg);
+  }
+  .hero-media {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    max-height: 86svh;
+    background: #000;
+    overflow: hidden;
   }
   .hero-video {
-    display: block;
     width: 100%;
-    border-radius: 16px;
+    height: 100%;
+    object-fit: contain;
+    display: block;
+  }
+  @media (max-width: 700px) {
+    .hero-media { aspect-ratio: 9 / 16; max-height: none; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .hero-video { display: none; }
+    .hero-media { background: #000 url(/duo/cloudfull-duo-pitch.jpg) center / contain no-repeat; }
+  }
+  @media (prefers-reduced-motion: reduce) and (max-width: 700px) {
+    .hero-media { background-image: url(/duo/cloudfull-duo-pitch-vertical.jpg); }
+  }
+  .hero-scrim { display: none; }
+  .hero-content {
+    position: relative;
+    z-index: 2;
+    padding: clamp(28px, 5vh, 56px) clamp(16px, 5vw, 64px) clamp(32px, 6vh, 72px);
+    max-width: 920px;
+  }
+  .hero h1 {
+    font-size: clamp(34px, 6.4vw, 72px);
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    line-height: 1.04;
+    margin: 0 0 14px;
+    text-shadow: 0 2px 24px rgba(0,0,0,0.35);
+  }
+  .hero h1 .accent { color: var(--accent); }
+  .hero .sub {
+    font-size: clamp(16px, 2.2vw, 22px);
+    color: #e6e6ea;
+    font-weight: 500;
+    margin: 0;
+    max-width: 44ch;
+  }
+
+  /* ---------- generic section ---------- */
+  section { position: relative; }
+  .wrap {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 0 clamp(16px, 4vw, 48px);
+  }
+  .eyebrow {
+    font-size: 13px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    margin: 0 0 10px;
+  }
+  .section-head {
+    padding: clamp(64px, 11vh, 120px) 0 clamp(28px, 5vh, 48px);
+    text-align: center;
+  }
+  .section-head h2 {
+    font-size: clamp(28px, 4.4vw, 48px);
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    line-height: 1.08;
+    margin: 0 auto 14px;
+    max-width: 18ch;
+  }
+  .section-head p {
+    color: var(--muted);
+    font-size: clamp(15px, 1.7vw, 18px);
+    max-width: 52ch;
+    margin: 0 auto;
+  }
+
+  /* ---------- gallery ---------- */
+  .gallery-wrap {
+    padding-bottom: clamp(56px, 9vh, 96px);
+    max-width: 100vw;
+    min-width: 0;
+    overflow: hidden;
+  }
+  .gallery {
+    display: flex;
+    width: 100%;
+    max-width: 100vw;
+    box-sizing: border-box;
+    gap: 16px;
+    overflow-x: auto;
+    scroll-snap-type: x mandatory;
+    -webkit-overflow-scrolling: touch;
+    padding: 4px clamp(16px, 4vw, 48px) 20px;
+    scrollbar-width: none;
+  }
+  .gallery::-webkit-scrollbar { display: none; }
+  .card {
+    flex: 0 0 82vw;
+    max-width: 420px;
+    scroll-snap-align: center;
+    margin: 0;
     background: var(--card);
     border: 1px solid var(--border);
+    border-radius: 20px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  .card .shot {
+    display: block;
+    width: 100%;
+    height: auto;
+    background: var(--card-2);
+  }
+  .card figcaption {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+  }
+  .card h3 {
+    font-size: 19px;
+    font-weight: 800;
+    letter-spacing: -0.01em;
+    line-height: 1.22;
+    margin: 0 0 6px;
+  }
+  .card h3 .accent { color: var(--accent); }
+  .card p {
+    margin: 0;
+    font-size: 14px;
+    color: var(--muted);
+  }
+  .card .chip {
+    display: inline-block;
+    margin-top: 2px;
+    padding: 6px 12px;
+    border-radius: 999px;
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.14);
+    font-size: 13px;
+    color: #d8d8dc;
+  }
+
+  @media (min-width: 820px) {
+    .gallery {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 28px 24px;
+      overflow: visible;
+      padding: 4px clamp(16px, 4vw, 48px) 0;
+    }
+    .card { flex: initial; max-width: none; }
+  }
+
+  /* ---------- built / privacy ---------- */
+  .panel-section {
+    padding: clamp(56px, 9vh, 96px) 0;
+    border-top: 1px solid var(--border);
+  }
+  .panel-grid {
+    display: grid;
+    gap: 14px;
+  }
+  @media (min-width: 680px) {
+    .panel-grid { grid-template-columns: 1fr 1fr; }
   }
   ul.features {
     list-style: none;
     margin: 0;
     padding: 0;
+    display: grid;
+    gap: 10px;
   }
   ul.features li {
-    padding: 12px 14px;
+    padding: 14px 16px;
     background: var(--card);
     border: 1px solid var(--border);
     border-radius: 12px;
-    margin-bottom: 8px;
-  }
-  .pose-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-    gap: 16px;
-  }
-  .pose-card {
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    overflow: hidden;
-  }
-  .pose-card img {
-    display: block;
-    width: 100%;
-    aspect-ratio: 4 / 3;
-    object-fit: contain;
-    background: var(--border);
-  }
-  .pose-body {
-    padding: 12px 14px 14px;
-  }
-  .pose-body p {
-    margin: 0;
-    color: var(--muted);
     font-size: 15px;
+    color: #d9d9dd;
+  }
+  ul.features code {
+    background: rgba(255,255,255,0.08);
+    padding: 1px 6px;
+    border-radius: 5px;
+    font-size: 0.92em;
   }
   .built-link {
-    margin: 12px 0 0;
+    margin: 14px 2px 0;
     color: var(--muted);
+    font-size: 14px;
   }
-  .appstore {
-    display: inline-block;
-    margin-top: 4px;
+  .privacy-copy {
+    font-size: clamp(16px, 2vw, 19px);
+    color: #d9d9dd;
+    max-width: 46ch;
   }
-  .appstore img {
-    display: block;
-    height: 54px;
-    width: auto;
+  .privacy-copy strong {
+    color: var(--fg);
   }
+
+  /* ---------- footer ---------- */
   footer {
-    margin-top: 48px;
-    padding-top: 24px;
+    padding: clamp(40px, 7vh, 72px) 0 56px;
     border-top: 1px solid var(--border);
     color: var(--muted);
     font-size: 13px;
+    text-align: center;
   }
-  footer .source {
-    margin: 16px 0 0;
+  footer .appstore {
+    display: inline-block;
+    margin-bottom: 18px;
   }
-  footer .copyright {
-    margin: 12px 0 0;
+  footer .appstore img {
+    display: block;
+    height: 54px;
+    width: auto;
+    margin: 0 auto;
   }
+  footer .source { margin: 0 0 8px; }
+  footer .copyright { margin: 0; }
 </style>
 </head>
 <body>
-<main>
+
+<header class="nav">
   <a class="back" href="../">&larr; Cloudfull</a>
-  <h1>Cloudfull on iPhone Duo</h1>
-  <p class="pitch">Your camera roll, one video at a time. Layouts for the Duo’s poses, on day one.</p>
+  <span class="brand">iPhone Duo</span>
+</header>
 
-  <!--
-    Pitch video and poster are produced separately (the "Every pose. One app."
-    pitch render) and will be dropped in at docs/duo/cloudfull-duo-pitch.mp4
-    and docs/duo/cloudfull-duo-pitch.jpg before this page goes live. Do not
-    fabricate these files.
-  -->
-  <video class="hero-video" autoplay muted loop playsinline poster="/duo/cloudfull-duo-pitch.jpg">
-    <source src="/duo/cloudfull-duo-pitch.mp4" type="video/mp4">
-  </video>
+<section class="hero">
+  <div class="hero-media">
+    <video id="heroVideo" class="hero-video" autoplay muted loop playsinline preload="metadata" poster="/duo/cloudfull-duo-pitch.jpg">
+      <source media="(max-width: 700px)" src="/duo/cloudfull-duo-pitch-vertical.mp4" type="video/mp4">
+      <source src="/duo/cloudfull-duo-pitch.mp4" type="video/mp4">
+    </video>
+    <div class="hero-scrim"></div>
+  </div>
+  <div class="hero-content">
+    <h1>Cloudfull on iPhone <span class="accent">Duo</span></h1>
+    <p class="sub">Your camera roll, one video at a time.</p>
+  </div>
+</section>
 
-  <h2>Every pose</h2>
-  <!--
-    Pose photos are produced separately from the app's real interface and
-    will be dropped in at docs/duo/pose-1.png through pose-6.png. The
-    numbering matches Apple's pose names below and the raw capture numbering
-    used elsewhere in this project (pose1 = closed, pose3 = wide, pose4 =
-    book, pose5 = tall, pose6 = laptop). Do not fabricate these files.
-  -->
-  <div class="pose-grid">
-    <article class="pose-card">
-      <img src="/duo/pose-1.png" alt="Cloudfull closed on iPhone Duo, with playback controls in the outer system column.">
-      <div class="pose-body">
-        <h3>Closed</h3>
-        <p>The controls sit in the system column, next to the status ring.</p>
-      </div>
-    </article>
-    <article class="pose-card">
-      <img src="/duo/pose-2.png" alt="Cloudfull closed and turned sideways on iPhone Duo, a wide video filling the outer screen.">
-      <div class="pose-body">
-        <h3>Closed and turned sideways</h3>
-        <p>A wide video fills the whole outer screen.</p>
-      </div>
-    </article>
-    <article class="pose-card">
-      <img src="/duo/pose-3.png" alt="Cloudfull open in a wide layout on iPhone Duo, with a video and its controls side by side.">
-      <div class="pose-body">
-        <h3>Open in a wide layout</h3>
-        <p>Tall videos fit the full height. Wide videos fit with every control visible.</p>
-      </div>
-    </article>
-    <article class="pose-card">
-      <img src="/duo/pose-4.png" alt="Cloudfull partially folded like a book on iPhone Duo, with a video on the left page and a grid of videos on the right page.">
-      <div class="pose-body">
-        <h3>Partially folded, like a book</h3>
-        <p>The video plays on the left page. The right page shows the other moments from the same day, or the same week.</p>
-      </div>
-    </article>
-    <article class="pose-card">
-      <img src="/duo/pose-5.png" alt="Cloudfull open in a tall layout on iPhone Duo, with a tall video filling the full height of the screen.">
-      <div class="pose-body">
-        <h3>Open in a tall layout</h3>
-        <p>The closed layout, bigger. Tall videos are never cropped.</p>
-      </div>
-    </article>
-    <article class="pose-card">
-      <img src="/duo/pose-6.png" alt="Cloudfull folded like a laptop on iPhone Duo, with a video on the top half and controls on the bottom half.">
-      <div class="pose-body">
-        <h3>Folded like a laptop</h3>
-        <p>Video on top. Keep, Share, Shrink, Delete and Previous / Next on the bottom half.</p>
-      </div>
-    </article>
+<section class="gallery-wrap">
+  <div class="wrap section-head">
+    <p class="eyebrow">In the app</p>
+    <h2>The real interface, playing your <span style="color:var(--accent)">own</span> moments.</h2>
+    <p>Every screen below is Cloudfull itself, open on iPhone Duo.</p>
   </div>
 
-  <h2>How it is built</h2>
-  <ul class="features">
-    <li>Real interface rotation, not a fixed layout.</li>
-    <li>Size classes, not device checks.</li>
-    <li>Reserved regions for the fold and the camera.</li>
-    <li>Hinge status, so the layout knows when the phone is folding.</li>
-    <li>No <code>UIScreen.main</code> anywhere in the code.</li>
-    <li>The layout on a regular iPhone is unchanged.</li>
-    <li>Built and tested in Xcode 27.1 Device Hub.</li>
-  </ul>
-  <p class="built-link">Cloudfull follows <a href="https://developer.apple.com/iphone-duo/">Apple's iPhone Duo guidance</a>.</p>
+  <div class="gallery">
+    <figure class="card">
+      <img class="shot" loading="lazy" decoding="async"
+           src="img/inner-01@700.jpg"
+           srcset="img/inner-01@700.jpg 700w, img/inner-01@1400.jpg 1400w"
+           sizes="(min-width: 820px) 30vw, 82vw"
+           alt="Cloudfull open in a tall layout on iPhone Duo, playing a video at a café table.">
+      <figcaption>
+        <h3>Relive your <span class="accent">camera roll</span>.</h3>
+        <p>One video at a time.</p>
+      </figcaption>
+    </figure>
 
-  <h2>Private by design</h2>
-  <p>Cloudfull never uploads your photos or videos. There is no account, no sign-in, no ads, and no tracking. Your photos and videos stay on your phone, in every iPhone Duo pose.</p>
+    <figure class="card">
+      <img class="shot" loading="lazy" decoding="async"
+           src="img/inner-02@700.jpg"
+           srcset="img/inner-02@700.jpg 700w, img/inner-02@1400.jpg 1400w"
+           sizes="(min-width: 820px) 30vw, 82vw"
+           alt="Cloudfull folded like a book on iPhone Duo, a beach video on the left page and the same week's videos on the right.">
+      <figcaption>
+        <h3>Open it like a <span class="accent">book</span>.</h3>
+        <p>Your week, side by side.</p>
+      </figcaption>
+    </figure>
 
-  <footer>
+    <figure class="card">
+      <img class="shot" loading="lazy" decoding="async"
+           src="img/inner-03@700.jpg"
+           srcset="img/inner-03@700.jpg 700w, img/inner-03@1400.jpg 1400w"
+           sizes="(min-width: 820px) 30vw, 82vw"
+           alt="The Shrink Video sheet open over a video on Cloudfull, showing the file size before and after.">
+      <figcaption>
+        <h3>Shrink 4K, <span class="accent">keep</span> the moment.</h3>
+        <span class="chip">4K &rarr; 1080p &middot; about 67 MB saved</span>
+      </figcaption>
+    </figure>
+
+    <figure class="card">
+      <img class="shot" loading="lazy" decoding="async"
+           src="img/inner-04@700.jpg"
+           srcset="img/inner-04@700.jpg 700w, img/inner-04@1400.jpg 1400w"
+           sizes="(min-width: 820px) 30vw, 82vw"
+           alt="Cloudfull folded like a laptop on iPhone Duo, playing a birthday video with Keep, Share and Next controls below.">
+      <figcaption>
+        <h3>Set it down. Tap <span class="accent">Next</span>.</h3>
+        <p>Video on top, controls below.</p>
+      </figcaption>
+    </figure>
+
+    <figure class="card">
+      <img class="shot" loading="lazy" decoding="async"
+           src="img/inner-05@700.jpg"
+           srcset="img/inner-05@700.jpg 700w, img/inner-05@1400.jpg 1400w"
+           sizes="(min-width: 820px) 30vw, 82vw"
+           alt="Cloudfull open in a tall layout on iPhone Duo, playing a video of a dog, with Keep highlighted in red.">
+      <figcaption>
+        <h3>Keep the ones you <span class="accent">love</span>.</h3>
+        <p>Kept videos stay out of the Bin.</p>
+      </figcaption>
+    </figure>
+
+    <figure class="card">
+      <img class="shot" loading="lazy" decoding="async"
+           src="img/inner-06@700.jpg"
+           srcset="img/inner-06@700.jpg 700w, img/inner-06@1400.jpg 1400w"
+           sizes="(min-width: 820px) 30vw, 82vw"
+           alt="The Bin open on Cloudfull, showing four deleted videos that can still be restored.">
+      <figcaption>
+        <h3>Nothing's gone until <span class="accent">you</span> say so.</h3>
+        <p>Restore anything from the Bin.</p>
+      </figcaption>
+    </figure>
+
+    <figure class="card">
+      <img class="shot" loading="lazy" decoding="async"
+           src="img/outer-01@700.jpg"
+           srcset="img/outer-01@700.jpg 700w, img/outer-01@1400.jpg 1400w"
+           sizes="(min-width: 820px) 30vw, 82vw"
+           alt="Cloudfull closed on iPhone Duo, playing a video of a woman walking five dogs.">
+      <figcaption>
+        <h3>Your camera roll, <span class="accent">one at a time</span>.</h3>
+      </figcaption>
+    </figure>
+
+    <figure class="card">
+      <img class="shot" loading="lazy" decoding="async"
+           src="img/outer-03@700.jpg"
+           srcset="img/outer-03@700.jpg 700w, img/outer-03@1400.jpg 1400w"
+           sizes="(min-width: 820px) 30vw, 82vw"
+           alt="Cloudfull closed and turned sideways on iPhone Duo, a wide candlelit dinner video filling the outer screen.">
+      <figcaption>
+        <h3>Turn it sideways. <span class="accent">Full screen.</span></h3>
+        <p>Wide videos fill the outer screen.</p>
+      </figcaption>
+    </figure>
+
+    <figure class="card">
+      <img class="shot" loading="lazy" decoding="async"
+           src="img/outer-04@700.jpg"
+           srcset="img/outer-04@700.jpg 700w, img/outer-04@1400.jpg 1400w"
+           sizes="(min-width: 820px) 30vw, 82vw"
+           alt="The Bin open on Cloudfull's outer screen, showing four deleted videos and the option to empty it.">
+      <figcaption>
+        <h3>Free up space, <span class="accent">safely</span>.</h3>
+        <p>The Bin catches everything first.</p>
+      </figcaption>
+    </figure>
+  </div>
+</section>
+
+<section class="panel-section">
+  <div class="wrap">
+    <div class="panel-grid">
+      <div>
+        <p class="eyebrow">Under the hood</p>
+        <h2 style="font-size:clamp(24px,3.4vw,34px); font-weight:800; letter-spacing:-0.02em; margin:0 0 16px;">How it is built</h2>
+      </div>
+      <div>
+        <ul class="features">
+          <li>Real interface rotation, not a fixed layout.</li>
+          <li>Size classes, not device checks.</li>
+          <li>Reserved regions for the fold and the camera.</li>
+          <li>Hinge status, so the layout knows when the phone is folding.</li>
+          <li>No <code>UIScreen.main</code> anywhere in the code.</li>
+          <li>The layout on a regular iPhone is unchanged.</li>
+          <li>Built and tested in Xcode 27.1 Device Hub.</li>
+        </ul>
+        <p class="built-link">Cloudfull follows <a href="https://developer.apple.com/iphone-duo/">Apple's iPhone Duo guidance</a>.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="panel-section">
+  <div class="wrap">
+    <p class="eyebrow">Private by design</p>
+    <p class="privacy-copy"><strong>Your photos and videos never leave your phone.</strong> There is no account, no sign-in, no ads, and no tracking.</p>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
     <a class="appstore" href="https://apps.apple.com/app/id6816547769">
       <img src="../app-store-badge.svg" alt="Download on the App Store">
     </a>
-    <p class="source"><a href="https://github.com/MarshallARoss/cloudfull">View the source on GitHub</a></p>
+    <p class="source"><a href="../privacy/">Privacy Policy</a> &middot; <a href="https://github.com/MarshallARoss/cloudfull">View the source on GitHub</a></p>
     <p class="copyright">&copy; 2026 Marshall Ross</p>
-  </footer>
-</main>
+  </div>
+</footer>
+
+<script>
+  (function () {
+    var mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+    var mqPhone = window.matchMedia('(max-width: 700px)');
+    var v = document.getElementById('heroVideo');
+    if (!v) return;
+
+    function applyPoster() {
+      v.poster = mqPhone.matches
+        ? '/duo/cloudfull-duo-pitch-vertical.jpg'
+        : '/duo/cloudfull-duo-pitch.jpg';
+    }
+    function applyMotion() {
+      if (mq.matches) {
+        v.pause();
+        v.preload = 'none';
+      } else {
+        v.preload = 'metadata';
+        v.play().catch(function () {});
+      }
+    }
+    applyPoster();
+    applyMotion();
+    if (mqPhone.addEventListener) mqPhone.addEventListener('change', applyPoster);
+    if (mq.addEventListener) mq.addEventListener('change', applyMotion);
+  })();
+</script>
+
 </body>
 </html>
