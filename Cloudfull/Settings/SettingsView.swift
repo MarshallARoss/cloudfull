@@ -141,7 +141,6 @@ struct SettingsView: View {
                         layoutSection(duoLayout: duoLayout)
                         storageSection
                         assistanceSection
-                        tipJarSection
                         otherProjectsSection
                         #if DEBUG
                         diagnosticsSection
@@ -206,9 +205,6 @@ struct SettingsView: View {
             .task {
                 let gb = await Task.detached(priority: .utility) { Usage.freeSpaceGB() }.value
                 freeSpaceText = gb == "?" ? "—" : "\(gb) GB"
-            }
-            .task {
-                await tipJar.load()
             }
             .onChange(of: openMode) { _, _ in Usage.shared.settingChanged("defaultTab") }
             .onChange(of: openMuted) { _, _ in Usage.shared.settingChanged("openMuted") }
