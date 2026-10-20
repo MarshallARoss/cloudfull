@@ -523,9 +523,28 @@ struct FeedView: View {
             // plain fixed anchor there with no dependence on this
             // view's own geometry at all. Only here, in Videos mode,
             // is there a real rail for the chin to ever need to clear.
+            //
+            // Short-window spec (`ipad7.png`): `duoLayout.railBottom`
+            // below still answers the pre-Duo overlay's own question —
+            // "where does the rail's bottom edge sit, over the video's
+            // own bottom band?" — a question this short, wide window has
+            // no good answer to, since `actionRail` no longer hangs the
+            // rail off that band here at all (`Rail.shortWindowRailBottom`
+            // instead). Reading it anyway sends `resolvedBottomPadding`
+            // above a near-zero `railBottom > 0` clamp, pinning the chin
+            // to the window's own bottom edge. `0` here is this
+            // function's own "no rail to clear" value, so the chin falls
+            // straight back to its plain fixed anchor instead — the
+            // `railAlignedCenter == nil` default this pose already uses.
+            // `!isFullscreen &&`: false while the rotation hack is on,
+            // same as every other short-window call site — this chin is
+            // already hidden then (`hidesGlobalChrome`), but the override
+            // must not engage mid-transition either.
             ChinNavigation(bottomBand: StageGeometry.bottomBand(safeAreaTop: safeAreaTop,
                                                                containerSize: rootProxy.size),
-                           railBottom: duoLayout.railBottom(safeAreaTop: safeAreaTop, safeAreaBottom: fullscreenSafeArea.bottom, containerSize: rootProxy.size),
+                           railBottom: !isFullscreen && WindowChrome.isShortWindow(containerSize: windowSize, pose: duoLayout.pose)
+                               ? 0
+                               : duoLayout.railBottom(safeAreaTop: safeAreaTop, safeAreaBottom: fullscreenSafeArea.bottom, containerSize: rootProxy.size),
                            railAlignedCenter: duoLayout.railAlignedChinCenter(safeAreaTop: safeAreaTop, safeAreaBottom: fullscreenSafeArea.bottom, containerSize: windowSize),
                            railAlignedTopClamp: duoLayout.railAlignedTopClamp(containerSize: windowSize, safeAreaBottom: fullscreenSafeArea.bottom),
                            safeAreaBottom: fullscreenSafeArea.bottom,
@@ -1351,6 +1370,34 @@ struct FeedView: View {
                 width: proxy.size.width + proxy.safeAreaInsets.leading + proxy.safeAreaInsets.trailing,
                 height: proxy.size.height + proxy.safeAreaInsets.top + proxy.safeAreaInsets.bottom
             )
+            // iPadOS 26: a resizable app window draws its own
+            // red/yellow/green window-control cluster over the
+            // window's own top-leading corner. `WindowChrome
+            // .leadingInset` is this cluster's own width — zero on
+            // iPhone, zero on the Duo (neither has this window chrome
+            // at all), and zero on a fullscreen iPad window, so every
+            // call below that adds this stays a no-op everywhere but
+            // an iPadOS 26 WINDOWED app — see that function's own
+            // comment for why a plain `containerCornerInsets` read
+            // alone over-fired on the Duo's own rounded corner. See
+            // `topChrome`'s own comment for why
+            // `containerCornerOffset(.top)` alone, already chained
+            // there, never cleared this on its own.
+            let windowControlLeadingInset = WindowChrome.leadingInset(proxy)
+            // M7 iPad review: the owner's own screenshot showed the top
+            // row sitting lower than the window-control pill — pill
+            // center about 32pt from the window top, row center about
+            // 45pt, so the two read as diagonal rather than level
+            // (WWDC25 "Elevate the design of your iPad app": put your
+            // own controls inline with the window controls, same row).
+            // `nil` everywhere `windowControlLeadingInset` itself is 0
+            // — the exact same gate, so a regular iPhone, the Duo, and
+            // a fullscreen iPad window all keep reading their own
+            // existing, unchanged math below. See `WindowChrome
+            // .topRowCenterY`'s own comment for the derivation.
+            let windowControlTopRowCenterY = windowControlLeadingInset > 0
+                ? WindowChrome.topRowCenterY(proxy, safeAreaTop: realTopInset)
+                : nil
             // Build 3: pose 3/4/4W (`DuoLayout.classify` → `.openWide`/
             // `.book`) move Mute, Filter, and Bin off this row entirely,
             // into their own column beside the rail/bar column — see
@@ -1379,7 +1426,7 @@ struct FeedView: View {
             let usesLaptopDeck = duoLayout.pose == .laptop
             ZStack(alignment: .top) {
                 VStack(spacing: 0) {
-                    topChrome(duoLayout: duoLayout, safeAreaTop: realTopInset, containerSize: fullWindow)
+                    topChrome(duoLayout: duoLayout, safeAreaTop: realTopInset, containerSize: fullWindow, windowControlLeadingInset: windowControlLeadingInset, windowControlTopRowCenterY: windowControlTopRowCenterY)
                     if let shrinkToastMessage {
                         shrinkToast(shrinkToastMessage)
                             .padding(.top, 8)
@@ -1395,10 +1442,19 @@ struct FeedView: View {
                     // `containerSize: fullWindow` argument already
                     // assumes, via this view's own `.padding(.top:)`/
                     // `.frame` pair below.
+                    //
+                    // Does not take `windowControlLeadingInset`: this
+                    // pose's own `zigzagCenters` always come back empty
+                    // without a real rail column, and a rail column
+                    // needs `barEdge` (the Duo's own hardware signal) or
+                    // pose `.openTall` — never true together with this
+                    // pose (`.openWide`/`.book`) on an iPad, which has
+                    // neither a hinge nor that bar. This `Group` renders
+                    // nothing there, so it has nothing to clear.
                     chromeColumn(duoLayout: duoLayout, safeAreaTop: realTopInset, safeAreaBottom: realBottomInset, containerSize: fullWindow)
                 }
                 if usesPose5TopRow {
-                    pose5TopRow(duoLayout: duoLayout, safeAreaTop: realTopInset, containerSize: fullWindow)
+                    pose5TopRow(duoLayout: duoLayout, safeAreaTop: realTopInset, containerSize: fullWindow, windowControlLeadingInset: windowControlLeadingInset, windowControlTopRowCenterY: windowControlTopRowCenterY)
                 }
                 if usesLaptopDeck {
                     laptopDeckControls(duoLayout: duoLayout, safeAreaBottom: realBottomInset, containerSize: fullWindow)
@@ -1431,7 +1487,7 @@ struct FeedView: View {
     /// imperfection if a shrink is active while the chrome column or
     /// pose-5 row also shows; flagged for the owner's own look at the
     /// sim.
-    private func topChrome(duoLayout: DuoLayout, safeAreaTop: CGFloat, containerSize: CGSize) -> some View {
+    private func topChrome(duoLayout: DuoLayout, safeAreaTop: CGFloat, containerSize: CGSize, windowControlLeadingInset: CGFloat, windowControlTopRowCenterY: CGFloat?) -> some View {
         // Build 8b: pose 6 (laptop) adds to this suppression too. Mute,
         // Filter, and Bin move into the bottom deck's own group
         // (`laptopDeckControls`); nothing interactive belongs above the
@@ -1463,6 +1519,24 @@ struct FeedView: View {
         // (`binButton()` first, then `counterCapsule`). This row used
         // to read counter-then-Bin, the one pair out of step with that
         // rule.
+        //
+        // `muteButton`/`FilterMenuView` carry `.layoutPriority(-1)`
+        // below, but only while `windowControlLeadingInset` is nonzero
+        // (a windowed iPad) — narrow-iPad-window safety net for that
+        // same inset. On a resizable iPadOS 26 window shrunk close to
+        // its own minimum, this row's `.frame(width:)` further down can
+        // land too small for all five children at their natural size.
+        // `binButton`'s own badge is `.fixedSize()` (it must never
+        // truncate the count mid-digit); Mute and Filter are plain
+        // glyph buttons with nothing legible to lose. Giving them the
+        // lower priority means THEY give up width first if the row
+        // ever runs short, not Bin's own badge — regardless of which
+        // side `isMirrored` put them on, since layout priority ranks
+        // the whole row, not position. Review fix: on an iPhone or the
+        // Duo, where this inset is always 0, the priority now falls
+        // back to the default `0` instead — the owner's own filter
+        // badge `Text` could otherwise compress there for no reason,
+        // since nothing on those devices ever needs this safety net.
         return HStack(alignment: .top, spacing: 8) {
             if duoLayout.isMirrored {
                 if !suppressDefaultRow {
@@ -1476,15 +1550,19 @@ struct FeedView: View {
                 if !suppressDefaultRow {
                     FilterMenuView(store: optionsStore, hidesChrome: hidesGlobalChrome)
                         .duoGuideMark("top.filter", color: .teal)
+                        .layoutPriority(windowControlLeadingInset > 0 ? -1 : 0)
                     muteButton
+                        .layoutPriority(windowControlLeadingInset > 0 ? -1 : 0)
                 }
             } else {
                 // A tap on the video also toggles mute, with a center
                 // flash. This pill is the second mute control.
                 if !suppressDefaultRow {
                     muteButton
+                        .layoutPriority(windowControlLeadingInset > 0 ? -1 : 0)
                     FilterMenuView(store: optionsStore, hidesChrome: hidesGlobalChrome)
                         .duoGuideMark("top.filter", color: .teal)
+                        .layoutPriority(windowControlLeadingInset > 0 ? -1 : 0)
                 }
                 if let job = activeShrinkJob, let text = shrinkActiveProgressText {
                     shrinkProgressCapsule(text, assetID: job.id)
@@ -1509,9 +1587,32 @@ struct FeedView: View {
         // has the same fix), or the row would still start at x=0 even
         // with its own children already reversed above, landing on
         // top of a mirrored column instead of clear of it.
-        .frame(width: duoLayout.availableRect(containerSize: containerSize, safeAreaTop: safeAreaTop).width,
+        .frame(width: max(0, duoLayout.availableRect(containerSize: containerSize, safeAreaTop: safeAreaTop).width - windowControlLeadingInset),
                alignment: duoLayout.isMirrored ? .trailing : .leading)
-        .padding(.top, topChromeTopPadding(safeAreaTop: safeAreaTop, containerSize: containerSize))
+        // iPadOS 26 windowed mode: `windowControlLeadingInset` is the
+        // window-control cluster's own width, read once in
+        // `overlayControls` (zero everywhere else, including a
+        // fullscreen iPad window). Shrinking the frame above by that
+        // same amount, then padding the row in by it here, slides the
+        // row's own leading edge clear of the cluster while leaving
+        // its trailing edge — `binButton`, unmirrored — exactly where
+        // it always was: the two changes net to the same total width
+        // this frame reports to its own parent, so nothing outside
+        // this row needs to know this happened. Mirrored or not: the
+        // row above is a greedy `HStack` (its own `Spacer` fills
+        // whatever box it is given), so its bounding box always spans
+        // this frame's own full width regardless of which control
+        // `isMirrored` put nearest this leading edge — Bin, on a
+        // left-handed-controls iPad. One inset, not a per-child one,
+        // clears whichever control that is.
+        .padding(.leading, windowControlLeadingInset)
+        // Windowed iPad: center this row on the window-control pill
+        // instead of `topChromeTopPadding`'s own status-bar math — see
+        // `windowControlTopRowCenterY`'s own comment in `overlayControls`.
+        // `nil` everywhere else, so this padding stays
+        // `topChromeTopPadding`'s own unchanged value there.
+        .padding(.top, windowControlTopRowCenterY.map { $0 - StageGeometry.chromeHeight / 2 }
+            ?? topChromeTopPadding(safeAreaTop: safeAreaTop, containerSize: containerSize))
         // Keeps `muteButton` (the row's own leading edge) clear of the
         // display's own rounded top corner — reported on the open-wide
         // (landscape, bar-on) pose, where this row starts flush at the
@@ -1525,7 +1626,24 @@ struct FeedView: View {
         // and on the Duo's other poses, where the existing padding and
         // safe area already clear the corner on their own; this only
         // nudges the row further in when they do not.
-        .containerCornerOffset(.top)
+        //
+        // `.top` only, still — this call alone never touched the
+        // iPad window-control overlap the `.padding(.leading:)` above
+        // now fixes. `Edge.Set.top` only ever insets this row's own
+        // HEIGHT side (how far down the corner's rounding pushes it);
+        // the window-control cluster sits beside the corner, not
+        // inside its curve, and reaches across in WIDTH instead. A
+        // `.top` offset was never going to move a row sideways, so it
+        // read as a no-op on the iPad screenshot that reported this —
+        // not a sign anything here was wired up wrong, just the wrong
+        // axis for this particular overlap.
+        //
+        // Windowed iPad: no corner offset. The `.padding(.top:)` above
+        // already centers the row on the window-control pill. The
+        // offset adds the pill's own height (53 pt, read from the
+        // `WindowChrome` log) a second time and drops the row below
+        // the pill.
+        .containerCornerOffset(windowControlTopRowCenterY == nil ? .top : [])
     }
 
     // MARK: - Chrome column (build 3)
@@ -1627,10 +1745,18 @@ struct FeedView: View {
     /// 1V), "the very top of the video." Pose 5 is unchanged: it
     /// keeps centring on `statusBlock.midY`, the owner's own explicit
     /// "don't change pose 5."
-    private func pose5TopRow(duoLayout: DuoLayout, safeAreaTop: CGFloat, containerSize: CGSize) -> some View {
+    private func pose5TopRow(duoLayout: DuoLayout, safeAreaTop: CGFloat, containerSize: CGSize, windowControlLeadingInset: CGFloat, windowControlTopRowCenterY: CGFloat?) -> some View {
         let statusBlock = duoLayout.statusBlock(containerSize: containerSize, safeAreaTop: safeAreaTop)
         let stageRect = duoLayout.stageRect(containerSize: containerSize, safeAreaTop: safeAreaTop)
-        let leading = stageRect.minX + 16
+        // `windowControlLeadingInset` (`topChrome`'s own comment has
+        // the full reasoning) is zero on every Duo pose that reaches
+        // this row — pose 5 is real Duo hardware, never an iPadOS 26
+        // window. It is only ever nonzero here on an iPad whose
+        // window has grown wide and tall enough to classify as
+        // `.openTall` while still drawn windowed (not fullscreen), so
+        // this is a no-op for every reachable Duo case, same as every
+        // other call site that adds it.
+        let leading = stageRect.minX + 16 + windowControlLeadingInset
         // Owner re-adapt (Live Activity pass): a Live Activity's own
         // pill grows the status block LEFTWARD on pose 5 (occlusion
         // itself widens — unlike the closed display, this pose DOES
@@ -1675,7 +1801,15 @@ struct FeedView: View {
         let trailing = min(stageRect.maxX - 16, occlusionClamp)
         let width = max(0, trailing - leading)
         let rowHeight: CGFloat = 40
-        let centerY = duoLayout.pose == .closed ? safeAreaTop + 8 + rowHeight / 2 : statusBlock.midY
+        // Windowed iPad: `windowControlTopRowCenterY` is non-nil only
+        // when `windowControlLeadingInset` above is nonzero too — the
+        // same `.openTall`-on-iPad case that comment already covers.
+        // Centering on the pill there replaces `statusBlock.midY`,
+        // which on an iPad has no status block of its own to read.
+        // `nil` on every real Duo pose this row reaches, so both
+        // branches of the fallback ternary stay byte-identical there.
+        let centerY = windowControlTopRowCenterY
+            ?? (duoLayout.pose == .closed ? safeAreaTop + 8 + rowHeight / 2 : statusBlock.midY)
         // Mirrored-layout round: "Bin top-left, Mute/Filter top-right"
         // — the row's own child order simply reverses. The counter
         // stays the child immediately next to Bin either way (it reads
@@ -3322,6 +3456,13 @@ private struct FeedPageContent: View {
     /// resolution event that happened on a different page.
     @ObservedObject private var resolver = AssetKeyResolver.shared
 
+    /// `actionRail`'s own icon-only tier sets this `false` — see the
+    /// environment key's own comment. Read directly here, not only
+    /// through `RailItem`, because the share button's own iCloud-download
+    /// state (below) draws its "Share" label by hand instead of going
+    /// through `RailItem`.
+    @Environment(\.railShowsLabels) private var railShowsLabels
+
     /// Bumped only when this page's own like turns on. Drives this page's
     /// heart `.symbolEffect(.bounce)`. Local to the page rather than
     /// shared, so liking one page never bounces a neighbor's heart.
@@ -3597,19 +3738,39 @@ private struct FeedPageContent: View {
                         // internal mirror logic (that function's own
                         // comment) already reads correctly once it is
                         // simply the HStack's other child.
+                        //
+                        // Short-window spec (`ipad7.png`): false while
+                        // `isFullscreen` — the rotation hack already
+                        // hides this whole page then (`hideForFullscreen`
+                        // above), so this just keeps the short-window
+                        // layout from ever engaging mid-transition.
+                        // `pose == .regularPhone` is this pose's own
+                        // case too (`DuoPose`'s own doc comment), so
+                        // nothing here needs its own Duo check.
+                        let shortWindow = !hideForFullscreen && WindowChrome.isShortWindow(containerSize: proxy.size, pose: duoLayout.pose)
+                        // The regular-iPhone stage centres with equal
+                        // bands on both sides (`DuoLayout.stageRect`), so
+                        // `stage.minX` is the same clearance whichever
+                        // edge is actually "away from the rail" once
+                        // mirrored — unlike the `railColumnRect` branch's
+                        // own closure above, this needs no mirrored
+                        // branch of its own.
+                        let leadingClearance: CGFloat = shortWindow
+                            ? duoLayout.stageRect(containerSize: proxy.size, safeAreaTop: safeAreaTop).minX + 16
+                            : 16
                         let railColumn = VStack(alignment: duoLayout.isMirrored ? .leading : .trailing, spacing: 0) {
                             if isActive, let calloutMessage = shareCoordinator.calloutMessage {
                                 railCallout(calloutMessage)
                             }
-                            actionRail(bottomBand: bottomBand)
+                            actionRail(bottomBand: bottomBand, shortWindowHeight: shortWindow ? proxy.size.height : nil)
                         }
                         .animation(.easeInOut(duration: 0.2), value: shareCoordinator.calloutMessage)
                         HStack(alignment: .bottom, spacing: 0) {
                             if duoLayout.isMirrored {
                                 railColumn
-                                captionZone(trailingClearance: 16, hidden: false, bandHeight: realBottomBand)
+                                captionZone(leadingClearance: leadingClearance, trailingClearance: 16, hidden: false, bandHeight: realBottomBand, shortWindow: shortWindow)
                             } else {
-                                captionZone(trailingClearance: 16, hidden: false, bandHeight: realBottomBand)
+                                captionZone(leadingClearance: leadingClearance, trailingClearance: 16, hidden: false, bandHeight: realBottomBand, shortWindow: shortWindow)
                                 railColumn
                             }
                         }
@@ -3829,8 +3990,14 @@ private struct FeedPageContent: View {
     /// above the line" directly, once the line IS the bottom edge.
     /// Pose 5 is untouched — its own scrubber still rests at the top
     /// of its 28pt box, so it keeps the `20 + 28` sum unchanged.
-    private func captionZone(leadingClearance: CGFloat = 16, trailingClearance: CGFloat, hidden: Bool, bandHeight: CGFloat) -> some View {
-        let liftsForScrubber = duoLayout.pose != .regularPhone && bandHeight < 50
+    private func captionZone(leadingClearance: CGFloat = 16, trailingClearance: CGFloat, hidden: Bool, bandHeight: CGFloat, shortWindow: Bool = false) -> some View {
+        // `shortWindow` (`WindowChrome.isShortWindow`) joins the Duo
+        // check here: a regular-iPhone pose on a short iPadOS 26 window
+        // can hit the same small `bandHeight` a Duo pose does, and needs
+        // the same lift clear of the on-video scrubber line. `false` by
+        // default, so every caller that never sets it reads exactly as
+        // before.
+        let liftsForScrubber = (duoLayout.pose != .regularPhone || shortWindow) && bandHeight < 50
         let bottomPadding: CGFloat = duoLayout.pose == .closed ? 20 : (liftsForScrubber ? 20 + 28 : 20)
         // Mirrored-layout round: "caption bottom-trailing" — the
         // caption reads from the TRAILING edge instead, the SAME two
@@ -4201,22 +4368,63 @@ private struct FeedPageContent: View {
     /// `bottomBand` is the black band below the video on this page. The
     /// rail's bottom edge sits `Rail.seamClearance` above the video's
     /// bottom edge, the playhead seam — on the video, not in the chin.
-    private func actionRail(bottomBand: CGFloat) -> some View {
+    ///
+    /// `shortWindowHeight`, non-nil only on `WindowChrome.isShortWindow`
+    /// (`FeedPageContent.body`'s own `proxy.size.height`): the rail's
+    /// usual `bottomBand`-relative padding has nothing to measure from
+    /// on a window this short — the normal five-button column can run
+    /// out of vertical room before `bottomBand` ever shrinks to make
+    /// space. The rail then anchors off the window's own bottom edge
+    /// instead (`Rail.shortWindowRailBottom`) and compresses to
+    /// whichever tier still fits the budget left above that anchor,
+    /// below `Rail.shortWindowTopReserve`'s own claim at the top.
+    /// Nil everywhere else, where this is a no-op.
+    private func actionRail(bottomBand: CGFloat, shortWindowHeight: CGFloat? = nil) -> some View {
         // Mirrored-layout round (item D, left-handed regular iPhone):
         // the whole point of the setting — the rail itself moves to
         // the LEADING edge. No rail COLUMN exists here (this is the
         // pre-Duo overlay, `railColumnRect == nil`), so this is the
         // one place that reads `isMirrored` directly rather than
         // through `DuoLayout.railColumn`'s own edge.
-        VStack(spacing: Rail.spacing) {
+        let spacing: CGFloat
+        let showsLabels: Bool
+        let railBottomPadding: CGFloat
+        if let shortWindowHeight {
+            let budget = shortWindowHeight - Rail.shortWindowTopReserve - Rail.shortWindowRailBottom
+            // Full tier's own 360pt is `Rail.columnHeight` itself — the
+            // same five items at the normal `Rail.spacing`, labels on.
+            // Tight trades that spacing down to 8pt, still with labels
+            // (`Rail.itemHeight * 5 + 8 * 4` = 312). Below that, labels
+            // go too: `Rail.hit * 5 + 12 * 4` = 248, the glyph alone.
+            if budget >= Rail.columnHeight {
+                spacing = Rail.spacing
+                showsLabels = true
+            } else if budget >= Rail.itemHeight * 5 + 8 * 4 {
+                spacing = 8
+                showsLabels = true
+            } else {
+                spacing = 12
+                showsLabels = false
+            }
+            railBottomPadding = Rail.shortWindowRailBottom
+        } else {
+            spacing = Rail.spacing
+            showsLabels = true
+            railBottomPadding = bottomBand + Rail.seamClearance
+        }
+        // No `ViewThatFits` here: it mounts every candidate at once to
+        // measure them, which would triplicate each `rail_*`
+        // accessibility identifier below instead of placing one.
+        return VStack(spacing: spacing) {
             likeButton(rail)
             shareButton
             albumButton
             shrinkButton(rail)
             deleteButton(rail)
         }
+        .environment(\.railShowsLabels, showsLabels)
         .padding(duoLayout.isMirrored ? .leading : .trailing, 10)
-        .padding(.bottom, bottomBand + Rail.seamClearance)
+        .padding(.bottom, railBottomPadding)
     }
 
     /// `actionRail`'s column layout (steps 3/5): the same five
@@ -4379,8 +4587,10 @@ private struct FeedPageContent: View {
                     }
                     .frame(width: Rail.hit - 6, height: Rail.hit - 6)
                     .frame(width: Rail.hit, height: Rail.hit)
-                    Text("Share")
-                        .font(Rail.labelFont)
+                    if railShowsLabels {
+                        Text("Share")
+                            .font(Rail.labelFont)
+                    }
                 }
                 .foregroundStyle(.white)
                 .feedShadow()
@@ -4588,6 +4798,15 @@ extension FeedPageContent.PageMeta {
     }
 }
 
+/// `actionRail`'s own icon-only tier (`WindowChrome.isShortWindow`, a
+/// short iPadOS 26 window too tight for the normal labeled column) sets
+/// this `false` on the rail's own `VStack`. `true` everywhere else — the
+/// default, so every other host (`RailItem` and `shareButton`'s own
+/// download state alike) keeps its label exactly as before.
+extension EnvironmentValues {
+    @Entry var railShowsLabels = true
+}
+
 /// A rail item: a flat white glyph, no bubble, no material, with a small
 /// caption underneath. The only chrome is the drop shadow that keeps it
 /// legible on a bright frame.
@@ -4599,14 +4818,17 @@ struct RailItem: View {
     /// the rest of the rail — see the Album button's call site. Defaults
     /// to `Rail.glyph`.
     var glyphSize: CGFloat = Rail.glyph
+    @Environment(\.railShowsLabels) private var railShowsLabels
 
     var body: some View {
         VStack(spacing: 3) {
             Image(systemName: systemName)
                 .font(.system(size: glyphSize, weight: .medium))    // Rail.glyph by default
                 .frame(width: Rail.hit, height: Rail.hit)           // 40 × 40
-            Text(label)
-                .font(Rail.labelFont)                               // 10 semibold
+            if railShowsLabels {
+                Text(label)
+                    .font(Rail.labelFont)                           // 10 semibold
+            }
         }
         .foregroundStyle(tint)
         .feedShadow()

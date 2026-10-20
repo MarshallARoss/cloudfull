@@ -7,6 +7,8 @@
 //
 
 import SwiftUI
+import UIKit
+import os
 
 // MARK: - Feed chrome
 
@@ -121,6 +123,21 @@ enum Rail {
     /// anchor is, when the rail is in its own column (iPhone Duo)
     /// instead of overlaid on the stage.
     static let columnHeight: CGFloat = itemHeight * 5 + spacing * 4
+
+    /// `FeedPageContent.actionRail`'s own bottom padding on a short
+    /// iPadOS 26 window (`WindowChrome.isShortWindow`), in place of the
+    /// normal `bottomBand + seamClearance` padding: a flat distance up
+    /// from the window's own bottom edge instead of the video's, since a
+    /// short window's own `bottomBand` runs out before the rail does.
+    /// Hand-picked to clear the home indicator with the same air the
+    /// other poses keep.
+    static let shortWindowRailBottom: CGFloat = 68
+    /// `FeedPageContent.actionRail`'s own short-window budget: how much
+    /// of the window's own height the top chrome and the stage above the
+    /// rail already claim, before the rail's own column gets whatever is
+    /// left. Paired with `shortWindowRailBottom` above:
+    /// `budget = windowHeight - shortWindowTopReserve - shortWindowRailBottom`.
+    static let shortWindowTopReserve: CGFloat = 64
 }
 
 // MARK: - Accent-filled buttons
@@ -187,6 +204,183 @@ enum Fmt {
     /// The caption and the rail read that stored value.
     static func isAboveShrinkThreshold(_ size: CGSize) -> Bool {
         Int(min(size.width, size.height)) >= 2160
+    }
+}
+
+// MARK: - Window geometry (iPadOS 26)
+
+/// One read, used at both sites that need it: `FeedView.overlayControls`
+/// and `PhotoFeedView.body`'s own `GeometryReader`.
+///
+/// Kept OUTSIDE `StageGeometry` below on purpose. That type's own doc
+/// comment promises it never reads UIKit directly, so a window-scene read
+/// does not belong inside it even though the two are closely related.
+enum WindowChrome {
+    /// `proxy.containerCornerInsets.topLeading.width` — iOS 26's own
+    /// figure for how far the window's own top-leading corner reaches —
+    /// held at 0 unless this app's own window is WINDOWED on an iPad:
+    /// smaller than the screen it sits on.
+    ///
+    /// Reviewer-caught regression: that raw `containerCornerInsets`
+    /// reading is nonzero for ANY rounded top-leading corner, including
+    /// the Duo's own physical corner on poses `.openWide`/`.book`
+    /// (`.containerCornerOffset(.top)`/`PhotoTopBar.clearsCorner` already
+    /// lean on that same nonzero reading there) and a FULLSCREEN iPad
+    /// window. Threading the raw value straight in moved the Duo's own
+    /// Photos row sideways on real Duo hardware, which has no window-
+    /// control cluster to clear at all. The red/yellow/green cluster
+    /// this value exists to clear only ever paints while the app's own
+    /// window is a resizable, floating iPadOS 26 window — never
+    /// fullscreen, and never the Duo or a plain iPhone, neither of
+    /// which has this window chrome in the first place.
+    ///
+    /// The check: compare the scene's own key window `bounds` size
+    /// against its `screen.bounds` size. Equal (either order — a
+    /// 90°-rotated window reports its screen's own W/H swapped, still
+    /// fullscreen, not windowed) means fullscreen, so this returns 0.
+    /// Smaller means windowed, so the real reading passes through.
+    /// `UIWindowScene.keyWindow` is the same read
+    /// `DebugProbes.HitTestProbeRecognizer.attachIfNeeded` already uses
+    /// to reach the key window; `Usage.isSplit` already compares a
+    /// window's size against this same `screen.bounds` for its own
+    /// "narrower than its screen" read. `UIWindowScene.Geometry`'s own
+    /// `systemFrame` looked like the more direct read, but the SDK marks
+    /// it `API_UNAVAILABLE(ios)` — macCatalyst only — so this reads the
+    /// window directly instead, same as those two precedents. Both
+    /// predate this app's iOS 26.0 deployment target, so neither needs
+    /// an `#available` gate of its own.
+    ///
+    /// Takes the `GeometryProxy` currently in scope, not a cached value:
+    /// SwiftUI re-invokes the enclosing `GeometryReader`'s body on every
+    /// resize of a windowed iPad app, so this is re-evaluated right there
+    /// with it, and the chrome slides as the window grows or shrinks.
+    static func leadingInset(_ proxy: GeometryProxy) -> CGFloat {
+        let raw = proxy.containerCornerInsets.topLeading.width
+        guard raw > 0, isWindowed else { return 0 }
+        return raw
+    }
+
+    /// True when this app's own window is WINDOWED on an iPad: smaller
+    /// than the screen it sits on. False for a fullscreen iPad window, a
+    /// regular iPhone, and the iPhone Duo — none of which ever shows this
+    /// window-control chrome.
+    ///
+    /// Reviewer-caught regression: on the iPhone Duo's own Split View
+    /// pose, this app's window is smaller than the screen too — the
+    /// same shape a windowed iPad reports — so the size compare below
+    /// alone read `true` there and wrongly turned on `leadingInset(_:)`,
+    /// `topRowCenterY(_:safeAreaTop:)`, and `isShortWindow(containerSize:
+    /// pose:)` on the Duo. `DuoLayout.seenFoldable` rules that out first:
+    /// true for the rest of this install's life once the Duo's own
+    /// hinge or inner-display division is seen on any single frame (see
+    /// that property's own comment in `DuoLayout.swift`), so it also
+    /// catches a transient fold/unfold frame mid-transition, not only a
+    /// settled Duo pose. Reading it here is safe: both this property and
+    /// `seenFoldable`'s own getter assume the same main-actor, view-body
+    /// context, per that getter's own comment.
+    ///
+    /// The window/screen read itself, and why it compares sizes rather
+    /// than reading `UIWindowScene.Geometry.systemFrame`, is
+    /// `leadingInset(_:)`'s own comment above; this is that same
+    /// comparison, factored out so `isShortWindow(containerSize:pose:)`
+    /// below can reuse it without its own window-scene read. No
+    /// behaviour change to `leadingInset(_:)` itself — it now calls this.
+    static var isWindowed: Bool {
+        guard !DuoLayout.seenFoldable else { return false }
+        guard let scene = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .first(where: { $0.activationState == .foregroundActive })
+            ?? UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first,
+            let window = scene.keyWindow
+        else { return false }
+        let windowSize = window.bounds.size
+        let screenSize = scene.screen.bounds.size
+        func sameSize(_ a: CGSize, _ b: CGSize) -> Bool {
+            abs(a.width - b.width) < 1 && abs(a.height - b.height) < 1
+        }
+        let isFullScreen = sameSize(windowSize, screenSize)
+            || sameSize(windowSize, CGSize(width: screenSize.height, height: screenSize.width))
+        return !isFullScreen
+    }
+
+    /// True for a regular iPhone pose — see `DuoPose`'s own doc comment
+    /// for why that also covers a closed iPhone Duo — whose iPadOS 26
+    /// window is wider than its own 9:16 stage needs, with letterbox
+    /// bands left over on both sides even once `DuoLayout.stageRect`
+    /// centres it. Owner-reported bug (`ipad7.png`): the rail's bottom
+    /// padding, the chin's own anchor, and the caption's own leading
+    /// clearance each assume a tall, 9:16-shaped container and misplace
+    /// themselves once the window is this much wider. Every call site
+    /// below reads this to opt into the short-window layout instead.
+    ///
+    /// Checked cheapest first: `pose == .regularPhone` rules out every
+    /// Duo pose with no math at all; the width/height compare is plain
+    /// arithmetic; `isWindowed` is last because it alone walks
+    /// `UIApplication.shared.connectedScenes`. The `+ 1` on the
+    /// height side keeps a window at exactly 16:9 — not actually
+    /// short — out of this, clear of float rounding at the boundary.
+    ///
+    /// Callers return `false` here while `isFullscreen` (the rotation
+    /// hack) is on — see each call site's own comment — so this never
+    /// engages for the fullscreen video stage, only the windowed feed.
+    static func isShortWindow(containerSize: CGSize, pose: DuoPose) -> Bool {
+        pose == .regularPhone && containerSize.width * 16 > containerSize.height * 9 + 1 && isWindowed
+    }
+
+    #if DEBUG
+    /// Temporary debug aid for `topRowCenterY(_:safeAreaTop:)` below.
+    /// Remove once the owner confirms the real numbers off a device with
+    /// `log show`. Subsystem "com.cloudfull.app", category "WindowChrome"
+    /// — the same subsystem every other logger in this app already uses.
+    private static let topRowLog = Logger(subsystem: "com.cloudfull.app", category: "WindowChrome")
+    /// The last `centerY` this logged. A windowed app rebuilds its
+    /// `GeometryReader` body on every resize, so this stops that from
+    /// writing one log line per frame. It logs again only when the
+    /// value actually changes.
+    private static var lastLoggedTopRowCenterY: CGFloat?
+    #endif
+
+    /// Vertical center of the window-control pill (red/yellow/green),
+    /// measured in points from the window's own TRUE top edge — not
+    /// this `proxy`'s own local top, which sits lower, at the safe-area
+    /// top.
+    ///
+    /// Call this only where `leadingInset(_:)` above already reads
+    /// nonzero for the same `proxy`. Every call site below reads this
+    /// value only when it already has a nonzero leading inset in hand,
+    /// so this function does not re-check the windowed state itself.
+    ///
+    /// `containerCornerInsets.topLeading.height` is the pill's own
+    /// region height. `leadingInset(_:)` above reads `.width` off the
+    /// same `topLeading` value for the pill's width; this reads
+    /// `.height` for the same purpose, turned 90 degrees.
+    ///
+    /// `GeometryProxy` reports `containerCornerInsets` in this reader's
+    /// own LOCAL frame, the same frame `safeAreaInsets` and `size`
+    /// already use. Every `GeometryReader` that calls this keeps the
+    /// safe area in place — none chain `.ignoresSafeArea()` before this
+    /// read (`overlayControls`'s own comment explains why) — so each
+    /// proxy's local top already sits `safeAreaTop` points below the
+    /// window's own true top. Adding `safeAreaTop` back here gives every
+    /// caller the same window-top-relative number `StageGeometry
+    /// .chromeTop(safeAreaTop:)` already returns, so the two can be
+    /// compared directly.
+    ///
+    /// This has not yet been confirmed against a real windowed iPad.
+    /// The `os_log` line below lets the owner read the three real
+    /// numbers with `log show` and check this math against the pill's
+    /// own true position.
+    static func topRowCenterY(_ proxy: GeometryProxy, safeAreaTop: CGFloat) -> CGFloat {
+        let clusterHeight = proxy.containerCornerInsets.topLeading.height
+        let centerY = safeAreaTop + clusterHeight / 2
+        #if DEBUG
+        if lastLoggedTopRowCenterY == nil || abs(lastLoggedTopRowCenterY! - centerY) > 0.5 {
+            lastLoggedTopRowCenterY = centerY
+            let corner = proxy.containerCornerInsets.topLeading
+            topRowLog.debug("containerCornerInsets.topLeading=(\(corner.width, privacy: .public), \(corner.height, privacy: .public)) safeAreaTop=\(safeAreaTop, privacy: .public) centerY=\(centerY, privacy: .public)")
+        }
+        #endif
+        return centerY
     }
 }
 

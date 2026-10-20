@@ -42,6 +42,21 @@ struct PhotoTopBar: View {
     /// starts flush at the window's own leading edge and the display's
     /// rounded top corner is big enough to clip the Live button there.
     var clearsCorner: Bool = false
+    /// The window's own control-cluster width, on an iPadOS 26 windowed
+    /// app — see `WindowChrome.leadingInset`'s own comment for the full
+    /// reasoning. Zero everywhere else, including when `placement` is
+    /// non-nil: `DuoLayout.photosTopRowRect` already folds this same
+    /// value into `placement` itself for that case, so only the `nil`
+    /// branch below still needs it.
+    var windowControlLeadingInset: CGFloat = 0
+    /// Vertical center of the window's own control pill, in points from
+    /// the window top — see `WindowChrome.topRowCenterY`'s own comment.
+    /// `nil` everywhere `windowControlLeadingInset` above is 0,
+    /// including when `placement` is non-nil: `DuoLayout
+    /// .photosTopRowRect` already folds this same centering into
+    /// `placement` itself for that case, same as it already does for
+    /// `windowControlLeadingInset`.
+    var windowControlTopRowCenterY: CGFloat? = nil
 
     @ObservedObject private var photoOptionsStore = PhotoOptionsStore.shared
 
@@ -61,12 +76,44 @@ struct PhotoTopBar: View {
             } else {
                 row
                     .padding(.horizontal, 12)
-                    .padding(.top, StageGeometry.chromeTop(safeAreaTop: safeAreaTop))
+                    // Windowed iPad: center this row on the window
+                    // -control pill instead of `StageGeometry.chromeTop`'s
+                    // own status-bar math — see `windowControlTopRowCenterY`'s
+                    // own comment above. `nil` everywhere else, so this
+                    // padding stays `StageGeometry.chromeTop`'s own
+                    // unchanged value there.
+                    .padding(.top, windowControlTopRowCenterY.map { $0 - StageGeometry.chromeHeight / 2 }
+                        ?? StageGeometry.chromeTop(safeAreaTop: safeAreaTop))
+                    // This view's own caller (`PhotoFeedView`) already
+                    // hands this whole branch a FIXED width — its
+                    // `.frame(width: availableRect.width, …)`, unchanged
+                    // — so padding the row in on the leading side alone
+                    // shrinks what `row`'s own `Spacer` has left to
+                    // fill, rather than growing this view's own
+                    // reported size past that fixed width. Slides the
+                    // row clear of an iPadOS 26 window's own
+                    // control cluster while leaving `binButton`'s
+                    // trailing edge exactly where it always was. See
+                    // `FeedView.topChrome`'s own comment for why a
+                    // vertical-only fix (`containerCornerOffset(.top)`,
+                    // `clearsCorner`'s own branch above) could never
+                    // have cleared this on its own.
+                    .padding(.leading, windowControlLeadingInset)
             }
         }
     }
 
     private var row: some View {
+        // `liveToggleButton`/`PhotoFilterMenuView` carry
+        // `.layoutPriority(-1)` below, but only while
+        // `windowControlLeadingInset` is nonzero (a windowed iPad) —
+        // same narrow-iPad-window safety net as `FeedView.topChrome`'s
+        // own identical pair: if that inset ever leaves this row too
+        // little width, these two plain glyph buttons give way before
+        // `binButton`'s own `.fixedSize()` badge does. Review fix: on
+        // an iPhone or the Duo, where this inset is always 0, the
+        // priority falls back to the default `0` instead, so the
+        // filter badge `Text` no longer compresses there for nothing.
         HStack(alignment: .top, spacing: 8) {
             // Review fix: Bin is the OUTERMOST control in the mirrored
             // row, same as `FeedView.topChrome`'s own mirrored branch —
@@ -77,12 +124,16 @@ struct PhotoTopBar: View {
                 counterCapsule
                 Spacer(minLength: 8)
                 PhotoFilterMenuView(store: photoOptionsStore)
+                    .layoutPriority(windowControlLeadingInset > 0 ? -1 : 0)
                 liveToggleButton
+                    .layoutPriority(windowControlLeadingInset > 0 ? -1 : 0)
             } else {
                 liveToggleButton
+                    .layoutPriority(windowControlLeadingInset > 0 ? -1 : 0)
                 // The photo-specific filter menu, distinct from the
                 // video feed's filter menu.
                 PhotoFilterMenuView(store: photoOptionsStore)
+                    .layoutPriority(windowControlLeadingInset > 0 ? -1 : 0)
                 Spacer(minLength: 8)
                 counterCapsule
                 binButton
