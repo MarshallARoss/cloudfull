@@ -342,6 +342,16 @@ struct PhotoFeedView: View {
             // full reasoning. Zero on iPhone, Duo, and a fullscreen
             // iPad window; real only on an iPadOS 26 WINDOWED app.
             let windowControlLeadingInset = WindowChrome.leadingInset(rootProxy)
+            // M7 iPad review: same fix as `FeedView.overlayControls`'s
+            // own `windowControlTopRowCenterY` — centers Live/Filter/Bin
+            // on the window-control pill instead of letting it sit
+            // lower and read diagonal. Same gate: non-nil only when
+            // `windowControlLeadingInset` above is itself nonzero, so a
+            // regular iPhone, the Duo, and a fullscreen iPad window all
+            // keep their own existing, unchanged math.
+            let windowControlTopRowCenterY = windowControlLeadingInset > 0
+                ? WindowChrome.topRowCenterY(rootProxy, safeAreaTop: safeAreaTop)
+                : nil
             let windowSize = CGSize(
                 width: rootProxy.size.width + rootProxy.safeAreaInsets.leading + rootProxy.safeAreaInsets.trailing,
                 height: rootProxy.size.height + safeAreaTop + safeAreaBottom
@@ -352,7 +362,7 @@ struct PhotoFeedView: View {
             // Split View halves), so `nil` is left only on a regular
             // iPhone and `.tent`, which keep the original padding
             // placement, pixel-identical. See `DuoLayout.photosTopRowRect`.
-            let topRow = duoLayout.photosTopRowRect(containerSize: windowSize, safeAreaTop: safeAreaTop, windowControlLeadingInset: windowControlLeadingInset)
+            let topRow = duoLayout.photosTopRowRect(containerSize: windowSize, safeAreaTop: safeAreaTop, windowControlLeadingInset: windowControlLeadingInset, windowControlTopRowCenterY: windowControlTopRowCenterY)
             // Review follow-up (D1): `photosTopRowRect` now also returns
             // non-nil on `.closed` (1V, 1H, Split View halves), so the
             // Live/Filter/Bin row itself can move to the Videos cy-28
@@ -489,7 +499,8 @@ struct PhotoFeedView: View {
                         safeAreaTop: safeAreaTop,
                         onOpenBinRequested: { Usage.shared.binOpened(); showTrash = true },
                         isMirrored: false,
-                        windowControlLeadingInset: windowControlLeadingInset
+                        windowControlLeadingInset: windowControlLeadingInset,
+                        windowControlTopRowCenterY: windowControlTopRowCenterY
                     )
                     // `availableRect` is full width on every pose that
                     // reaches this `else` branch (regular iPhone,

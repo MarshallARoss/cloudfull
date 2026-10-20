@@ -8,6 +8,7 @@
 
 import SwiftUI
 import UIKit
+import os
 
 // MARK: - Feed chrome
 
@@ -255,6 +256,62 @@ enum WindowChrome {
         let isFullScreen = sameSize(windowSize, screenSize)
             || sameSize(windowSize, CGSize(width: screenSize.height, height: screenSize.width))
         return isFullScreen ? 0 : raw
+    }
+
+    #if DEBUG
+    /// Temporary debug aid for `topRowCenterY(_:safeAreaTop:)` below.
+    /// Remove once the owner confirms the real numbers off a device with
+    /// `log show`. Subsystem "com.cloudfull.app", category "WindowChrome"
+    /// — the same subsystem every other logger in this app already uses.
+    private static let topRowLog = Logger(subsystem: "com.cloudfull.app", category: "WindowChrome")
+    /// The last `centerY` this logged. A windowed app rebuilds its
+    /// `GeometryReader` body on every resize, so this stops that from
+    /// writing one log line per frame. It logs again only when the
+    /// value actually changes.
+    private static var lastLoggedTopRowCenterY: CGFloat?
+    #endif
+
+    /// Vertical center of the window-control pill (red/yellow/green),
+    /// measured in points from the window's own TRUE top edge — not
+    /// this `proxy`'s own local top, which sits lower, at the safe-area
+    /// top.
+    ///
+    /// Call this only where `leadingInset(_:)` above already reads
+    /// nonzero for the same `proxy`. Every call site below reads this
+    /// value only when it already has a nonzero leading inset in hand,
+    /// so this function does not re-check the windowed state itself.
+    ///
+    /// `containerCornerInsets.topLeading.height` is the pill's own
+    /// region height. `leadingInset(_:)` above reads `.width` off the
+    /// same `topLeading` value for the pill's width; this reads
+    /// `.height` for the same purpose, turned 90 degrees.
+    ///
+    /// `GeometryProxy` reports `containerCornerInsets` in this reader's
+    /// own LOCAL frame, the same frame `safeAreaInsets` and `size`
+    /// already use. Every `GeometryReader` that calls this keeps the
+    /// safe area in place — none chain `.ignoresSafeArea()` before this
+    /// read (`overlayControls`'s own comment explains why) — so each
+    /// proxy's local top already sits `safeAreaTop` points below the
+    /// window's own true top. Adding `safeAreaTop` back here gives every
+    /// caller the same window-top-relative number `StageGeometry
+    /// .chromeTop(safeAreaTop:)` already returns, so the two can be
+    /// compared directly.
+    ///
+    /// This has not yet been confirmed against a real windowed iPad.
+    /// The `os_log` line below lets the owner read the three real
+    /// numbers with `log show` and check this math against the pill's
+    /// own true position.
+    static func topRowCenterY(_ proxy: GeometryProxy, safeAreaTop: CGFloat) -> CGFloat {
+        let clusterHeight = proxy.containerCornerInsets.topLeading.height
+        let centerY = safeAreaTop + clusterHeight / 2
+        #if DEBUG
+        if lastLoggedTopRowCenterY == nil || abs(lastLoggedTopRowCenterY! - centerY) > 0.5 {
+            lastLoggedTopRowCenterY = centerY
+            let corner = proxy.containerCornerInsets.topLeading
+            topRowLog.debug("containerCornerInsets.topLeading=(\(corner.width, privacy: .public), \(corner.height, privacy: .public)) safeAreaTop=\(safeAreaTop, privacy: .public) centerY=\(centerY, privacy: .public)")
+        }
+        #endif
+        return centerY
     }
 }
 

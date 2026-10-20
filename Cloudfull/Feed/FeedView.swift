@@ -1365,6 +1365,20 @@ struct FeedView: View {
             // `containerCornerOffset(.top)` alone, already chained
             // there, never cleared this on its own.
             let windowControlLeadingInset = WindowChrome.leadingInset(proxy)
+            // M7 iPad review: the owner's own screenshot showed the top
+            // row sitting lower than the window-control pill — pill
+            // center about 32pt from the window top, row center about
+            // 45pt, so the two read as diagonal rather than level
+            // (WWDC25 "Elevate the design of your iPad app": put your
+            // own controls inline with the window controls, same row).
+            // `nil` everywhere `windowControlLeadingInset` itself is 0
+            // — the exact same gate, so a regular iPhone, the Duo, and
+            // a fullscreen iPad window all keep reading their own
+            // existing, unchanged math below. See `WindowChrome
+            // .topRowCenterY`'s own comment for the derivation.
+            let windowControlTopRowCenterY = windowControlLeadingInset > 0
+                ? WindowChrome.topRowCenterY(proxy, safeAreaTop: realTopInset)
+                : nil
             // Build 3: pose 3/4/4W (`DuoLayout.classify` → `.openWide`/
             // `.book`) move Mute, Filter, and Bin off this row entirely,
             // into their own column beside the rail/bar column — see
@@ -1393,7 +1407,7 @@ struct FeedView: View {
             let usesLaptopDeck = duoLayout.pose == .laptop
             ZStack(alignment: .top) {
                 VStack(spacing: 0) {
-                    topChrome(duoLayout: duoLayout, safeAreaTop: realTopInset, containerSize: fullWindow, windowControlLeadingInset: windowControlLeadingInset)
+                    topChrome(duoLayout: duoLayout, safeAreaTop: realTopInset, containerSize: fullWindow, windowControlLeadingInset: windowControlLeadingInset, windowControlTopRowCenterY: windowControlTopRowCenterY)
                     if let shrinkToastMessage {
                         shrinkToast(shrinkToastMessage)
                             .padding(.top, 8)
@@ -1421,7 +1435,7 @@ struct FeedView: View {
                     chromeColumn(duoLayout: duoLayout, safeAreaTop: realTopInset, safeAreaBottom: realBottomInset, containerSize: fullWindow)
                 }
                 if usesPose5TopRow {
-                    pose5TopRow(duoLayout: duoLayout, safeAreaTop: realTopInset, containerSize: fullWindow, windowControlLeadingInset: windowControlLeadingInset)
+                    pose5TopRow(duoLayout: duoLayout, safeAreaTop: realTopInset, containerSize: fullWindow, windowControlLeadingInset: windowControlLeadingInset, windowControlTopRowCenterY: windowControlTopRowCenterY)
                 }
                 if usesLaptopDeck {
                     laptopDeckControls(duoLayout: duoLayout, safeAreaBottom: realBottomInset, containerSize: fullWindow)
@@ -1454,7 +1468,7 @@ struct FeedView: View {
     /// imperfection if a shrink is active while the chrome column or
     /// pose-5 row also shows; flagged for the owner's own look at the
     /// sim.
-    private func topChrome(duoLayout: DuoLayout, safeAreaTop: CGFloat, containerSize: CGSize, windowControlLeadingInset: CGFloat) -> some View {
+    private func topChrome(duoLayout: DuoLayout, safeAreaTop: CGFloat, containerSize: CGSize, windowControlLeadingInset: CGFloat, windowControlTopRowCenterY: CGFloat?) -> some View {
         // Build 8b: pose 6 (laptop) adds to this suppression too. Mute,
         // Filter, and Bin move into the bottom deck's own group
         // (`laptopDeckControls`); nothing interactive belongs above the
@@ -1568,7 +1582,13 @@ struct FeedView: View {
         // left-handed-controls iPad. One inset, not a per-child one,
         // clears whichever control that is.
         .padding(.leading, windowControlLeadingInset)
-        .padding(.top, topChromeTopPadding(safeAreaTop: safeAreaTop, containerSize: containerSize))
+        // Windowed iPad: center this row on the window-control pill
+        // instead of `topChromeTopPadding`'s own status-bar math — see
+        // `windowControlTopRowCenterY`'s own comment in `overlayControls`.
+        // `nil` everywhere else, so this padding stays
+        // `topChromeTopPadding`'s own unchanged value there.
+        .padding(.top, windowControlTopRowCenterY.map { $0 - StageGeometry.chromeHeight / 2 }
+            ?? topChromeTopPadding(safeAreaTop: safeAreaTop, containerSize: containerSize))
         // Keeps `muteButton` (the row's own leading edge) clear of the
         // display's own rounded top corner — reported on the open-wide
         // (landscape, bar-on) pose, where this row starts flush at the
@@ -1695,7 +1715,7 @@ struct FeedView: View {
     /// 1V), "the very top of the video." Pose 5 is unchanged: it
     /// keeps centring on `statusBlock.midY`, the owner's own explicit
     /// "don't change pose 5."
-    private func pose5TopRow(duoLayout: DuoLayout, safeAreaTop: CGFloat, containerSize: CGSize, windowControlLeadingInset: CGFloat) -> some View {
+    private func pose5TopRow(duoLayout: DuoLayout, safeAreaTop: CGFloat, containerSize: CGSize, windowControlLeadingInset: CGFloat, windowControlTopRowCenterY: CGFloat?) -> some View {
         let statusBlock = duoLayout.statusBlock(containerSize: containerSize, safeAreaTop: safeAreaTop)
         let stageRect = duoLayout.stageRect(containerSize: containerSize, safeAreaTop: safeAreaTop)
         // `windowControlLeadingInset` (`topChrome`'s own comment has
@@ -1751,7 +1771,15 @@ struct FeedView: View {
         let trailing = min(stageRect.maxX - 16, occlusionClamp)
         let width = max(0, trailing - leading)
         let rowHeight: CGFloat = 40
-        let centerY = duoLayout.pose == .closed ? safeAreaTop + 8 + rowHeight / 2 : statusBlock.midY
+        // Windowed iPad: `windowControlTopRowCenterY` is non-nil only
+        // when `windowControlLeadingInset` above is nonzero too — the
+        // same `.openTall`-on-iPad case that comment already covers.
+        // Centering on the pill there replaces `statusBlock.midY`,
+        // which on an iPad has no status block of its own to read.
+        // `nil` on every real Duo pose this row reaches, so both
+        // branches of the fallback ternary stay byte-identical there.
+        let centerY = windowControlTopRowCenterY
+            ?? (duoLayout.pose == .closed ? safeAreaTop + 8 + rowHeight / 2 : statusBlock.midY)
         // Mirrored-layout round: "Bin top-left, Mute/Filter top-right"
         // — the row's own child order simply reverses. The counter
         // stays the child immediately next to Bin either way (it reads

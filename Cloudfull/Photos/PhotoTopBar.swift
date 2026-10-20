@@ -49,6 +49,14 @@ struct PhotoTopBar: View {
     /// value into `placement` itself for that case, so only the `nil`
     /// branch below still needs it.
     var windowControlLeadingInset: CGFloat = 0
+    /// Vertical center of the window's own control pill, in points from
+    /// the window top — see `WindowChrome.topRowCenterY`'s own comment.
+    /// `nil` everywhere `windowControlLeadingInset` above is 0,
+    /// including when `placement` is non-nil: `DuoLayout
+    /// .photosTopRowRect` already folds this same centering into
+    /// `placement` itself for that case, same as it already does for
+    /// `windowControlLeadingInset`.
+    var windowControlTopRowCenterY: CGFloat? = nil
 
     @ObservedObject private var photoOptionsStore = PhotoOptionsStore.shared
 
@@ -68,7 +76,14 @@ struct PhotoTopBar: View {
             } else {
                 row
                     .padding(.horizontal, 12)
-                    .padding(.top, StageGeometry.chromeTop(safeAreaTop: safeAreaTop))
+                    // Windowed iPad: center this row on the window
+                    // -control pill instead of `StageGeometry.chromeTop`'s
+                    // own status-bar math — see `windowControlTopRowCenterY`'s
+                    // own comment above. `nil` everywhere else, so this
+                    // padding stays `StageGeometry.chromeTop`'s own
+                    // unchanged value there.
+                    .padding(.top, windowControlTopRowCenterY.map { $0 - StageGeometry.chromeHeight / 2 }
+                        ?? StageGeometry.chromeTop(safeAreaTop: safeAreaTop))
                     // This view's own caller (`PhotoFeedView`) already
                     // hands this whole branch a FIXED width — its
                     // `.frame(width: availableRect.width, …)`, unchanged

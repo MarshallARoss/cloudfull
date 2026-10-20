@@ -2353,7 +2353,7 @@ struct DuoLayout {
     /// in-window occlusion that crosses the row's own y band (the
     /// fold-on-bottom camera, top-leading). See the `.closed` case's
     /// own comment for the live numbers.
-    func photosTopRowRect(containerSize: CGSize, safeAreaTop: CGFloat, windowControlLeadingInset: CGFloat) -> CGRect? {
+    func photosTopRowRect(containerSize: CGSize, safeAreaTop: CGFloat, windowControlLeadingInset: CGFloat, windowControlTopRowCenterY: CGFloat?) -> CGRect? {
         let rowHeight: CGFloat = 40
         let margin: CGFloat = 12
         switch pose {
@@ -2377,7 +2377,12 @@ struct DuoLayout {
             let windowBounds = CGRect(origin: .zero, size: containerSize).insetBy(dx: -1, dy: -1)
             let clamp = occlusion.flatMap { windowBounds.contains($0) && $0.minX > leading ? $0.minX - 8 : nil } ?? .infinity
             let trailing = min(containerSize.width - margin, clamp)
-            let midY = statusBlock(containerSize: containerSize, safeAreaTop: safeAreaTop).midY
+            // Windowed iPad: `windowControlTopRowCenterY` is non-nil
+            // only in the same nonzero-`windowControlLeadingInset` case
+            // this branch's own comment already covers — centers this
+            // row on the window-control pill instead of `statusBlock`,
+            // which on an iPad has no status block of its own to read.
+            let midY = windowControlTopRowCenterY ?? statusBlock(containerSize: containerSize, safeAreaTop: safeAreaTop).midY
             return CGRect(x: leading, y: midY - rowHeight / 2, width: max(0, trailing - leading), height: rowHeight)
         case .openWide, .book:
             // Unlike `FeedView`'s own `chromeColumn` (pose 3/4's
@@ -2392,7 +2397,13 @@ struct DuoLayout {
             // trailing edge (Bin) does not move.
             let area = availableRect(containerSize: containerSize, safeAreaTop: safeAreaTop).insetBy(dx: margin, dy: 0)
             let leading = area.minX + windowControlLeadingInset
-            return CGRect(x: leading, y: safeAreaTop + 8, width: max(0, area.maxX - leading), height: rowHeight)
+            // Windowed iPad: same pill-centering as the `.openTall`
+            // branch above, reached here on a landscape window wide/
+            // tall enough to classify `.openWide`. `nil` on `.book`
+            // (real Duo hardware only), so this stays `safeAreaTop + 8`
+            // there, unchanged.
+            let top = windowControlTopRowCenterY.map { $0 - rowHeight / 2 } ?? (safeAreaTop + 8)
+            return CGRect(x: leading, y: top, width: max(0, area.maxX - leading), height: rowHeight)
         case .closed:
             // Live reading (Split View, Cloudfull on the LEFT half,
             // 469×669, Photos tab, leading bar): `availableRect` always
