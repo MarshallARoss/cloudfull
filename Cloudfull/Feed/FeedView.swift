@@ -1351,6 +1351,19 @@ struct FeedView: View {
                 width: proxy.size.width + proxy.safeAreaInsets.leading + proxy.safeAreaInsets.trailing,
                 height: proxy.size.height + proxy.safeAreaInsets.top + proxy.safeAreaInsets.bottom
             )
+            // iPadOS 26: a resizable app window draws its own
+            // red/yellow/green window-control cluster over the
+            // window's own top-leading corner. `containerCornerInsets`
+            // is iOS 26's own API for reading how far that cluster (or
+            // a rounded window corner with nothing drawn over it)
+            // reaches — `topLeading.width` is this cluster's own
+            // width. Zero on iPhone, zero on the Duo (neither has this
+            // window chrome at all), and zero on a fullscreen iPad
+            // window, so every call below that adds this stays a
+            // no-op off an iPadOS 26 windowed app. See `topChrome`'s
+            // own comment for why `containerCornerOffset(.top)` alone,
+            // already chained there, never cleared this on its own.
+            let windowControlLeadingInset = proxy.containerCornerInsets.topLeading.width
             // Build 3: pose 3/4/4W (`DuoLayout.classify` → `.openWide`/
             // `.book`) move Mute, Filter, and Bin off this row entirely,
             // into their own column beside the rail/bar column — see
@@ -1379,7 +1392,7 @@ struct FeedView: View {
             let usesLaptopDeck = duoLayout.pose == .laptop
             ZStack(alignment: .top) {
                 VStack(spacing: 0) {
-                    topChrome(duoLayout: duoLayout, safeAreaTop: realTopInset, containerSize: fullWindow)
+                    topChrome(duoLayout: duoLayout, safeAreaTop: realTopInset, containerSize: fullWindow, windowControlLeadingInset: windowControlLeadingInset)
                     if let shrinkToastMessage {
                         shrinkToast(shrinkToastMessage)
                             .padding(.top, 8)
@@ -1395,10 +1408,19 @@ struct FeedView: View {
                     // `containerSize: fullWindow` argument already
                     // assumes, via this view's own `.padding(.top:)`/
                     // `.frame` pair below.
+                    //
+                    // Does not take `windowControlLeadingInset`: this
+                    // pose's own `zigzagCenters` always come back empty
+                    // without a real rail column, and a rail column
+                    // needs `barEdge` (the Duo's own hardware signal) or
+                    // pose `.openTall` — never true together with this
+                    // pose (`.openWide`/`.book`) on an iPad, which has
+                    // neither a hinge nor that bar. This `Group` renders
+                    // nothing there, so it has nothing to clear.
                     chromeColumn(duoLayout: duoLayout, safeAreaTop: realTopInset, safeAreaBottom: realBottomInset, containerSize: fullWindow)
                 }
                 if usesPose5TopRow {
-                    pose5TopRow(duoLayout: duoLayout, safeAreaTop: realTopInset, containerSize: fullWindow)
+                    pose5TopRow(duoLayout: duoLayout, safeAreaTop: realTopInset, containerSize: fullWindow, windowControlLeadingInset: windowControlLeadingInset)
                 }
                 if usesLaptopDeck {
                     laptopDeckControls(duoLayout: duoLayout, safeAreaBottom: realBottomInset, containerSize: fullWindow)
@@ -1431,7 +1453,7 @@ struct FeedView: View {
     /// imperfection if a shrink is active while the chrome column or
     /// pose-5 row also shows; flagged for the owner's own look at the
     /// sim.
-    private func topChrome(duoLayout: DuoLayout, safeAreaTop: CGFloat, containerSize: CGSize) -> some View {
+    private func topChrome(duoLayout: DuoLayout, safeAreaTop: CGFloat, containerSize: CGSize, windowControlLeadingInset: CGFloat) -> some View {
         // Build 8b: pose 6 (laptop) adds to this suppression too. Mute,
         // Filter, and Bin move into the bottom deck's own group
         // (`laptopDeckControls`); nothing interactive belongs above the
@@ -1509,8 +1531,25 @@ struct FeedView: View {
         // has the same fix), or the row would still start at x=0 even
         // with its own children already reversed above, landing on
         // top of a mirrored column instead of clear of it.
-        .frame(width: duoLayout.availableRect(containerSize: containerSize, safeAreaTop: safeAreaTop).width,
+        .frame(width: max(0, duoLayout.availableRect(containerSize: containerSize, safeAreaTop: safeAreaTop).width - windowControlLeadingInset),
                alignment: duoLayout.isMirrored ? .trailing : .leading)
+        // iPadOS 26 windowed mode: `windowControlLeadingInset` is the
+        // window-control cluster's own width, read once in
+        // `overlayControls` (zero everywhere else, including a
+        // fullscreen iPad window). Shrinking the frame above by that
+        // same amount, then padding the row in by it here, slides the
+        // row's own leading edge clear of the cluster while leaving
+        // its trailing edge — `binButton`, unmirrored — exactly where
+        // it always was: the two changes net to the same total width
+        // this frame reports to its own parent, so nothing outside
+        // this row needs to know this happened. Mirrored or not: the
+        // row above is a greedy `HStack` (its own `Spacer` fills
+        // whatever box it is given), so its bounding box always spans
+        // this frame's own full width regardless of which control
+        // `isMirrored` put nearest this leading edge — Bin, on a
+        // left-handed-controls iPad. One inset, not a per-child one,
+        // clears whichever control that is.
+        .padding(.leading, windowControlLeadingInset)
         .padding(.top, topChromeTopPadding(safeAreaTop: safeAreaTop, containerSize: containerSize))
         // Keeps `muteButton` (the row's own leading edge) clear of the
         // display's own rounded top corner — reported on the open-wide
@@ -1525,6 +1564,17 @@ struct FeedView: View {
         // and on the Duo's other poses, where the existing padding and
         // safe area already clear the corner on their own; this only
         // nudges the row further in when they do not.
+        //
+        // `.top` only, still — this call alone never touched the
+        // iPad window-control overlap the `.padding(.leading:)` above
+        // now fixes. `Edge.Set.top` only ever insets this row's own
+        // HEIGHT side (how far down the corner's rounding pushes it);
+        // the window-control cluster sits beside the corner, not
+        // inside its curve, and reaches across in WIDTH instead. A
+        // `.top` offset was never going to move a row sideways, so it
+        // read as a no-op on the iPad screenshot that reported this —
+        // not a sign anything here was wired up wrong, just the wrong
+        // axis for this particular overlap.
         .containerCornerOffset(.top)
     }
 
@@ -1627,10 +1677,18 @@ struct FeedView: View {
     /// 1V), "the very top of the video." Pose 5 is unchanged: it
     /// keeps centring on `statusBlock.midY`, the owner's own explicit
     /// "don't change pose 5."
-    private func pose5TopRow(duoLayout: DuoLayout, safeAreaTop: CGFloat, containerSize: CGSize) -> some View {
+    private func pose5TopRow(duoLayout: DuoLayout, safeAreaTop: CGFloat, containerSize: CGSize, windowControlLeadingInset: CGFloat) -> some View {
         let statusBlock = duoLayout.statusBlock(containerSize: containerSize, safeAreaTop: safeAreaTop)
         let stageRect = duoLayout.stageRect(containerSize: containerSize, safeAreaTop: safeAreaTop)
-        let leading = stageRect.minX + 16
+        // `windowControlLeadingInset` (`topChrome`'s own comment has
+        // the full reasoning) is zero on every Duo pose that reaches
+        // this row — pose 5 is real Duo hardware, never an iPadOS 26
+        // window. It is only ever nonzero here on an iPad whose
+        // window has grown wide and tall enough to classify as
+        // `.openTall` while still drawn windowed (not fullscreen), so
+        // this is a no-op for every reachable Duo case, same as every
+        // other call site that adds it.
+        let leading = stageRect.minX + 16 + windowControlLeadingInset
         // Owner re-adapt (Live Activity pass): a Live Activity's own
         // pill grows the status block LEFTWARD on pose 5 (occlusion
         // itself widens — unlike the closed display, this pose DOES

@@ -42,6 +42,13 @@ struct PhotoTopBar: View {
     /// starts flush at the window's own leading edge and the display's
     /// rounded top corner is big enough to clip the Live button there.
     var clearsCorner: Bool = false
+    /// The window's own control-cluster width, on an iPadOS 26 windowed
+    /// app — see `FeedView.topChrome`'s own comment for the full
+    /// reasoning. Zero everywhere else, including when `placement` is
+    /// non-nil: `DuoLayout.photosTopRowRect` already folds this same
+    /// value into `placement` itself for that case, so only the `nil`
+    /// branch below still needs it.
+    var windowControlLeadingInset: CGFloat = 0
 
     @ObservedObject private var photoOptionsStore = PhotoOptionsStore.shared
 
@@ -62,6 +69,21 @@ struct PhotoTopBar: View {
                 row
                     .padding(.horizontal, 12)
                     .padding(.top, StageGeometry.chromeTop(safeAreaTop: safeAreaTop))
+                    // This view's own caller (`PhotoFeedView`) already
+                    // hands this whole branch a FIXED width — its
+                    // `.frame(width: availableRect.width, …)`, unchanged
+                    // — so padding the row in on the leading side alone
+                    // shrinks what `row`'s own `Spacer` has left to
+                    // fill, rather than growing this view's own
+                    // reported size past that fixed width. Slides the
+                    // row clear of an iPadOS 26 window's own
+                    // control cluster while leaving `binButton`'s
+                    // trailing edge exactly where it always was. See
+                    // `FeedView.topChrome`'s own comment for why a
+                    // vertical-only fix (`containerCornerOffset(.top)`,
+                    // `clearsCorner`'s own branch above) could never
+                    // have cleared this on its own.
+                    .padding(.leading, windowControlLeadingInset)
             }
         }
     }

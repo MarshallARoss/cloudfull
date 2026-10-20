@@ -2353,20 +2353,38 @@ struct DuoLayout {
     /// in-window occlusion that crosses the row's own y band (the
     /// fold-on-bottom camera, top-leading). See the `.closed` case's
     /// own comment for the live numbers.
-    func photosTopRowRect(containerSize: CGSize, safeAreaTop: CGFloat) -> CGRect? {
+    func photosTopRowRect(containerSize: CGSize, safeAreaTop: CGFloat, windowControlLeadingInset: CGFloat) -> CGRect? {
         let rowHeight: CGFloat = 40
         let margin: CGFloat = 12
         switch pose {
         case .openTall, .laptop:
-            let leading = margin
+            // `windowControlLeadingInset` — see `FeedView.topChrome`'s
+            // own comment for the full reasoning — is zero on `.laptop`
+            // (real Duo hardware only, never an iPadOS window) and on
+            // `.openTall` reached on an actual Duo. It is only ever
+            // nonzero here on an iPad windowed wide/tall enough to
+            // classify as `.openTall`, where it pushes this row's own
+            // leading edge clear of the window's own control cluster.
+            let leading = margin + windowControlLeadingInset
             let windowBounds = CGRect(origin: .zero, size: containerSize).insetBy(dx: -1, dy: -1)
             let clamp = occlusion.flatMap { windowBounds.contains($0) && $0.minX > leading ? $0.minX - 8 : nil } ?? .infinity
             let trailing = min(containerSize.width - margin, clamp)
             let midY = statusBlock(containerSize: containerSize, safeAreaTop: safeAreaTop).midY
             return CGRect(x: leading, y: midY - rowHeight / 2, width: max(0, trailing - leading), height: rowHeight)
         case .openWide, .book:
+            // Unlike `FeedView`'s own `chromeColumn` (pose 3/4's
+            // equivalent, gated on a real rail column that an iPad
+            // never has), this branch reads straight off
+            // `availableRect` — full window width, column or not — so
+            // it DOES draw a real, visible row on an iPad that
+            // classifies this wide/tall window as `.openWide`/`.book`.
+            // Same fix as the `.openTall` branch above: nudge the
+            // leading edge in by the window's own control-cluster
+            // width, shrinking the row by the same amount so its
+            // trailing edge (Bin) does not move.
             let area = availableRect(containerSize: containerSize, safeAreaTop: safeAreaTop).insetBy(dx: margin, dy: 0)
-            return CGRect(x: area.minX, y: safeAreaTop + 8, width: max(0, area.width), height: rowHeight)
+            let leading = area.minX + windowControlLeadingInset
+            return CGRect(x: leading, y: safeAreaTop + 8, width: max(0, area.maxX - leading), height: rowHeight)
         case .closed:
             // Live reading (Split View, Cloudfull on the LEFT half,
             // 469×669, Photos tab, leading bar): `availableRect` always
