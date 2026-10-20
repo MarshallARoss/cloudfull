@@ -1613,7 +1613,13 @@ struct FeedView: View {
         // read as a no-op on the iPad screenshot that reported this —
         // not a sign anything here was wired up wrong, just the wrong
         // axis for this particular overlap.
-        .containerCornerOffset(.top)
+        //
+        // Windowed iPad: no corner offset. The `.padding(.top:)` above
+        // already centers the row on the window-control pill. The
+        // offset adds the pill's own height (53 pt, read from the
+        // `WindowChrome` log) a second time and drops the row below
+        // the pill.
+        .containerCornerOffset(windowControlTopRowCenterY == nil ? .top : [])
     }
 
     // MARK: - Chrome column (build 3)
