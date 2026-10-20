@@ -105,11 +105,15 @@ struct PhotoTopBar: View {
 
     private var row: some View {
         // `liveToggleButton`/`PhotoFilterMenuView` carry
-        // `.layoutPriority(-1)` below — same narrow-iPad-window safety
-        // net as `FeedView.topChrome`'s own identical pair: if
-        // `windowControlLeadingInset` ever leaves this row too little
-        // width, these two plain glyph buttons give way before
-        // `binButton`'s own `.fixedSize()` badge does.
+        // `.layoutPriority(-1)` below, but only while
+        // `windowControlLeadingInset` is nonzero (a windowed iPad) —
+        // same narrow-iPad-window safety net as `FeedView.topChrome`'s
+        // own identical pair: if that inset ever leaves this row too
+        // little width, these two plain glyph buttons give way before
+        // `binButton`'s own `.fixedSize()` badge does. Review fix: on
+        // an iPhone or the Duo, where this inset is always 0, the
+        // priority falls back to the default `0` instead, so the
+        // filter badge `Text` no longer compresses there for nothing.
         HStack(alignment: .top, spacing: 8) {
             // Review fix: Bin is the OUTERMOST control in the mirrored
             // row, same as `FeedView.topChrome`'s own mirrored branch —
@@ -120,16 +124,16 @@ struct PhotoTopBar: View {
                 counterCapsule
                 Spacer(minLength: 8)
                 PhotoFilterMenuView(store: photoOptionsStore)
-                    .layoutPriority(-1)
+                    .layoutPriority(windowControlLeadingInset > 0 ? -1 : 0)
                 liveToggleButton
-                    .layoutPriority(-1)
+                    .layoutPriority(windowControlLeadingInset > 0 ? -1 : 0)
             } else {
                 liveToggleButton
-                    .layoutPriority(-1)
+                    .layoutPriority(windowControlLeadingInset > 0 ? -1 : 0)
                 // The photo-specific filter menu, distinct from the
                 // video feed's filter menu.
                 PhotoFilterMenuView(store: photoOptionsStore)
-                    .layoutPriority(-1)
+                    .layoutPriority(windowControlLeadingInset > 0 ? -1 : 0)
                 Spacer(minLength: 8)
                 counterCapsule
                 binButton

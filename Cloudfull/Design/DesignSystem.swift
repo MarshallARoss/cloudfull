@@ -265,6 +265,20 @@ enum WindowChrome {
     /// regular iPhone, and the iPhone Duo — none of which ever shows this
     /// window-control chrome.
     ///
+    /// Reviewer-caught regression: on the iPhone Duo's own Split View
+    /// pose, this app's window is smaller than the screen too — the
+    /// same shape a windowed iPad reports — so the size compare below
+    /// alone read `true` there and wrongly turned on `leadingInset(_:)`,
+    /// `topRowCenterY(_:safeAreaTop:)`, and `isShortWindow(containerSize:
+    /// pose:)` on the Duo. `DuoLayout.seenFoldable` rules that out first:
+    /// true for the rest of this install's life once the Duo's own
+    /// hinge or inner-display division is seen on any single frame (see
+    /// that property's own comment in `DuoLayout.swift`), so it also
+    /// catches a transient fold/unfold frame mid-transition, not only a
+    /// settled Duo pose. Reading it here is safe: both this property and
+    /// `seenFoldable`'s own getter assume the same main-actor, view-body
+    /// context, per that getter's own comment.
+    ///
     /// The window/screen read itself, and why it compares sizes rather
     /// than reading `UIWindowScene.Geometry.systemFrame`, is
     /// `leadingInset(_:)`'s own comment above; this is that same
@@ -272,6 +286,7 @@ enum WindowChrome {
     /// below can reuse it without its own window-scene read. No
     /// behaviour change to `leadingInset(_:)` itself — it now calls this.
     static var isWindowed: Bool {
+        guard !DuoLayout.seenFoldable else { return false }
         guard let scene = UIApplication.shared.connectedScenes
             .compactMap({ $0 as? UIWindowScene })
             .first(where: { $0.activationState == .foregroundActive })

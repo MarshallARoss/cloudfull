@@ -1521,17 +1521,22 @@ struct FeedView: View {
         // rule.
         //
         // `muteButton`/`FilterMenuView` carry `.layoutPriority(-1)`
-        // below — narrow-iPad-window safety net for
-        // `windowControlLeadingInset`. On a resizable iPadOS 26 window
-        // shrunk close to its own minimum, this row's `.frame(width:)`
-        // further down can land too small for all five children at
-        // their natural size. `binButton`'s own badge is
-        // `.fixedSize()` (it must never truncate the count mid-digit);
-        // Mute and Filter are plain glyph buttons with nothing
-        // legible to lose. Giving them the lower priority means THEY
-        // give up width first if the row ever runs short, not Bin's
-        // own badge — regardless of which side `isMirrored` put them
-        // on, since layout priority ranks the whole row, not position.
+        // below, but only while `windowControlLeadingInset` is nonzero
+        // (a windowed iPad) — narrow-iPad-window safety net for that
+        // same inset. On a resizable iPadOS 26 window shrunk close to
+        // its own minimum, this row's `.frame(width:)` further down can
+        // land too small for all five children at their natural size.
+        // `binButton`'s own badge is `.fixedSize()` (it must never
+        // truncate the count mid-digit); Mute and Filter are plain
+        // glyph buttons with nothing legible to lose. Giving them the
+        // lower priority means THEY give up width first if the row
+        // ever runs short, not Bin's own badge — regardless of which
+        // side `isMirrored` put them on, since layout priority ranks
+        // the whole row, not position. Review fix: on an iPhone or the
+        // Duo, where this inset is always 0, the priority now falls
+        // back to the default `0` instead — the owner's own filter
+        // badge `Text` could otherwise compress there for no reason,
+        // since nothing on those devices ever needs this safety net.
         return HStack(alignment: .top, spacing: 8) {
             if duoLayout.isMirrored {
                 if !suppressDefaultRow {
@@ -1545,19 +1550,19 @@ struct FeedView: View {
                 if !suppressDefaultRow {
                     FilterMenuView(store: optionsStore, hidesChrome: hidesGlobalChrome)
                         .duoGuideMark("top.filter", color: .teal)
-                        .layoutPriority(-1)
+                        .layoutPriority(windowControlLeadingInset > 0 ? -1 : 0)
                     muteButton
-                        .layoutPriority(-1)
+                        .layoutPriority(windowControlLeadingInset > 0 ? -1 : 0)
                 }
             } else {
                 // A tap on the video also toggles mute, with a center
                 // flash. This pill is the second mute control.
                 if !suppressDefaultRow {
                     muteButton
-                        .layoutPriority(-1)
+                        .layoutPriority(windowControlLeadingInset > 0 ? -1 : 0)
                     FilterMenuView(store: optionsStore, hidesChrome: hidesGlobalChrome)
                         .duoGuideMark("top.filter", color: .teal)
-                        .layoutPriority(-1)
+                        .layoutPriority(windowControlLeadingInset > 0 ? -1 : 0)
                 }
                 if let job = activeShrinkJob, let text = shrinkActiveProgressText {
                     shrinkProgressCapsule(text, assetID: job.id)
