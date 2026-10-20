@@ -7,6 +7,7 @@
 //
 
 import SwiftUI
+import UIKit
 
 // MARK: - Feed chrome
 
@@ -187,6 +188,73 @@ enum Fmt {
     /// The caption and the rail read that stored value.
     static func isAboveShrinkThreshold(_ size: CGSize) -> Bool {
         Int(min(size.width, size.height)) >= 2160
+    }
+}
+
+// MARK: - Window geometry (iPadOS 26)
+
+/// One read, used at both sites that need it: `FeedView.overlayControls`
+/// and `PhotoFeedView.body`'s own `GeometryReader`.
+///
+/// Kept OUTSIDE `StageGeometry` below on purpose. That type's own doc
+/// comment promises it never reads UIKit directly, so a window-scene read
+/// does not belong inside it even though the two are closely related.
+enum WindowChrome {
+    /// `proxy.containerCornerInsets.topLeading.width` — iOS 26's own
+    /// figure for how far the window's own top-leading corner reaches —
+    /// held at 0 unless this app's own window is WINDOWED on an iPad:
+    /// smaller than the screen it sits on.
+    ///
+    /// Reviewer-caught regression: that raw `containerCornerInsets`
+    /// reading is nonzero for ANY rounded top-leading corner, including
+    /// the Duo's own physical corner on poses `.openWide`/`.book`
+    /// (`.containerCornerOffset(.top)`/`PhotoTopBar.clearsCorner` already
+    /// lean on that same nonzero reading there) and a FULLSCREEN iPad
+    /// window. Threading the raw value straight in moved the Duo's own
+    /// Photos row sideways on real Duo hardware, which has no window-
+    /// control cluster to clear at all. The red/yellow/green cluster
+    /// this value exists to clear only ever paints while the app's own
+    /// window is a resizable, floating iPadOS 26 window — never
+    /// fullscreen, and never the Duo or a plain iPhone, neither of
+    /// which has this window chrome in the first place.
+    ///
+    /// The check: compare the scene's own key window `bounds` size
+    /// against its `screen.bounds` size. Equal (either order — a
+    /// 90°-rotated window reports its screen's own W/H swapped, still
+    /// fullscreen, not windowed) means fullscreen, so this returns 0.
+    /// Smaller means windowed, so the real reading passes through.
+    /// `UIWindowScene.keyWindow` is the same read
+    /// `DebugProbes.HitTestProbeRecognizer.attachIfNeeded` already uses
+    /// to reach the key window; `Usage.isSplit` already compares a
+    /// window's size against this same `screen.bounds` for its own
+    /// "narrower than its screen" read. `UIWindowScene.Geometry`'s own
+    /// `systemFrame` looked like the more direct read, but the SDK marks
+    /// it `API_UNAVAILABLE(ios)` — macCatalyst only — so this reads the
+    /// window directly instead, same as those two precedents. Both
+    /// predate this app's iOS 26.0 deployment target, so neither needs
+    /// an `#available` gate of its own.
+    ///
+    /// Takes the `GeometryProxy` currently in scope, not a cached value:
+    /// SwiftUI re-invokes the enclosing `GeometryReader`'s body on every
+    /// resize of a windowed iPad app, so this is re-evaluated right there
+    /// with it, and the chrome slides as the window grows or shrinks.
+    static func leadingInset(_ proxy: GeometryProxy) -> CGFloat {
+        let raw = proxy.containerCornerInsets.topLeading.width
+        guard raw > 0 else { return 0 }
+        guard let scene = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .first(where: { $0.activationState == .foregroundActive })
+            ?? UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first,
+            let window = scene.keyWindow
+        else { return 0 }
+        let windowSize = window.bounds.size
+        let screenSize = scene.screen.bounds.size
+        func sameSize(_ a: CGSize, _ b: CGSize) -> Bool {
+            abs(a.width - b.width) < 1 && abs(a.height - b.height) < 1
+        }
+        let isFullScreen = sameSize(windowSize, screenSize)
+            || sameSize(windowSize, CGSize(width: screenSize.height, height: screenSize.width))
+        return isFullScreen ? 0 : raw
     }
 }
 

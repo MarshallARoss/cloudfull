@@ -338,10 +338,10 @@ struct PhotoFeedView: View {
             // geometry on this screen that it does on `FeedView`'s.
             let safeAreaBottom = rootProxy.safeAreaInsets.bottom
             // iPadOS 26: the window's own control cluster's width —
-            // see `FeedView.topChrome`'s own comment for the full
-            // reasoning. Zero on iPhone, Duo, and a fullscreen iPad
-            // window; real only on an iPadOS 26 windowed app.
-            let windowControlLeadingInset = rootProxy.containerCornerInsets.topLeading.width
+            // see `WindowChrome.leadingInset`'s own comment for the
+            // full reasoning. Zero on iPhone, Duo, and a fullscreen
+            // iPad window; real only on an iPadOS 26 WINDOWED app.
+            let windowControlLeadingInset = WindowChrome.leadingInset(rootProxy)
             let windowSize = CGSize(
                 width: rootProxy.size.width + rootProxy.safeAreaInsets.leading + rootProxy.safeAreaInsets.trailing,
                 height: rootProxy.size.height + safeAreaTop + safeAreaBottom

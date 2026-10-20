@@ -43,7 +43,7 @@ struct PhotoTopBar: View {
     /// rounded top corner is big enough to clip the Live button there.
     var clearsCorner: Bool = false
     /// The window's own control-cluster width, on an iPadOS 26 windowed
-    /// app — see `FeedView.topChrome`'s own comment for the full
+    /// app — see `WindowChrome.leadingInset`'s own comment for the full
     /// reasoning. Zero everywhere else, including when `placement` is
     /// non-nil: `DuoLayout.photosTopRowRect` already folds this same
     /// value into `placement` itself for that case, so only the `nil`
@@ -89,6 +89,12 @@ struct PhotoTopBar: View {
     }
 
     private var row: some View {
+        // `liveToggleButton`/`PhotoFilterMenuView` carry
+        // `.layoutPriority(-1)` below — same narrow-iPad-window safety
+        // net as `FeedView.topChrome`'s own identical pair: if
+        // `windowControlLeadingInset` ever leaves this row too little
+        // width, these two plain glyph buttons give way before
+        // `binButton`'s own `.fixedSize()` badge does.
         HStack(alignment: .top, spacing: 8) {
             // Review fix: Bin is the OUTERMOST control in the mirrored
             // row, same as `FeedView.topChrome`'s own mirrored branch —
@@ -99,12 +105,16 @@ struct PhotoTopBar: View {
                 counterCapsule
                 Spacer(minLength: 8)
                 PhotoFilterMenuView(store: photoOptionsStore)
+                    .layoutPriority(-1)
                 liveToggleButton
+                    .layoutPriority(-1)
             } else {
                 liveToggleButton
+                    .layoutPriority(-1)
                 // The photo-specific filter menu, distinct from the
                 // video feed's filter menu.
                 PhotoFilterMenuView(store: photoOptionsStore)
+                    .layoutPriority(-1)
                 Spacer(minLength: 8)
                 counterCapsule
                 binButton

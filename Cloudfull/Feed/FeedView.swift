@@ -1353,17 +1353,18 @@ struct FeedView: View {
             )
             // iPadOS 26: a resizable app window draws its own
             // red/yellow/green window-control cluster over the
-            // window's own top-leading corner. `containerCornerInsets`
-            // is iOS 26's own API for reading how far that cluster (or
-            // a rounded window corner with nothing drawn over it)
-            // reaches — `topLeading.width` is this cluster's own
-            // width. Zero on iPhone, zero on the Duo (neither has this
-            // window chrome at all), and zero on a fullscreen iPad
-            // window, so every call below that adds this stays a
-            // no-op off an iPadOS 26 windowed app. See `topChrome`'s
-            // own comment for why `containerCornerOffset(.top)` alone,
-            // already chained there, never cleared this on its own.
-            let windowControlLeadingInset = proxy.containerCornerInsets.topLeading.width
+            // window's own top-leading corner. `WindowChrome
+            // .leadingInset` is this cluster's own width — zero on
+            // iPhone, zero on the Duo (neither has this window chrome
+            // at all), and zero on a fullscreen iPad window, so every
+            // call below that adds this stays a no-op everywhere but
+            // an iPadOS 26 WINDOWED app — see that function's own
+            // comment for why a plain `containerCornerInsets` read
+            // alone over-fired on the Duo's own rounded corner. See
+            // `topChrome`'s own comment for why
+            // `containerCornerOffset(.top)` alone, already chained
+            // there, never cleared this on its own.
+            let windowControlLeadingInset = WindowChrome.leadingInset(proxy)
             // Build 3: pose 3/4/4W (`DuoLayout.classify` → `.openWide`/
             // `.book`) move Mute, Filter, and Bin off this row entirely,
             // into their own column beside the rail/bar column — see
@@ -1485,6 +1486,19 @@ struct FeedView: View {
         // (`binButton()` first, then `counterCapsule`). This row used
         // to read counter-then-Bin, the one pair out of step with that
         // rule.
+        //
+        // `muteButton`/`FilterMenuView` carry `.layoutPriority(-1)`
+        // below — narrow-iPad-window safety net for
+        // `windowControlLeadingInset`. On a resizable iPadOS 26 window
+        // shrunk close to its own minimum, this row's `.frame(width:)`
+        // further down can land too small for all five children at
+        // their natural size. `binButton`'s own badge is
+        // `.fixedSize()` (it must never truncate the count mid-digit);
+        // Mute and Filter are plain glyph buttons with nothing
+        // legible to lose. Giving them the lower priority means THEY
+        // give up width first if the row ever runs short, not Bin's
+        // own badge — regardless of which side `isMirrored` put them
+        // on, since layout priority ranks the whole row, not position.
         return HStack(alignment: .top, spacing: 8) {
             if duoLayout.isMirrored {
                 if !suppressDefaultRow {
@@ -1498,15 +1512,19 @@ struct FeedView: View {
                 if !suppressDefaultRow {
                     FilterMenuView(store: optionsStore, hidesChrome: hidesGlobalChrome)
                         .duoGuideMark("top.filter", color: .teal)
+                        .layoutPriority(-1)
                     muteButton
+                        .layoutPriority(-1)
                 }
             } else {
                 // A tap on the video also toggles mute, with a center
                 // flash. This pill is the second mute control.
                 if !suppressDefaultRow {
                     muteButton
+                        .layoutPriority(-1)
                     FilterMenuView(store: optionsStore, hidesChrome: hidesGlobalChrome)
                         .duoGuideMark("top.filter", color: .teal)
+                        .layoutPriority(-1)
                 }
                 if let job = activeShrinkJob, let text = shrinkActiveProgressText {
                     shrinkProgressCapsule(text, assetID: job.id)

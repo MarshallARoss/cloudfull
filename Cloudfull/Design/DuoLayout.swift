@@ -2358,14 +2358,22 @@ struct DuoLayout {
         let margin: CGFloat = 12
         switch pose {
         case .openTall, .laptop:
-            // `windowControlLeadingInset` — see `FeedView.topChrome`'s
-            // own comment for the full reasoning — is zero on `.laptop`
-            // (real Duo hardware only, never an iPadOS window) and on
-            // `.openTall` reached on an actual Duo. It is only ever
-            // nonzero here on an iPad windowed wide/tall enough to
-            // classify as `.openTall`, where it pushes this row's own
-            // leading edge clear of the window's own control cluster.
+            // `windowControlLeadingInset` — see `WindowChrome
+            // .leadingInset`'s own comment for the full reasoning — is
+            // zero on `.laptop` (real Duo hardware only, never an
+            // iPadOS window) and on `.openTall` reached on an actual
+            // Duo. It is only ever nonzero here on an iPad whose own
+            // window is WINDOWED (not fullscreen) and wide/tall enough
+            // to classify as `.openTall`, where it pushes this row's
+            // own leading edge clear of the window's own control
+            // cluster.
             let leading = margin + windowControlLeadingInset
+            // `occlusion` (the fold-on-bottom camera) and a nonzero
+            // `windowControlLeadingInset` can never both be real on the
+            // same frame — one is a Duo-hardware-only signal, the
+            // other an iPad-windowed-only one — so `clamp` below never
+            // has to reconcile the two: whichever of the pair is real
+            // here, the other is always 0.
             let windowBounds = CGRect(origin: .zero, size: containerSize).insetBy(dx: -1, dy: -1)
             let clamp = occlusion.flatMap { windowBounds.contains($0) && $0.minX > leading ? $0.minX - 8 : nil } ?? .infinity
             let trailing = min(containerSize.width - margin, clamp)
