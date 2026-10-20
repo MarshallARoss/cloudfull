@@ -523,9 +523,28 @@ struct FeedView: View {
             // plain fixed anchor there with no dependence on this
             // view's own geometry at all. Only here, in Videos mode,
             // is there a real rail for the chin to ever need to clear.
+            //
+            // Short-window spec (`ipad7.png`): `duoLayout.railBottom`
+            // below still answers the pre-Duo overlay's own question —
+            // "where does the rail's bottom edge sit, over the video's
+            // own bottom band?" — a question this short, wide window has
+            // no good answer to, since `actionRail` no longer hangs the
+            // rail off that band here at all (`Rail.shortWindowRailBottom`
+            // instead). Reading it anyway sends `resolvedBottomPadding`
+            // above a near-zero `railBottom > 0` clamp, pinning the chin
+            // to the window's own bottom edge. `0` here is this
+            // function's own "no rail to clear" value, so the chin falls
+            // straight back to its plain fixed anchor instead — the
+            // `railAlignedCenter == nil` default this pose already uses.
+            // `!isFullscreen &&`: false while the rotation hack is on,
+            // same as every other short-window call site — this chin is
+            // already hidden then (`hidesGlobalChrome`), but the override
+            // must not engage mid-transition either.
             ChinNavigation(bottomBand: StageGeometry.bottomBand(safeAreaTop: safeAreaTop,
                                                                containerSize: rootProxy.size),
-                           railBottom: duoLayout.railBottom(safeAreaTop: safeAreaTop, safeAreaBottom: fullscreenSafeArea.bottom, containerSize: rootProxy.size),
+                           railBottom: !isFullscreen && WindowChrome.isShortWindow(containerSize: windowSize, pose: duoLayout.pose)
+                               ? 0
+                               : duoLayout.railBottom(safeAreaTop: safeAreaTop, safeAreaBottom: fullscreenSafeArea.bottom, containerSize: rootProxy.size),
                            railAlignedCenter: duoLayout.railAlignedChinCenter(safeAreaTop: safeAreaTop, safeAreaBottom: fullscreenSafeArea.bottom, containerSize: windowSize),
                            railAlignedTopClamp: duoLayout.railAlignedTopClamp(containerSize: windowSize, safeAreaBottom: fullscreenSafeArea.bottom),
                            safeAreaBottom: fullscreenSafeArea.bottom,
@@ -3432,6 +3451,13 @@ private struct FeedPageContent: View {
     /// resolution event that happened on a different page.
     @ObservedObject private var resolver = AssetKeyResolver.shared
 
+    /// `actionRail`'s own icon-only tier sets this `false` — see the
+    /// environment key's own comment. Read directly here, not only
+    /// through `RailItem`, because the share button's own iCloud-download
+    /// state (below) draws its "Share" label by hand instead of going
+    /// through `RailItem`.
+    @Environment(\.railShowsLabels) private var railShowsLabels
+
     /// Bumped only when this page's own like turns on. Drives this page's
     /// heart `.symbolEffect(.bounce)`. Local to the page rather than
     /// shared, so liking one page never bounces a neighbor's heart.
@@ -3707,19 +3733,39 @@ private struct FeedPageContent: View {
                         // internal mirror logic (that function's own
                         // comment) already reads correctly once it is
                         // simply the HStack's other child.
+                        //
+                        // Short-window spec (`ipad7.png`): false while
+                        // `isFullscreen` — the rotation hack already
+                        // hides this whole page then (`hideForFullscreen`
+                        // above), so this just keeps the short-window
+                        // layout from ever engaging mid-transition.
+                        // `pose == .regularPhone` is this pose's own
+                        // case too (`DuoPose`'s own doc comment), so
+                        // nothing here needs its own Duo check.
+                        let shortWindow = !hideForFullscreen && WindowChrome.isShortWindow(containerSize: proxy.size, pose: duoLayout.pose)
+                        // The regular-iPhone stage centres with equal
+                        // bands on both sides (`DuoLayout.stageRect`), so
+                        // `stage.minX` is the same clearance whichever
+                        // edge is actually "away from the rail" once
+                        // mirrored — unlike the `railColumnRect` branch's
+                        // own closure above, this needs no mirrored
+                        // branch of its own.
+                        let leadingClearance: CGFloat = shortWindow
+                            ? duoLayout.stageRect(containerSize: proxy.size, safeAreaTop: safeAreaTop).minX + 16
+                            : 16
                         let railColumn = VStack(alignment: duoLayout.isMirrored ? .leading : .trailing, spacing: 0) {
                             if isActive, let calloutMessage = shareCoordinator.calloutMessage {
                                 railCallout(calloutMessage)
                             }
-                            actionRail(bottomBand: bottomBand)
+                            actionRail(bottomBand: bottomBand, shortWindowHeight: shortWindow ? proxy.size.height : nil)
                         }
                         .animation(.easeInOut(duration: 0.2), value: shareCoordinator.calloutMessage)
                         HStack(alignment: .bottom, spacing: 0) {
                             if duoLayout.isMirrored {
                                 railColumn
-                                captionZone(trailingClearance: 16, hidden: false, bandHeight: realBottomBand)
+                                captionZone(leadingClearance: leadingClearance, trailingClearance: 16, hidden: false, bandHeight: realBottomBand, shortWindow: shortWindow)
                             } else {
-                                captionZone(trailingClearance: 16, hidden: false, bandHeight: realBottomBand)
+                                captionZone(leadingClearance: leadingClearance, trailingClearance: 16, hidden: false, bandHeight: realBottomBand, shortWindow: shortWindow)
                                 railColumn
                             }
                         }
@@ -3939,8 +3985,14 @@ private struct FeedPageContent: View {
     /// above the line" directly, once the line IS the bottom edge.
     /// Pose 5 is untouched — its own scrubber still rests at the top
     /// of its 28pt box, so it keeps the `20 + 28` sum unchanged.
-    private func captionZone(leadingClearance: CGFloat = 16, trailingClearance: CGFloat, hidden: Bool, bandHeight: CGFloat) -> some View {
-        let liftsForScrubber = duoLayout.pose != .regularPhone && bandHeight < 50
+    private func captionZone(leadingClearance: CGFloat = 16, trailingClearance: CGFloat, hidden: Bool, bandHeight: CGFloat, shortWindow: Bool = false) -> some View {
+        // `shortWindow` (`WindowChrome.isShortWindow`) joins the Duo
+        // check here: a regular-iPhone pose on a short iPadOS 26 window
+        // can hit the same small `bandHeight` a Duo pose does, and needs
+        // the same lift clear of the on-video scrubber line. `false` by
+        // default, so every caller that never sets it reads exactly as
+        // before.
+        let liftsForScrubber = (duoLayout.pose != .regularPhone || shortWindow) && bandHeight < 50
         let bottomPadding: CGFloat = duoLayout.pose == .closed ? 20 : (liftsForScrubber ? 20 + 28 : 20)
         // Mirrored-layout round: "caption bottom-trailing" — the
         // caption reads from the TRAILING edge instead, the SAME two
@@ -4311,22 +4363,63 @@ private struct FeedPageContent: View {
     /// `bottomBand` is the black band below the video on this page. The
     /// rail's bottom edge sits `Rail.seamClearance` above the video's
     /// bottom edge, the playhead seam — on the video, not in the chin.
-    private func actionRail(bottomBand: CGFloat) -> some View {
+    ///
+    /// `shortWindowHeight`, non-nil only on `WindowChrome.isShortWindow`
+    /// (`FeedPageContent.body`'s own `proxy.size.height`): the rail's
+    /// usual `bottomBand`-relative padding has nothing to measure from
+    /// on a window this short — the normal five-button column can run
+    /// out of vertical room before `bottomBand` ever shrinks to make
+    /// space. The rail then anchors off the window's own bottom edge
+    /// instead (`Rail.shortWindowRailBottom`) and compresses to
+    /// whichever tier still fits the budget left above that anchor,
+    /// below `Rail.shortWindowTopReserve`'s own claim at the top.
+    /// Nil everywhere else, where this is a no-op.
+    private func actionRail(bottomBand: CGFloat, shortWindowHeight: CGFloat? = nil) -> some View {
         // Mirrored-layout round (item D, left-handed regular iPhone):
         // the whole point of the setting — the rail itself moves to
         // the LEADING edge. No rail COLUMN exists here (this is the
         // pre-Duo overlay, `railColumnRect == nil`), so this is the
         // one place that reads `isMirrored` directly rather than
         // through `DuoLayout.railColumn`'s own edge.
-        VStack(spacing: Rail.spacing) {
+        let spacing: CGFloat
+        let showsLabels: Bool
+        let railBottomPadding: CGFloat
+        if let shortWindowHeight {
+            let budget = shortWindowHeight - Rail.shortWindowTopReserve - Rail.shortWindowRailBottom
+            // Full tier's own 360pt is `Rail.columnHeight` itself — the
+            // same five items at the normal `Rail.spacing`, labels on.
+            // Tight trades that spacing down to 8pt, still with labels
+            // (`Rail.itemHeight * 5 + 8 * 4` = 312). Below that, labels
+            // go too: `Rail.hit * 5 + 12 * 4` = 248, the glyph alone.
+            if budget >= Rail.columnHeight {
+                spacing = Rail.spacing
+                showsLabels = true
+            } else if budget >= Rail.itemHeight * 5 + 8 * 4 {
+                spacing = 8
+                showsLabels = true
+            } else {
+                spacing = 12
+                showsLabels = false
+            }
+            railBottomPadding = Rail.shortWindowRailBottom
+        } else {
+            spacing = Rail.spacing
+            showsLabels = true
+            railBottomPadding = bottomBand + Rail.seamClearance
+        }
+        // No `ViewThatFits` here: it mounts every candidate at once to
+        // measure them, which would triplicate each `rail_*`
+        // accessibility identifier below instead of placing one.
+        return VStack(spacing: spacing) {
             likeButton(rail)
             shareButton
             albumButton
             shrinkButton(rail)
             deleteButton(rail)
         }
+        .environment(\.railShowsLabels, showsLabels)
         .padding(duoLayout.isMirrored ? .leading : .trailing, 10)
-        .padding(.bottom, bottomBand + Rail.seamClearance)
+        .padding(.bottom, railBottomPadding)
     }
 
     /// `actionRail`'s column layout (steps 3/5): the same five
@@ -4489,8 +4582,10 @@ private struct FeedPageContent: View {
                     }
                     .frame(width: Rail.hit - 6, height: Rail.hit - 6)
                     .frame(width: Rail.hit, height: Rail.hit)
-                    Text("Share")
-                        .font(Rail.labelFont)
+                    if railShowsLabels {
+                        Text("Share")
+                            .font(Rail.labelFont)
+                    }
                 }
                 .foregroundStyle(.white)
                 .feedShadow()
@@ -4698,6 +4793,15 @@ extension FeedPageContent.PageMeta {
     }
 }
 
+/// `actionRail`'s own icon-only tier (`WindowChrome.isShortWindow`, a
+/// short iPadOS 26 window too tight for the normal labeled column) sets
+/// this `false` on the rail's own `VStack`. `true` everywhere else — the
+/// default, so every other host (`RailItem` and `shareButton`'s own
+/// download state alike) keeps its label exactly as before.
+extension EnvironmentValues {
+    @Entry var railShowsLabels = true
+}
+
 /// A rail item: a flat white glyph, no bubble, no material, with a small
 /// caption underneath. The only chrome is the drop shadow that keeps it
 /// legible on a bright frame.
@@ -4709,14 +4813,17 @@ struct RailItem: View {
     /// the rest of the rail — see the Album button's call site. Defaults
     /// to `Rail.glyph`.
     var glyphSize: CGFloat = Rail.glyph
+    @Environment(\.railShowsLabels) private var railShowsLabels
 
     var body: some View {
         VStack(spacing: 3) {
             Image(systemName: systemName)
                 .font(.system(size: glyphSize, weight: .medium))    // Rail.glyph by default
                 .frame(width: Rail.hit, height: Rail.hit)           // 40 × 40
-            Text(label)
-                .font(Rail.labelFont)                               // 10 semibold
+            if railShowsLabels {
+                Text(label)
+                    .font(Rail.labelFont)                           // 10 semibold
+            }
         }
         .foregroundStyle(tint)
         .feedShadow()

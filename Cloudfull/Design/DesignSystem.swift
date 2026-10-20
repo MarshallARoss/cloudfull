@@ -123,6 +123,21 @@ enum Rail {
     /// anchor is, when the rail is in its own column (iPhone Duo)
     /// instead of overlaid on the stage.
     static let columnHeight: CGFloat = itemHeight * 5 + spacing * 4
+
+    /// `FeedPageContent.actionRail`'s own bottom padding on a short
+    /// iPadOS 26 window (`WindowChrome.isShortWindow`), in place of the
+    /// normal `bottomBand + seamClearance` padding: a flat distance up
+    /// from the window's own bottom edge instead of the video's, since a
+    /// short window's own `bottomBand` runs out before the rail does.
+    /// Hand-picked to clear the home indicator with the same air the
+    /// other poses keep.
+    static let shortWindowRailBottom: CGFloat = 68
+    /// `FeedPageContent.actionRail`'s own short-window budget: how much
+    /// of the window's own height the top chrome and the stage above the
+    /// rail already claim, before the rail's own column gets whatever is
+    /// left. Paired with `shortWindowRailBottom` above:
+    /// `budget = windowHeight - shortWindowTopReserve - shortWindowRailBottom`.
+    static let shortWindowTopReserve: CGFloat = 64
 }
 
 // MARK: - Accent-filled buttons
@@ -241,13 +256,28 @@ enum WindowChrome {
     /// with it, and the chrome slides as the window grows or shrinks.
     static func leadingInset(_ proxy: GeometryProxy) -> CGFloat {
         let raw = proxy.containerCornerInsets.topLeading.width
-        guard raw > 0 else { return 0 }
+        guard raw > 0, isWindowed else { return 0 }
+        return raw
+    }
+
+    /// True when this app's own window is WINDOWED on an iPad: smaller
+    /// than the screen it sits on. False for a fullscreen iPad window, a
+    /// regular iPhone, and the iPhone Duo — none of which ever shows this
+    /// window-control chrome.
+    ///
+    /// The window/screen read itself, and why it compares sizes rather
+    /// than reading `UIWindowScene.Geometry.systemFrame`, is
+    /// `leadingInset(_:)`'s own comment above; this is that same
+    /// comparison, factored out so `isShortWindow(containerSize:pose:)`
+    /// below can reuse it without its own window-scene read. No
+    /// behaviour change to `leadingInset(_:)` itself — it now calls this.
+    static var isWindowed: Bool {
         guard let scene = UIApplication.shared.connectedScenes
             .compactMap({ $0 as? UIWindowScene })
             .first(where: { $0.activationState == .foregroundActive })
             ?? UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first,
             let window = scene.keyWindow
-        else { return 0 }
+        else { return false }
         let windowSize = window.bounds.size
         let screenSize = scene.screen.bounds.size
         func sameSize(_ a: CGSize, _ b: CGSize) -> Bool {
@@ -255,7 +285,31 @@ enum WindowChrome {
         }
         let isFullScreen = sameSize(windowSize, screenSize)
             || sameSize(windowSize, CGSize(width: screenSize.height, height: screenSize.width))
-        return isFullScreen ? 0 : raw
+        return !isFullScreen
+    }
+
+    /// True for a regular iPhone pose — see `DuoPose`'s own doc comment
+    /// for why that also covers a closed iPhone Duo — whose iPadOS 26
+    /// window is wider than its own 9:16 stage needs, with letterbox
+    /// bands left over on both sides even once `DuoLayout.stageRect`
+    /// centres it. Owner-reported bug (`ipad7.png`): the rail's bottom
+    /// padding, the chin's own anchor, and the caption's own leading
+    /// clearance each assume a tall, 9:16-shaped container and misplace
+    /// themselves once the window is this much wider. Every call site
+    /// below reads this to opt into the short-window layout instead.
+    ///
+    /// Checked cheapest first: `pose == .regularPhone` rules out every
+    /// Duo pose with no math at all; the width/height compare is plain
+    /// arithmetic; `isWindowed` is last because it alone walks
+    /// `UIApplication.shared.connectedScenes`. The `+ 1` on the
+    /// height side keeps a window at exactly 16:9 — not actually
+    /// short — out of this, clear of float rounding at the boundary.
+    ///
+    /// Callers return `false` here while `isFullscreen` (the rotation
+    /// hack) is on — see each call site's own comment — so this never
+    /// engages for the fullscreen video stage, only the windowed feed.
+    static func isShortWindow(containerSize: CGSize, pose: DuoPose) -> Bool {
+        pose == .regularPhone && containerSize.width * 16 > containerSize.height * 9 + 1 && isWindowed
     }
 
     #if DEBUG

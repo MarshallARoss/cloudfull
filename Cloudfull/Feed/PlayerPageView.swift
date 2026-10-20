@@ -855,7 +855,7 @@ struct PlayerPageView: View {
                     // SwiftUI version of `UIGestureRecognizerRepresentable`
                     // declares only `gesture(_:)`, with no `GestureMask` or
                     // `isEnabled` overload.
-                    stageContent(bottomBand: bottomSpace)
+                    stageContent(bottomBand: bottomSpace, containerSize: proxy.size)
                         .frame(width: canvasWidth, height: canvasHeight)
                         .clipped()
                         .duoGuideMark("stage", color: .purple, active: isActive)
@@ -1476,8 +1476,21 @@ struct PlayerPageView: View {
     /// (`.closed`) is excluded the same way `captionZone` excludes it
     /// (that pose's own caption never lifts, regardless of band), so
     /// this is a no-op there, unchanged from before.
-    private func loaderLift(bottomBand: CGFloat) -> CGFloat {
-        let extraLift: CGFloat = (duoLayout.pose != .regularPhone && duoLayout.pose != .closed && bottomBand < 50) ? 28 : 0
+    ///
+    /// `containerSize` is this page's own `GeometryReader` proxy size,
+    /// threaded in through `stageContent(bottomBand:containerSize:)` —
+    /// this function has no reader of its own. Short-window spec
+    /// (`ipad7.png`): ORed into `extraLift`'s own gate, the same way
+    /// `FeedPageContent.captionZone`'s `liftsForScrubber` ORs it in — a
+    /// regular-iPhone pose on a short iPadOS 26 window
+    /// (`WindowChrome.isShortWindow`) can hit the same small `bottomBand`
+    /// a Duo pose does, needs the same lift. The call site below already
+    /// skips this function entirely while `isFullscreen` is on (it reads
+    /// `fullscreenSafeArea.bottom` instead), so this needs no fullscreen
+    /// guard of its own.
+    private func loaderLift(bottomBand: CGFloat, containerSize: CGSize) -> CGFloat {
+        let shortWindow = WindowChrome.isShortWindow(containerSize: containerSize, pose: duoLayout.pose)
+        let extraLift: CGFloat = ((duoLayout.pose != .regularPhone && duoLayout.pose != .closed) || shortWindow) && bottomBand < 50 ? 28 : 0
         return max(Rail.seamClearance, StageGeometry.captionTopFromBottom - bottomBand + 8 + extraLift)
     }
 
@@ -1492,9 +1505,13 @@ struct PlayerPageView: View {
     /// The loading ring needs it to know how much of the caption sits
     /// underneath.
     ///
+    /// `containerSize` is `body`'s own `proxy.size` — threaded through
+    /// only so `loaderLift(bottomBand:containerSize:)` below has it; see
+    /// that function's own comment.
+    ///
     /// The returned view type is the same for both states, so the tree
     /// keeps one stable identity across the fullscreen transition.
-    private func stageContent(bottomBand: CGFloat) -> some View {
+    private func stageContent(bottomBand: CGFloat, containerSize: CGSize) -> some View {
         ZStack {
             // A video layer redraw is expensive: adding or removing a
             // video layer makes iOS reconfigure video output while the
@@ -1684,7 +1701,7 @@ struct PlayerPageView: View {
                 // with it).
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: duoLayout.isMirrored ? .bottomTrailing : .bottomLeading)
                 .padding(duoLayout.isMirrored ? .trailing : .leading, isFullscreen ? (duoLayout.isMirrored ? fullscreenSafeArea.trailing : fullscreenSafeArea.leading) + 10 : 10)
-                .padding(.bottom, isFullscreen ? fullscreenSafeArea.bottom + 10 : loaderLift(bottomBand: bottomBand))
+                .padding(.bottom, isFullscreen ? fullscreenSafeArea.bottom + 10 : loaderLift(bottomBand: bottomBand, containerSize: containerSize))
                 // `spinnerRevealKey` folds `isLoading` and `isActive` into
                 // the task's own identity. So SwiftUI's `.task(id:)`
                 // cancel-and-restart cancels a pending reveal the instant
