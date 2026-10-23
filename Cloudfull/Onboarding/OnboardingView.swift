@@ -65,7 +65,7 @@ final class OnboardingGateState: ObservableObject {
 /// permission gate, not before. The gate's not-determined state already
 /// carries the short value proposition.
 /// `FeedUITestCase.grantPhotoAccessIfAsked()` also requires
-/// `app.buttons["Allow photo access"]` to be reachable within 3 seconds
+/// `app.buttons["Continue"]` to be reachable within 3 seconds
 /// of launch, which rules out any screen appearing ahead of it.
 struct OnboardingView: View {
     let onComplete: () -> Void
