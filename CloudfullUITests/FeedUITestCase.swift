@@ -41,7 +41,7 @@ class FeedUITestCase: XCTestCase {
     /// optional. After the first launch of a session, the app has
     /// already granted access.
     func grantPhotoAccessIfAsked() {
-        let allowInApp = app.buttons["Allow photo access"]
+        let allowInApp = app.buttons["Continue"]
         if allowInApp.waitForExistence(timeout: 3) {
             allowInApp.tap()
 

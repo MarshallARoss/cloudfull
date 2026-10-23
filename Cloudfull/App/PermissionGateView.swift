@@ -215,10 +215,10 @@ struct PermissionGateView: View {
             title: Self.welcomeTitle,
             message: Self.welcomeMessage,
             rows: Self.welcomeRows,
-            primaryTitle: "Allow photo access",
+            primaryTitle: "Continue",
             // Do not attach an identifier to this button.
             // `FeedUITestCase` finds this button by its visible title,
-            // `app.buttons["Allow photo access"]`. An identifier changes
+            // `app.buttons["Continue"]`. An identifier changes
             // how XCUITest resolves that subscript and breaks the gated
             // UI tests. Pass `nil` here.
             primaryIdentifier: nil,
@@ -482,7 +482,7 @@ private final class AuthorizedSession {
 /// Once a user grants access, the gate becomes unreachable. This view
 /// shows the same content on demand.
 ///
-/// Its button says "Done" rather than "Allow photo access".
+/// Its button says "Done" rather than "Continue".
 /// Access is already granted by the time anyone reaches this screen, so
 /// asking again would do nothing.
 struct WelcomeScreenView: View {
