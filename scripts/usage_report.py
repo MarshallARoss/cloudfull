@@ -25,11 +25,15 @@ fetch() has two ways to reach CloudKit:
       CLOUDKIT_KEY_ID    The key ID for the server-to-server key, from
                          CloudKit Console -> your container -> Server-
                          to-Server Keys.
-      CLOUDKIT_KEY_PATH  Path to the key's private key PEM file, OR
-      CLOUDKIT_KEY_PEM   the private key's PEM text itself, in the
-                         environment. Exactly one of these two is needed.
-                         CLOUDFULL_TEAM_ID is NOT needed on this path. The
-                         key is never printed or logged.
+      CLOUDKIT_KEY_PATH    Path to the key's private key PEM file, OR
+      CLOUDKIT_KEY_PEM     the private key's PEM text itself, in the
+                           environment, OR
+      CLOUDKIT_KEY_PEM_B64 the private key's PEM text, base64-encoded, in
+                           the environment (handy when a secrets store
+                           will not keep embedded newlines).
+                           Exactly one of these three is needed.
+                           CLOUDFULL_TEAM_ID is NOT needed on this path. The
+                           key is never printed or logged.
     Requests are signed with the `cryptography` package when it is
     installed, and with the system `openssl` binary otherwise -- either
     is enough; no extra dependency has to be installed for this to work.
@@ -134,7 +138,10 @@ def _load_cloudkit_key():
     pem = os.environ.get("CLOUDKIT_KEY_PEM")
     if pem:
         return pem.encode(), None
-    sys.exit("Set CLOUDKIT_KEY_PATH or CLOUDKIT_KEY_PEM to your CloudKit Web Services private key.")
+    pem_b64 = os.environ.get("CLOUDKIT_KEY_PEM_B64")
+    if pem_b64:
+        return base64.b64decode(pem_b64), None
+    sys.exit("Set CLOUDKIT_KEY_PATH, CLOUDKIT_KEY_PEM, or CLOUDKIT_KEY_PEM_B64 to your CloudKit Web Services private key.")
 
 
 def _sign(payload):
