@@ -195,10 +195,15 @@ def _web_services_request(env, body_obj):
         },
     )
     try:
-        with urllib.request.urlopen(req) as resp:
+        with urllib.request.urlopen(req, timeout=60) as resp:
             return json.loads(resp.read())
     except urllib.error.HTTPError as e:
         sys.exit(f"CloudKit Web Services request failed: {e.code} {e.reason}\n{e.read().decode(errors='replace')}")
+    except OSError as e:
+        # Covers urllib.error.URLError and a bare socket timeout (both
+        # are OSError subclasses) -- a clear message and a non-zero
+        # exit instead of a long hang or a raw traceback.
+        sys.exit(f"CloudKit Web Services request failed (network/timeout): {e}")
 
 
 def _fetch_web_services(env, lo, hi):
@@ -219,6 +224,12 @@ def _fetch_web_services(env, lo, hi):
         if marker: body["continuationMarker"] = marker
         data = _web_services_request(env, body)
         for rec in data.get("records", []):
+            code = rec.get("serverErrorCode")
+            if code:
+                # A per-record error inside an otherwise-200 response --
+                # never silently dropped. No record name or id in the
+                # message, only the code and reason CloudKit gave.
+                sys.exit(f"CloudKit Web Services returned a record error: {code} ({rec.get('reason', 'no reason given')})")
             out.append(_record_from_fields(rec.get("recordName"), _normalize_ws_fields(rec.get("fields", {}))))
         marker = data.get("continuationMarker")
         if not marker: break

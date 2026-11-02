@@ -17,8 +17,11 @@ Usage:
 
 Apple generates each day's Daily Sales Summary report the day after that
 day, so the most recent day or two will normally come back from Apple as
-"no report yet" -- this script treats that as a normal, empty day, never
-as an error.
+"no report yet" -- this script treats that as pending, never as an error,
+as long as the day is within the last 2 days before today (UTC). A 404
+for any older day means Apple has posted its final word and that day
+truly had no sales: it is counted as zero downloads / zero proceeds, not
+left pending.
 
 Auth: an ES256 (ECDSA P-256 / SHA-256) JSON Web Token, as the App Store
 Connect API requires. See:
@@ -66,7 +69,7 @@ PRODUCT_TYPE_CATEGORY = {
     "1E": "download", "1EP": "download", "1EU": "download",
     "1F": "download", "1T": "download", "F1": "download",
     # Re-downloads of a previously purchased app.
-    "3": "redownload", "3F": "redownload",
+    "3": "redownload", "3F": "redownload", "3T": "redownload", "F3": "redownload",
     # Updates to an already-installed app.
     "7": "update", "7F": "update", "7T": "update", "F7": "update",
     # In-app purchases (consumable, non-consumable, and subscriptions).
@@ -147,12 +150,17 @@ def _fetch_report_day(key_id, issuer_id, vendor_number, date_str):
         headers={"Authorization": f"Bearer {token}", "Accept": "application/a-gzip"},
     )
     try:
-        with urllib.request.urlopen(req) as resp:
+        with urllib.request.urlopen(req, timeout=60) as resp:
             return gzip.decompress(resp.read())
     except urllib.error.HTTPError as e:
         if e.code == 404:
             return None
         sys.exit(f"App Store Connect request failed for {date_str}: {e.code} {e.reason}\n{e.read().decode(errors='replace')}")
+    except OSError as e:
+        # Covers urllib.error.URLError and a bare socket timeout (both
+        # are OSError subclasses) -- a clear message and a non-zero
+        # exit instead of a long hang or a raw traceback.
+        sys.exit(f"App Store Connect request failed for {date_str} (network/timeout): {e}")
 
 
 def _parse_tsv(raw):
@@ -200,6 +208,29 @@ def _day_stats(rows):
         if amount: proceeds[r.get("Currency of Proceeds") or "?"] += amount
     return {"downloads": downloads, "redownloads": redownloads, "updates": updates,
             "iap_units": iap_units, "proceeds": proceeds, "unmapped": unmapped}
+
+
+def _empty_day_stats():
+    # Same shape as _day_stats(), all zero -- for a day Apple will
+    # never post a report for (see _is_pending_day below).
+    return {"downloads": Decimal(0), "redownloads": Decimal(0), "updates": Decimal(0),
+            "iap_units": collections.Counter(), "proceeds": collections.Counter(), "unmapped": collections.Counter()}
+
+
+def _is_pending_day(day):
+    # Apple posts each day's Daily Sales Summary report the day after
+    # that day, so a 404 for a day Apple might not have gotten to yet
+    # is normal, not an error. Dates are compared in UTC (good enough
+    # here -- this script does not need to match the vendor's local
+    # reporting timezone to the hour).
+    #
+    # A 404 only means "no report yet" when the day is within the
+    # last 2 days before today (UTC): today, yesterday, or the day
+    # before. A 404 for any older day means Apple has posted its
+    # final word on that day and it truly had no sales -- count it as
+    # zero downloads / zero proceeds, not as a day still pending.
+    today_utc = datetime.datetime.now(datetime.timezone.utc).date()
+    return (today_utc - day).days <= 2
 
 
 def _aggregate(cache, days):
@@ -292,7 +323,12 @@ def main():
     def ensure(day):
         if day not in cache:
             raw = _fetch_report_day(key_id, issuer_id, vendor_number, day.isoformat())
-            cache[day] = None if raw is None else _day_stats(_rows_for_sku(_parse_tsv(raw), a.sku))
+            if raw is not None:
+                cache[day] = _day_stats(_rows_for_sku(_parse_tsv(raw), a.sku))
+            elif _is_pending_day(day):
+                cache[day] = None   # Apple has not posted this day's report yet.
+            else:
+                cache[day] = _empty_day_stats()   # Final 404: no sales that day.
 
     range_days, d = [], lo
     while d <= hi:
