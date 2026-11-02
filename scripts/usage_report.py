@@ -14,20 +14,66 @@ Setup, once per Mac:
 Usage:
   python3 scripts/usage_report.py                       # This month, development environment.
   python3 scripts/usage_report.py --env production --month YYYY-MM
-"""
-import argparse, json, os, subprocess, sys, collections, datetime
+  python3 scripts/usage_report.py --env production --channel appStore   # App Store installs only.
 
-# Your Apple Developer Team ID. Set it in the environment before you run this script.
-TEAM = os.environ.get("CLOUDFULL_TEAM_ID") or sys.exit("Set CLOUDFULL_TEAM_ID to your Apple Developer Team ID.")
+fetch() has two ways to reach CloudKit:
+  - By default (a Mac with Xcode), it shells out to `xcrun cktool`, as above.
+  - If the environment variable CLOUDKIT_KEY_ID is set, it instead calls
+    CloudKit Web Services directly over HTTPS with a server-to-server key,
+    so this same script also runs on Linux (a cloud job, no Xcode) with no
+    other change. Set:
+      CLOUDKIT_KEY_ID    The key ID for the server-to-server key, from
+                         CloudKit Console -> your container -> Server-
+                         to-Server Keys.
+      CLOUDKIT_KEY_PATH    Path to the key's private key PEM file, OR
+      CLOUDKIT_KEY_PEM     the private key's PEM text itself, in the
+                           environment, OR
+      CLOUDKIT_KEY_PEM_B64 the private key's PEM text, base64-encoded, in
+                           the environment (handy when a secrets store
+                           will not keep embedded newlines).
+                           Exactly one of these three is needed.
+                           CLOUDFULL_TEAM_ID is NOT needed on this path. The
+                           key is never printed or logged.
+    Requests are signed with the `cryptography` package when it is
+    installed, and with the system `openssl` binary otherwise -- either
+    is enough; no extra dependency has to be installed for this to work.
+"""
+import argparse, base64, hashlib, json, os, subprocess, sys, tempfile, collections, datetime
+import urllib.error, urllib.request
+
 CONTAINER = "iCloud.com.cloudfull.app"
 
-def fetch(env, month):
-    # Limits the query to one month on the server, so the report does
-    # not download all records. `cktool` needs a TIMESTAMP filter as a
-    # number in milliseconds.
-    y, m = int(month[:4]), int(month[5:7])
-    lo = int(datetime.datetime(y, m, 1, tzinfo=datetime.timezone.utc).timestamp()) * 1000
-    hi = int(datetime.datetime(y + (m == 12), (m % 12) + 1, 1, tzinfo=datetime.timezone.utc).timestamp()) * 1000
+# Your Apple Developer Team ID. Only needed for the `xcrun cktool` path
+# above -- set it in the environment before you run this script, unless
+# CLOUDKIT_KEY_ID is set (the CloudKit Web Services path below never
+# needs a team ID).
+TEAM = None
+if not os.environ.get("CLOUDKIT_KEY_ID"):
+    TEAM = os.environ.get("CLOUDFULL_TEAM_ID") or sys.exit("Set CLOUDFULL_TEAM_ID to your Apple Developer Team ID.")
+
+
+def _record_from_fields(record_name, fields):
+    # Builds this script's own per-session dict from one record's
+    # `fields`, in the exact shape `xcrun cktool`'s JSON already gives:
+    # each field is {"value": ...}. Shared by both fetch paths below so
+    # a Web Services record and a cktool record can never drift into two
+    # different shapes -- the Web Services path only has to normalize
+    # its own raw fields (see _normalize_ws_fields) into this same input
+    # shape first.
+    g = lambda k: fields.get(k, {}).get("value")
+    started = g("startedAt")
+    return {
+        "id": record_name, "install": g("installId"),
+        "startedAt": started, "day": (started or "")[:10],
+        "coldStart": g("coldStart"), "app": g("app"), "ios": g("ios"), "device": g("device"),
+        "libraryCount": g("libraryCount"), "sessionSeconds": g("sessionSeconds"), "daysSinceInstall": g("daysSinceInstall"), "country": g("country"),
+        "photoPermissionAtStart": g("photoPermissionAtStart"), "endReason": g("endReason"), "schema": g("schema"),
+        "counts": json.loads(g("counts") or "{}"), "facts": json.loads(g("facts") or "{}"),
+    }
+
+
+def _fetch_cktool(env, lo, hi):
+    # `cktool` needs the TIMESTAMP filter as a number in milliseconds.
     out, cursor = [], None
     while True:
         cmd = ["xcrun", "cktool", "query-records", "--team-id", TEAM, "--container-id", CONTAINER,
@@ -43,20 +89,163 @@ def fetch(env, month):
         except json.JSONDecodeError:
             sys.exit("cktool returned something that is not JSON — first lines:\n" + "\n".join(r.stdout.splitlines()[:5]))
         for rec in data.get("records", []):
-            f = rec.get("fields", {})
-            g = lambda k: f.get(k, {}).get("value")
-            started = g("startedAt")
-            out.append({
-                "id": rec.get("recordName"), "install": g("installId"),
-                "startedAt": started, "day": (started or "")[:10],
-                "coldStart": g("coldStart"), "app": g("app"), "ios": g("ios"), "device": g("device"),
-                "libraryCount": g("libraryCount"), "sessionSeconds": g("sessionSeconds"), "daysSinceInstall": g("daysSinceInstall"), "country": g("country"),
-                "photoPermissionAtStart": g("photoPermissionAtStart"), "endReason": g("endReason"), "schema": g("schema"),
-                "counts": json.loads(g("counts") or "{}"), "facts": json.loads(g("facts") or "{}"),
-            })
+            out.append(_record_from_fields(rec.get("recordName"), rec.get("fields", {})))
         cursor = data.get("continuationToken")
         if not cursor: break
     return out
+
+
+def _ws_timestamp_to_iso(ms):
+    # CloudKit Web Services gives a TIMESTAMP field as milliseconds
+    # since the epoch (a number). cktool gives the same kind of field as
+    # an ISO 8601 string with milliseconds, e.g. "2026-10-29T05:46:20.261Z"
+    # -- and the rest of this file (the `day = startedAt[:10]` slice,
+    # sorting sessions by `startedAt`) expects that string shape.
+    # Converts with integer arithmetic, never a float division, so a
+    # millisecond is never rounded away.
+    ms = int(ms)
+    secs, msec = divmod(ms, 1000)
+    dt = datetime.datetime.fromtimestamp(secs, tz=datetime.timezone.utc)
+    return dt.strftime("%Y-%m-%dT%H:%M:%S.") + f"{msec:03d}Z"
+
+
+def _normalize_ws_fields(fields):
+    # Converts one Web Services record's raw `fields` into the shape
+    # _record_from_fields() expects -- the same shape cktool's own JSON
+    # already has. Only a TIMESTAMP value needs converting; every other
+    # type (STRING, INT64) already comes through as the right Python
+    # value.
+    out = {}
+    for k, v in fields.items():
+        val = v.get("value")
+        if v.get("type") == "TIMESTAMP" and isinstance(val, (int, float)):
+            val = _ws_timestamp_to_iso(val)
+        out[k] = {"value": val}
+    return out
+
+
+def _load_cloudkit_key():
+    # Returns (pem_bytes, keyfile_path_or_None). keyfile_path is set only
+    # when CLOUDKIT_KEY_PATH named a real file on disk, so the openssl
+    # fallback below can sign straight from it without ever writing the
+    # key out to a new file. pem_bytes lets the `cryptography` path load
+    # the key straight from memory. Neither is ever printed or logged.
+    path = os.environ.get("CLOUDKIT_KEY_PATH")
+    if path:
+        path = os.path.expanduser(path)
+        with open(path, "rb") as f:
+            return f.read(), path
+    pem = os.environ.get("CLOUDKIT_KEY_PEM")
+    if pem:
+        return pem.encode(), None
+    pem_b64 = os.environ.get("CLOUDKIT_KEY_PEM_B64")
+    if pem_b64:
+        return base64.b64decode(pem_b64), None
+    sys.exit("Set CLOUDKIT_KEY_PATH, CLOUDKIT_KEY_PEM, or CLOUDKIT_KEY_PEM_B64 to your CloudKit Web Services private key.")
+
+
+def _sign(payload):
+    # Signs `payload` (bytes) with the CloudKit Web Services private key
+    # and returns a DER-encoded ECDSA P-256 / SHA-256 signature -- using
+    # the `cryptography` package when it's installed, or the system
+    # `openssl` binary otherwise. Both produce the same DER signature
+    # shape CloudKit expects in X-Apple-CloudKit-Request-SignatureV1.
+    pem_bytes, keyfile = _load_cloudkit_key()
+    try:
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import ec
+    except ImportError:
+        pass
+    else:
+        key = serialization.load_pem_private_key(pem_bytes, password=None)
+        return key.sign(payload, ec.ECDSA(hashes.SHA256()))
+    tmp_path = None
+    try:
+        if keyfile is None:
+            # Only CLOUDKIT_KEY_PEM was set -- openssl needs a file, so
+            # make one it can read, locked to this user, and remove it
+            # the moment signing is done.
+            fd, tmp_path = tempfile.mkstemp(prefix="cloudkit-s2s-")
+            os.chmod(tmp_path, 0o600)
+            with os.fdopen(fd, "wb") as f:
+                f.write(pem_bytes)
+            keyfile = tmp_path
+        r = subprocess.run(["openssl", "dgst", "-sha256", "-sign", keyfile], input=payload, capture_output=True)
+        if r.returncode != 0:
+            sys.exit(f"openssl signing failed: {r.stderr.decode(errors='replace').strip()}")
+        return r.stdout
+    finally:
+        if tmp_path: os.remove(tmp_path)
+
+
+def _web_services_request(env, body_obj):
+    key_id = os.environ.get("CLOUDKIT_KEY_ID") or sys.exit("Set CLOUDKIT_KEY_ID to your CloudKit Web Services key ID.")
+    subpath = f"/database/1/{CONTAINER}/{env}/public/records/query"
+    body = json.dumps(body_obj).encode()
+    date = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    body_hash = base64.b64encode(hashlib.sha256(body).digest()).decode()
+    sig = base64.b64encode(_sign(f"{date}:{body_hash}:{subpath}".encode())).decode()
+    req = urllib.request.Request(
+        "https://api.apple-cloudkit.com" + subpath, data=body, method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "X-Apple-CloudKit-Request-KeyID": key_id,
+            "X-Apple-CloudKit-Request-ISO8601Date": date,
+            "X-Apple-CloudKit-Request-SignatureV1": sig,
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        sys.exit(f"CloudKit Web Services request failed: {e.code} {e.reason}\n{e.read().decode(errors='replace')}")
+    except OSError as e:
+        # Covers urllib.error.URLError and a bare socket timeout (both
+        # are OSError subclasses) -- a clear message and a non-zero
+        # exit instead of a long hang or a raw traceback.
+        sys.exit(f"CloudKit Web Services request failed (network/timeout): {e}")
+
+
+def _fetch_web_services(env, lo, hi):
+    out, marker = [], None
+    query = {
+        "zoneID": {"zoneName": "_defaultZone"},
+        "resultsLimit": 200,
+        "query": {
+            "recordType": "UsageSession",
+            "filterBy": [
+                {"fieldName": "startedAt", "comparator": "GREATER_THAN_OR_EQUALS", "fieldValue": {"value": lo, "type": "TIMESTAMP"}},
+                {"fieldName": "startedAt", "comparator": "LESS_THAN", "fieldValue": {"value": hi, "type": "TIMESTAMP"}},
+            ],
+        },
+    }
+    while True:
+        body = dict(query)
+        if marker: body["continuationMarker"] = marker
+        data = _web_services_request(env, body)
+        for rec in data.get("records", []):
+            code = rec.get("serverErrorCode")
+            if code:
+                # A per-record error inside an otherwise-200 response --
+                # never silently dropped. No record name or id in the
+                # message, only the code and reason CloudKit gave.
+                sys.exit(f"CloudKit Web Services returned a record error: {code} ({rec.get('reason', 'no reason given')})")
+            out.append(_record_from_fields(rec.get("recordName"), _normalize_ws_fields(rec.get("fields", {}))))
+        marker = data.get("continuationMarker")
+        if not marker: break
+    return out
+
+
+def fetch(env, month):
+    # Limits the query to one month on the server, so the report does
+    # not download all records. Both CloudKit paths need the TIMESTAMP
+    # filter as a number in milliseconds.
+    y, m = int(month[:4]), int(month[5:7])
+    lo = int(datetime.datetime(y, m, 1, tzinfo=datetime.timezone.utc).timestamp()) * 1000
+    hi = int(datetime.datetime(y + (m == 12), (m % 12) + 1, 1, tzinfo=datetime.timezone.utc).timestamp()) * 1000
+    if os.environ.get("CLOUDKIT_KEY_ID"):
+        return _fetch_web_services(env, lo, hi)
+    return _fetch_cktool(env, lo, hi)
 
 DEVICE_NAMES = {
     # Codes from Xcode 27.1's simulator device profiles.
@@ -76,9 +265,12 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--env", default="development", choices=["development", "production"])
     ap.add_argument("--month", default=datetime.date.today().strftime("%Y-%m"))
+    ap.add_argument("--channel", choices=["appStore", "testFlight", "unknown"],
+                    help="Only sessions whose installChannel fact has this value.")
     a = ap.parse_args()
     S = [r for r in fetch(a.env, a.month) if r["day"].startswith(a.month)]
-    if not S: sys.exit(f"no UsageSession records for {a.month} in {a.env}")
+    if a.channel: S = [r for r in S if r["facts"].get("installChannel") == a.channel]
+    if not S: sys.exit(f"no UsageSession records for {a.month} in {a.env}" + (f" with installChannel {a.channel}" if a.channel else ""))
     # Every key with an `@` is a Duo pose twin of a plain key already in
     # `counts` — split out so the existing totals and `startswith` scans
     # below never see it. See `Usage.bump`'s own `poseTwin` doc comment.
@@ -103,7 +295,7 @@ def main():
     secs = [r["sessionSeconds"] for r in S if isinstance(r.get("sessionSeconds"), int)] or fnums("sessionSeconds")
     idle = [r["sessionSeconds"] - int(r["facts"]["lastEventSeconds"]) for r in S if isinstance(r.get("sessionSeconds"), int) and r["facts"].get("lastEventSeconds","").isdigit()]
 
-    print(f"Cloudfull usage · {a.month} · {a.env}")
+    print(f"Cloudfull usage · {a.month} · {a.env}" + (f" · {a.channel}" if a.channel else ""))
     # Retention: how many phones still open the app N or more days
     # after install. Uses daysSinceInstall from each phone's latest
     # session this month.

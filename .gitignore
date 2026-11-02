@@ -44,3 +44,11 @@ scripts/fixtures/seed4k/*.mp4
 # Internal planning notes, not part of the public project
 plan.md
 design/*
+
+# Python bytecode caches, and local usage-dashboard output/pulls --
+# scripts/usage_dashboard.py and scripts/usage_report.py are the source;
+# the HTML pages and pulled-session JSON they produce are not.
+__pycache__/
+*.pyc
+usage-dashboard*.html
+usage-pull*.json
