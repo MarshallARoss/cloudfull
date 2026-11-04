@@ -26,7 +26,7 @@ enum PaywallCopy {
     static let subscribeLabel = "%@ free, then %@ a month. Cancel or purchase anytime."
     /// One `%@` slot: the localized price. Shown when Apple says the
     /// user is not eligible for the trial (used it before).
-    static let subscribeNoTrialLabel = "%@ a month. Cancel or purchase anytime."
+    static let subscribeNoTrialLabel = "Cancel or purchase anytime."   // owner, 2026-11-04; no price slot, the price sits above in big type
     static let buyLabel = "Buy forever now."
     /// The small label above each card's price, and the word after it.
     static let monthlyEyebrow = "Monthly"
