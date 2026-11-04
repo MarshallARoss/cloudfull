@@ -11,21 +11,24 @@ import SwiftUI
 
 /// Shown as a `.fullScreenCover(item:)` from `PermissionGateView` (or
 /// from `TrashView`, for Empty Bin), dismissable by its close button
-/// only (a full-screen cover has no swipe), above whichever screen raised it — a rail tap in either
-/// feed, on any Duo pose, or a row in Settings. Every later rail tap
-/// reopens it until `Entitlements.access` unlocks.
+/// only (a full-screen cover has no swipe), above whichever screen raised it
+/// — a rail tap in either feed, on any Duo pose, or a row in Settings.
+/// Every later rail tap reopens it until `Entitlements.access` unlocks.
 ///
-/// The two unlock products are sold through Apple's own `ProductView`,
-/// never a custom buy button: StoreKit draws the price, the trial
-/// disclosure, and the purchase sheet. This screen only frames them with
-/// the owner's own copy, in `PaywallCopy`.
+/// The look is the feed's own: a night sky with one soft cloud glow,
+/// Liquid Glass cards, a rounded headline like the app icon's face.
+/// The two unlock products are sold through Apple's `ProductView`, in a
+/// custom `ProductViewStyle` (`PaywallCardStyle`) that draws the card and
+/// calls `configuration.purchase()`; StoreKit still draws the purchase
+/// sheet and still reports through `.onInAppPurchaseStart/Completion`.
+/// Every word on the screen comes from `PaywallCopy`.
 struct PaywallView: View {
     /// Which rail action, or Settings, raised this paywall. Feeds
-    /// `PaywallCopy.actionLine(for:)`, the one line specific to why the
-    /// user is looking at this screen right now.
+    /// `PaywallCopy.actionLine(for:)` and lights the matching chip.
     let source: Entitlements.PaywallSource
 
     @ObservedObject private var entitlements = Entitlements.shared
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State private var showCancelTrialAlert = false
     @State private var showManageSubscriptions = false
@@ -37,10 +40,15 @@ struct PaywallView: View {
     @State private var showAskToBuyPendingDeadEnd = false
     @State private var showRestoreAlert = false
     @State private var restoreAlertMessage = ""
+    /// Drives the staggered reveal on first appearance.
+    @State private var revealed = false
 
     private static let termsURL = URL(string: "https://cloudfull.app/terms/")!
     private static let privacyURL = URL(string: "https://cloudfull.app/privacy/")!
     private static let supportURL = URL(string: "mailto:fluffy@cloudfull.app")!
+
+    /// The brand sky blue, the same value as `AccentColor`.
+    static let sky = Color(red: 0x81 / 255, green: 0xD3 / 255, blue: 0xFE / 255)
 
     var body: some View {
         screen.modifier(ManageSubscriptionsSheetModifier(
@@ -51,20 +59,27 @@ struct PaywallView: View {
 
     private var screen: some View {
         ZStack(alignment: .topTrailing) {
+            NightSky()
+
             ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
-                    header
-                    productSection
+                VStack(alignment: .leading, spacing: 28) {
+                    hero
+                        .reveal(revealed, order: 0, reduceMotion: reduceMotion)
+                    unlockChips
+                        .reveal(revealed, order: 1, reduceMotion: reduceMotion)
                     if showsPaymentIssueBanner {
                         paymentIssueBanner
+                            .reveal(revealed, order: 2, reduceMotion: reduceMotion)
                     }
-                    termsText
-                    linksSection
+                    productSection
+                        .reveal(revealed, order: 2, reduceMotion: reduceMotion)
+                    footer
+                        .reveal(revealed, order: 4, reduceMotion: reduceMotion)
                     // 1.2: "Have a code?" row (.offerCodeRedemption) goes here
                 }
                 .padding(.horizontal, 20)
-                .padding(.top, 44)   // clears the close button
-                .padding(.bottom, 24)
+                .padding(.top, 72)   // clears the close button
+                .padding(.bottom, 32)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .scrollBounceBehavior(.basedOnSize)
@@ -73,13 +88,14 @@ struct PaywallView: View {
             closeButton
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(.systemBackground))
-        // `paywall_root` goes on the ScrollView below, not on this
-        // ZStack: an identifier on a bare stack is pushed down onto every
-        // child, and would overwrite the close button's `paywall_close`.
-        // `Usage.purchase(_:.started)` moves here, from the top of
-        // `Entitlements.handlePurchase`, so a start is counted once, not
-        // once here and once there.
+        .background(Color.black)
+        .preferredColorScheme(.dark)
+        .onAppear { revealed = true }
+        // `paywall_root` goes on the ScrollView above, not on the ZStack:
+        // an identifier on a bare stack is pushed down onto every child,
+        // and would overwrite the close button's `paywall_close`.
+        // `Usage.purchase(_:.started)` fires from `purchaseStarted`, not
+        // from `Entitlements.handlePurchase`, so a start is counted once.
         .onInAppPurchaseStart { product in
             entitlements.purchaseStarted(product)
         }
@@ -142,47 +158,91 @@ struct PaywallView: View {
         })
     }
 
-    // MARK: - Header
+    // MARK: - Close
 
     private var closeButton: some View {
         Button {
             entitlements.dismissPaywall()
             Usage.shared.paywallLink(.close)
         } label: {
-            Image(systemName: "xmark.circle.fill")
-                .font(.system(size: 22))
-                .foregroundStyle(.secondary)
-                .padding(16)
+            Image(systemName: "xmark")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 40, height: 40)
+                .feedGlassButton(in: .circle)
         }
+        .buttonStyle(.plain)
+        .padding(.top, 12)
+        .padding(.trailing, 20)
         .accessibilityIdentifier("paywall_close")
         .accessibilityLabel("Close")
     }
 
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 10) {
+    // MARK: - Hero
+
+    private var hero: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Image(systemName: "cloud.fill")
+                .font(.system(size: 44, weight: .semibold))
+                .foregroundStyle(Self.sky)
+                .shadow(color: Self.sky.opacity(0.55), radius: 22, x: 0, y: 6)
+                .padding(.bottom, 2)
             // App Review 3.1.2 compares the billed price with any "free"
             // or trial wording: the price must be at least as prominent.
-            // The title is the only text larger than the ProductView's
-            // price, so the owner's title must not say "free" (see the
-            // copy table). The trial caption is a footnote under the row.
+            // The card price below is 34 pt bold; this title is 32 pt, so
+            // the price stays the biggest number on the screen, and the
+            // owner's title must not say "free" (see the copy table).
             Text(PaywallCopy.title)
-                .font(.title2.bold())
+                .font(.system(size: 32, weight: .bold, design: .rounded))
+                .foregroundStyle(.white)
                 .accessibilityAddTraits(.isHeader)
             Text(PaywallCopy.actionLine(for: source))
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-            Text(PaywallCopy.body)
+                .font(.system(.title3, design: .rounded).weight(.medium))
+                .foregroundStyle(Self.sky)
+            Text("\(PaywallCopy.body) \(PaywallCopy.ongoingValueLine)")
                 .font(.body)
-                .foregroundStyle(.secondary)
-            Text(PaywallCopy.ongoingValueLine)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.white.opacity(0.7))
+                .lineSpacing(3)
         }
+    }
+
+    // MARK: - Unlock chips
+
+    /// The four paid actions, as the rail draws them. The chip for the
+    /// action that raised this screen is lit, so "That one needs
+    /// Cloudfull" points at something.
+    private var unlockChips: some View {
+        HStack(spacing: 8) {
+            chip("heart.fill", "Keep", lit: source == .keep || source == .unkeep)
+            chip("trash.fill", "Delete", lit: source == .delete || source == .emptyBin)
+            chip("square.and.arrow.up", "Share", lit: source == .share || source == .album)
+            chip("arrow.down.right.and.arrow.up.left", "Shrink", lit: source == .shrink)
+        }
+    }
+
+    private func chip(_ symbol: String, _ word: String, lit: Bool) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: symbol)
+                .font(.system(size: 13, weight: .semibold))
+            Text(word)
+                .font(.system(size: 14, weight: .semibold, design: .rounded))
+        }
+        .foregroundStyle(lit ? Color.black : .white)
+        .padding(.horizontal, 12)
+        .frame(height: 34)
+        .background {
+            if lit {
+                Capsule().fill(Self.sky)
+                    .shadow(color: Self.sky.opacity(0.5), radius: 10, x: 0, y: 3)
+            }
+        }
+        .feedGlass(in: Capsule())
+        .accessibilityLabel(word)
     }
 
     // MARK: - Products / dead ends
 
-    /// Why the ProductViews are hidden in favor of a plain message and a
+    /// Why the product cards are hidden in favor of a plain message and a
     /// Try Again button. Checked in this order: a pending Ask to Buy, once
     /// set, is sticky and outranks everything else; then a failed product
     /// load, then payments being off. A billing-retry subscription is NOT
@@ -203,43 +263,48 @@ struct PaywallView: View {
     @ViewBuilder
     private var productSection: some View {
         if let deadEnd {
-            VStack(spacing: 12) {
+            VStack(spacing: 14) {
+                Image(systemName: deadEnd == .askToBuyPending ? "hourglass" : "icloud.slash")
+                    .font(.system(size: 28, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.6))
                 Text(deadEndText(deadEnd))
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .font(.system(.body, design: .rounded).weight(.medium))
+                    .foregroundStyle(.white.opacity(0.85))
                     .multilineTextAlignment(.center)
                     .accessibilityIdentifier(deadEndIdentifier(deadEnd))
-                Button(PaywallCopy.tryAgain) {
-                    Task { await entitlements.refresh() }
+                if deadEnd != .askToBuyPending {
+                    Button(PaywallCopy.tryAgain) {
+                        Task { await entitlements.refresh() }
+                    }
+                    .buttonStyle(.glassProminent)
+                    .tint(Self.sky)
+                    .foregroundStyle(.black)
+                    .accessibilityIdentifier("paywall_try_again")
                 }
-                .buttonStyle(.bordered)
-                .accessibilityIdentifier("paywall_try_again")
             }
             .frame(maxWidth: .infinity)
+            .padding(.vertical, 28)
+            .padding(.horizontal, 20)
+            .feedGlass(in: RoundedRectangle(cornerRadius: 28, style: .continuous))
         } else {
-            VStack(spacing: 20) {
-                VStack(spacing: 6) {
-                    ProductView(id: StoreProducts.monthly)
-                        .productViewStyle(.compact)
-                        .accessibilityIdentifier("paywall_monthly")
-                    // StoreKit's compact row prints only the price and
-                    // period ("$2.99, Every Month"), never the trial. This
-                    // caption carries the trial length and the price, both
-                    // read from the product, into the owner's sentence.
-                    Text(subscribeCaption)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-                VStack(spacing: 6) {
-                    ProductView(id: StoreProducts.lifetime)
-                        .productViewStyle(.compact)
-                        .accessibilityIdentifier("paywall_lifetime")
-                    Text(PaywallCopy.buyLabel)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
+            VStack(spacing: 14) {
+                ProductView(id: StoreProducts.monthly)
+                    .productViewStyle(PaywallCardStyle(
+                        eyebrow: PaywallCopy.monthlyEyebrow,
+                        period: PaywallCopy.monthlyPeriod,
+                        caption: subscribeCaption,
+                        button: PaywallCopy.subscribeButton
+                    ))
+                    .accessibilityIdentifier("paywall_monthly")
+                ProductView(id: StoreProducts.lifetime)
+                    .productViewStyle(PaywallCardStyle(
+                        eyebrow: PaywallCopy.lifetimeEyebrow,
+                        period: PaywallCopy.lifetimePeriod,
+                        caption: PaywallCopy.buyLabel,
+                        button: PaywallCopy.buyButton
+                    ))
+                    .accessibilityIdentifier("paywall_lifetime")
             }
-            .frame(maxWidth: .infinity)
         }
     }
 
@@ -293,36 +358,38 @@ struct PaywallView: View {
     }
 
     private var paymentIssueBanner: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(PaywallCopy.paymentIssue)
-                .font(.footnote)
-                .foregroundStyle(.white)
-                .accessibilityIdentifier("paywall_payment_issue")
-            Button(PaywallCopy.settingsRowManageSubscription) {
-                showManageSubscriptions = true
-                entitlements.manageSubscriptionsOpened()
+        HStack(spacing: 12) {
+            Image(systemName: "creditcard.trianglebadge.exclamationmark")
+                .font(.system(size: 18, weight: .semibold))
+            VStack(alignment: .leading, spacing: 6) {
+                Text(PaywallCopy.paymentIssue)
+                    .font(.system(.subheadline, design: .rounded).weight(.semibold))
+                    .accessibilityIdentifier("paywall_payment_issue")
+                Button(PaywallCopy.settingsRowManageSubscription) {
+                    showManageSubscriptions = true
+                    entitlements.manageSubscriptionsOpened()
+                }
+                .font(.footnote.weight(.semibold))
+                .accessibilityIdentifier("paywall_manage_subscription")
             }
-            .font(.footnote.bold())
-            .foregroundStyle(.white)
-            .accessibilityIdentifier("paywall_manage_subscription")
         }
-        .padding(10)
+        .foregroundStyle(.white)
+        .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.orange, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .background(Color.orange.opacity(0.85), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
-    // MARK: - Terms / links
+    // MARK: - Footer
 
-    private var termsText: some View {
-        Text(PaywallCopy.terms)
-            .font(.footnote)
-            .foregroundStyle(.secondary)
-            .accessibilityIdentifier("paywall_terms_text")
-    }
+    private var footer: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Text(PaywallCopy.terms)
+                .font(.footnote)
+                .foregroundStyle(.white.opacity(0.5))
+                .lineSpacing(2)
+                .accessibilityIdentifier("paywall_terms_text")
 
-    private var linksSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 20) {
+            HStack(spacing: 22) {
                 Button(PaywallCopy.settingsRowRestore) {
                     Usage.shared.paywallLink(.restore)
                     Task {
@@ -344,16 +411,144 @@ struct PaywallView: View {
                 Link(PaywallCopy.privacyLinkLabel, destination: Self.privacyURL)
                     .accessibilityIdentifier("paywall_privacy")
             }
-            .font(.footnote)
+            .font(.system(.footnote, design: .rounded).weight(.semibold))
+            .foregroundStyle(.white.opacity(0.8))
 
-            HStack(spacing: 4) {
+            // The owner's own note, as a quiet card: one person, one
+            // address, no sales voice.
+            VStack(alignment: .leading, spacing: 8) {
                 Text(PaywallCopy.support)
-                Link(PaywallCopy.supportLinkLabel, destination: Self.supportURL)
-                    .accessibilityIdentifier("paywall_support")
+                    .font(.system(.subheadline, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.8))
+                    .lineSpacing(2)
+                Link(destination: Self.supportURL) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "envelope.fill")
+                        Text(PaywallCopy.supportLinkLabel)
+                    }
+                    .font(.system(.subheadline, design: .rounded).weight(.semibold))
+                    .foregroundStyle(Self.sky)
+                }
+                .accessibilityIdentifier("paywall_support")
             }
-            .font(.footnote)
-            .foregroundStyle(.secondary)
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .feedGlass(in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         }
+    }
+}
+
+// MARK: - Product card style
+
+/// A Cloudfull product card around Apple's own purchase flow. StoreKit
+/// loads the product, draws the purchase sheet, and reports the result
+/// through the `.onInAppPurchase…` modifiers on `PaywallView`; this style
+/// only draws the card and calls `configuration.purchase()`.
+///
+/// The price is the biggest text on the whole screen (34 pt bold), which
+/// is what App Review's price-prominence rule asks for.
+private struct PaywallCardStyle: ProductViewStyle {
+    let eyebrow: String
+    let period: String
+    let caption: String
+    let button: String
+
+    func makeBody(configuration: Configuration) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(eyebrow.uppercased())
+                .font(.system(size: 12, weight: .bold, design: .rounded))
+                .tracking(1.2)
+                .foregroundStyle(.white.opacity(0.55))
+
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                priceText(configuration)
+                    .font(.system(size: 34, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+                    .monospacedDigit()
+                Text(period)
+                    .font(.system(.subheadline, design: .rounded).weight(.medium))
+                    .foregroundStyle(.white.opacity(0.6))
+            }
+
+            Text(caption)
+                .font(.footnote)
+                .foregroundStyle(.white.opacity(0.7))
+                .fixedSize(horizontal: false, vertical: true)
+
+            Button {
+                configuration.purchase()
+            } label: {
+                Text(button)
+                    .font(.system(.body, design: .rounded).weight(.bold))
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 48)
+            }
+            .buttonStyle(.glassProminent)
+            .tint(PaywallView.sky)
+            .foregroundStyle(.black)
+            .disabled(configuration.product == nil)
+            .padding(.top, 2)
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .feedGlass(in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+    }
+
+    @ViewBuilder
+    private func priceText(_ configuration: Configuration) -> some View {
+        switch configuration.state {
+        case .success(let product):
+            Text(product.displayPrice)
+        case .loading:
+            Text("—").redacted(reason: .placeholder)
+        default:
+            Text("—")
+        }
+    }
+}
+
+// MARK: - Background
+
+/// A night sky: black, a deep blue rise at the top, and one soft cloud
+/// glow in the brand blue. No image, no texture file, so it costs
+/// nothing to load and nothing on a 200k-item library.
+private struct NightSky: View {
+    var body: some View {
+        ZStack {
+            LinearGradient(
+                colors: [Color(red: 0.03, green: 0.07, blue: 0.13), .black],
+                startPoint: .top, endPoint: .bottom
+            )
+            Circle()
+                .fill(PaywallView.sky.opacity(0.28))
+                .frame(width: 420, height: 420)
+                .blur(radius: 110)
+                .offset(x: -140, y: -260)
+            Circle()
+                .fill(Color(red: 1.0, green: 0.72, blue: 0.56).opacity(0.10))
+                .frame(width: 360, height: 360)
+                .blur(radius: 120)
+                .offset(x: 170, y: 420)
+        }
+        .ignoresSafeArea()
+        .accessibilityHidden(true)
+    }
+}
+
+// MARK: - Reveal
+
+private extension View {
+    /// The staggered appearance on first show: each block fades and rises
+    /// in order. With Reduce Motion on, everything is simply there.
+    func reveal(_ shown: Bool, order: Int, reduceMotion: Bool) -> some View {
+        let on = shown || reduceMotion
+        return self
+            .opacity(on ? 1 : 0)
+            .offset(y: on ? 0 : 18)
+            .animation(
+                reduceMotion ? nil : .spring(response: 0.55, dampingFraction: 0.86).delay(0.06 * Double(order)),
+                value: shown
+            )
     }
 }
 

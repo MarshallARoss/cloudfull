@@ -27,7 +27,16 @@ enum PaywallCopy {
     /// One `%@` slot: the localized price. Shown when Apple says the
     /// user is not eligible for the trial (used it before).
     static let subscribeNoTrialLabel = "%@ a month. Cancel any time."
-    static let buyLabel = "One payment. Yours for good."
+    static let buyLabel = "Yours for good. Nothing renews."
+    /// The small label above each card's price, and the word after it.
+    static let monthlyEyebrow = "Monthly"
+    static let monthlyPeriod = "per month"
+    static let lifetimeEyebrow = "Lifetime"
+    static let lifetimePeriod = "one payment"
+    /// The purchase buttons inside the cards. The price sits above them,
+    /// bigger, so neither says "free".
+    static let subscribeButton = "Subscribe"
+    static let buyButton = "Buy once"
 
     // MARK: - Terms footnote
 
@@ -85,7 +94,7 @@ enum PaywallCopy {
     static let settingsRowRestore = "Restore Purchases"
     static let settingsRowTerms = "Terms of Use"
     /// The header of the Settings section that holds the status row.
-    static let settingsSectionHeader = "Cloudfull"
+    static let settingsSectionHeader = "Subscription"
 
     // MARK: - Added beyond the brief's key list
     //
