@@ -16,7 +16,7 @@ enum PaywallCopy {
     // MARK: - Paywall body
 
     static let title = "Purchase Cloudfull"
-    static let body = "Subscribe or buy to keep, delete, share, shrink, and more."
+    static let body = "Subscribe or buy to delete, keep, share, organize your media, shrink videos, and more."
     static let ongoingValueLine = "Monthly keeps the updates and new features coming."
 
     // MARK: - Product captions
@@ -63,7 +63,7 @@ enum PaywallCopy {
 
     // MARK: - Support
 
-    static let support = "Questions about Cloudfull or pricing? Message me to chat."
+    static let support = "Questions about Cloudfull or pricing? Message me."
 
     // MARK: - Restore outcomes
 

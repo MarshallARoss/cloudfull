@@ -63,27 +63,39 @@ struct PaywallView: View {
         ZStack(alignment: .topTrailing) {
             NightSky()
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 28) {
-                    hero
-                        .reveal(revealed, order: 0, reduceMotion: reduceMotion)
-                    if showsPaymentIssueBanner {
-                        paymentIssueBanner
+            // The column fills the screen, so the link row sits on the
+            // bottom edge and the blocks breathe. On a short screen or
+            // with large text the column grows past it and scrolls.
+            GeometryReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        hero
+                            .reveal(revealed, order: 0, reduceMotion: reduceMotion)
+                        Spacer(minLength: 36)
+                        if showsPaymentIssueBanner {
+                            paymentIssueBanner
+                                .reveal(revealed, order: 1, reduceMotion: reduceMotion)
+                                .padding(.bottom, 16)
+                        }
+                        productSection
                             .reveal(revealed, order: 1, reduceMotion: reduceMotion)
+                        Spacer(minLength: 36)
+                        messageCard
+                            .reveal(revealed, order: 2, reduceMotion: reduceMotion)
+                        Spacer(minLength: 28)
+                        linkRow
+                            .reveal(revealed, order: 3, reduceMotion: reduceMotion)
+                        // 1.2: "Have a code?" row (.offerCodeRedemption) goes here
                     }
-                    productSection
-                        .reveal(revealed, order: 1, reduceMotion: reduceMotion)
-                    footer
-                        .reveal(revealed, order: 3, reduceMotion: reduceMotion)
-                    // 1.2: "Have a code?" row (.offerCodeRedemption) goes here
+                    .padding(.horizontal, 20)
+                    .padding(.top, 84)   // clears the close button
+                    .padding(.bottom, 20)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(minHeight: proxy.size.height)
                 }
-                .padding(.horizontal, 20)
-                .padding(.top, 72)   // clears the close button
-                .padding(.bottom, 32)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .scrollBounceBehavior(.basedOnSize)
+                .accessibilityIdentifier("paywall_root")
             }
-            .scrollBounceBehavior(.basedOnSize)
-            .accessibilityIdentifier("paywall_root")
 
             closeButton
         }
@@ -182,12 +194,12 @@ struct PaywallView: View {
     // MARK: - Hero
 
     private var hero: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 16) {
             Image(systemName: "cloud.fill")
-                .font(.system(size: 44, weight: .semibold))
+                .font(.system(size: 48, weight: .semibold))
                 .foregroundStyle(Self.sky)
                 .shadow(color: Self.sky.opacity(0.55), radius: 22, x: 0, y: 6)
-                .padding(.bottom, 2)
+                .padding(.bottom, 10)
             // App Review 3.1.2 compares the billed price with any "free"
             // or trial wording: the price must be at least as prominent.
             // The card price below is 34 pt bold; this title is 32 pt, so
@@ -251,7 +263,7 @@ struct PaywallView: View {
             .padding(.horizontal, 20)
             .feedGlass(in: RoundedRectangle(cornerRadius: 28, style: .continuous))
         } else {
-            VStack(spacing: 14) {
+            VStack(spacing: 18) {
                 ProductView(id: StoreProducts.monthly)
                     .productViewStyle(PaywallCardStyle(
                         eyebrow: PaywallCopy.monthlyEyebrow,
@@ -344,60 +356,61 @@ struct PaywallView: View {
         .background(Color.orange.opacity(0.85), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
-    // MARK: - Footer
+    // MARK: - Message card and link row
 
-    private var footer: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            // The owner's own note, as a quiet card: one person, one
-            // address, no sales voice.
-            VStack(alignment: .leading, spacing: 8) {
-                Text(PaywallCopy.support)
-                    .font(.system(.subheadline, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.8))
-                    .lineSpacing(2)
-                Link(destination: Self.supportURL) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "envelope.fill")
-                        Text(PaywallCopy.supportLinkLabel)
-                    }
-                    .font(.system(.subheadline, design: .rounded).weight(.semibold))
-                    .foregroundStyle(Self.sky)
+    /// The owner's own note, as a quiet card: one person, one address,
+    /// no sales voice.
+    private var messageCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(PaywallCopy.support)
+                .font(.system(.subheadline, design: .rounded))
+                .foregroundStyle(.white.opacity(0.8))
+                .lineSpacing(2)
+            Link(destination: Self.supportURL) {
+                HStack(spacing: 6) {
+                    Image(systemName: "envelope.fill")
+                    Text(PaywallCopy.supportLinkLabel)
                 }
-                .accessibilityIdentifier("paywall_support")
+                .font(.system(.subheadline, design: .rounded).weight(.semibold))
+                .foregroundStyle(Self.sky)
             }
-            .padding(16)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .feedGlass(in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-
-            HStack(spacing: 20) {
-                Button(PaywallCopy.settingsRowRestore) {
-                    Usage.shared.paywallLink(.restore)
-                    Task {
-                        let outcome = await entitlements.restore()
-                        switch outcome {
-                        case .restored: restoreAlertMessage = PaywallCopy.restoreRestored
-                        case .nothingFound: restoreAlertMessage = PaywallCopy.restoreNothingFound
-                        case .failed: restoreAlertMessage = PaywallCopy.restoreFailed
-                        }
-                        showRestoreAlert = true
-                    }
-                }
-                .disabled(entitlements.isRestoring)
-                .accessibilityIdentifier("paywall_restore")
-
-                Link(PaywallCopy.termsLinkLabel, destination: Self.termsURL)
-                    .accessibilityIdentifier("paywall_terms")
-
-                Link(PaywallCopy.privacyLinkLabel, destination: Self.privacyURL)
-                    .accessibilityIdentifier("paywall_privacy")
-
-                Link(PaywallCopy.supportPageLinkLabel, destination: Self.supportPageURL)
-                    .accessibilityIdentifier("paywall_support_page")
-            }
-            .font(.system(.footnote, design: .rounded).weight(.semibold))
-            .foregroundStyle(.white.opacity(0.8))
-            .frame(maxWidth: .infinity)
+            .accessibilityIdentifier("paywall_support")
         }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .feedGlass(in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+    }
+
+    /// Restore, Terms, Privacy, Support: the last row, on the bottom edge.
+    private var linkRow: some View {
+        HStack(spacing: 22) {
+            Button(PaywallCopy.settingsRowRestore) {
+                Usage.shared.paywallLink(.restore)
+                Task {
+                    let outcome = await entitlements.restore()
+                    switch outcome {
+                    case .restored: restoreAlertMessage = PaywallCopy.restoreRestored
+                    case .nothingFound: restoreAlertMessage = PaywallCopy.restoreNothingFound
+                    case .failed: restoreAlertMessage = PaywallCopy.restoreFailed
+                    }
+                    showRestoreAlert = true
+                }
+            }
+            .disabled(entitlements.isRestoring)
+            .accessibilityIdentifier("paywall_restore")
+
+            Link(PaywallCopy.termsLinkLabel, destination: Self.termsURL)
+                .accessibilityIdentifier("paywall_terms")
+
+            Link(PaywallCopy.privacyLinkLabel, destination: Self.privacyURL)
+                .accessibilityIdentifier("paywall_privacy")
+
+            Link(PaywallCopy.supportPageLinkLabel, destination: Self.supportPageURL)
+                .accessibilityIdentifier("paywall_support_page")
+        }
+        .font(.system(.footnote, design: .rounded).weight(.semibold))
+        .foregroundStyle(.white.opacity(0.7))
+        .frame(maxWidth: .infinity)
     }
 }
 
