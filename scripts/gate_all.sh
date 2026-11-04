@@ -659,6 +659,6 @@ if [[ "$FENCE_END" != "$FENCE_START" ]]; then
 fi
 
 FINISHED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-echo "################ GATE COMPLETE — 2/2 standard rounds + 1 scale round, 84/84 tests passed ################"
+echo "################ GATE COMPLETE — 2/2 standard rounds + 1 scale round, 85/85 tests passed ################"
 echo "## RECORD RULE: this log may be cited only while the source fence is still"
 echo "##   $FENCE_END.  Gate finished $FINISHED_AT."
