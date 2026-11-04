@@ -19,7 +19,11 @@ full statement.
 
 ## Get Cloudfull
 
-App Store: Coming soon.
+App Store: https://apps.apple.com/app/id6816547769
+
+Cloudfull is free to download. Scrolling is free. Keeping, deleting,
+sharing, and shrinking need a one-time purchase or a monthly plan with a
+free trial. The source code is here, under GPL-3.0.
 
 ## Building from source
 
