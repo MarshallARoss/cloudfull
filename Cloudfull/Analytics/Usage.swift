@@ -489,6 +489,8 @@ final class Usage {
         if pose != .phone { bump("video.rotatedToFullscreenIn.\(pose.rawValue)", poseTwin: false) }
     }
     func quickAction(mode: Mode) { bump("quickAction.\(mode.rawValue)") }
+    /// The "On this date" home-screen quick action (opens the default mode with that filter on).
+    func quickActionOnThisDate() { bump("quickAction.onThisDate") }
     /// The book pose's (4/4W) right-page grid. A tile tap does not close
     /// the after-delete window (open point for the owner).
     func duoGridTap(week: Bool) { bump("duoGrid.tap.\(week ? "week" : "day")", poseTwin: false) }

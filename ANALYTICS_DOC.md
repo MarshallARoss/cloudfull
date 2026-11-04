@@ -184,6 +184,7 @@ on a change of shape/mode or at the end of a session.
 | `modeSwitcherOpened` | The feed switcher was opened. | Exact integer, running total. |
 | `modeSwitcherCancelled` | The feed switcher was opened and the tab already showing was tapped again, so nothing changed. A pick of another tab is counted by `modeSwitch.chin`, `modeSwitchTo.<mode>`, or `settingsOpened`. | Exact integer, running total. |
 | `quickAction.<mode>` | The app was opened using a Home Screen quick action, by feed. | Exact integer, running total. |
+| `quickAction.onThisDate` | The app was opened using the "On this date" Home Screen quick action (default feed, On this date filter on). | Exact integer, running total. |
 | `filterOn.<mode>.<name>` / `filterOff.<mode>.<name>` | A filter was turned on or off, by feed and filter name. | Exact integer, running total. |
 | `sortChanged.<mode>.<name>` | The sort order was changed, by feed and the new sort's name. | Exact integer, running total. |
 | `filterChange.<mode>` | A filter set was changed, by feed. | Exact integer, running total. |
