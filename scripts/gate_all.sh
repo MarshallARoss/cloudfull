@@ -41,9 +41,9 @@
 # log window — see the comment above its own invocation for why the
 # order matters there.
 #
-# Each standard round runs 38 tests. It runs 8 from M8Tests, 4 from
+# Each standard round runs 39 tests. It runs 8 from M8Tests, 4 from
 # M6Tests, 4 from M3ShrinkTests, 3 from M4Tests, 7 from M5Tests, 4 from
-# M1ExitTests and M2TrashTests together, and 8 from M12PaywallTests.
+# M1ExitTests and M2TrashTests together, and 9 from M12PaywallTests.
 #
 # The gate runs these suites as separate xcodebuild invocations, in this
 # fixed order, for two reasons. First, M2TrashTests queues 20 videos and
@@ -586,7 +586,7 @@ for run in 1 2; do
   # count past 3. M12 deletes nothing: every video it queues it also
   # un-queues, so it changes nothing else this round depends on.
   echo "## --- M12 ---"
-  if ! run_and_check "$LOGDIR/gate_run${run}_m12.log" "run $run M12" 8 \
+  if ! run_and_check "$LOGDIR/gate_run${run}_m12.log" "run $run M12" 9 \
       xcodebuild test-without-building -project "$PROJ/Cloudfull.xcodeproj" -scheme Cloudfull \
       -only-testing:CloudfullUITests/M12PaywallTests \
       -destination "$DEST" -derivedDataPath "$DD"; then
@@ -659,6 +659,6 @@ if [[ "$FENCE_END" != "$FENCE_START" ]]; then
 fi
 
 FINISHED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-echo "################ GATE COMPLETE — 2/2 standard rounds + 1 scale round, 78/78 tests passed ################"
+echo "################ GATE COMPLETE — 2/2 standard rounds + 1 scale round, 80/80 tests passed ################"
 echo "## RECORD RULE: this log may be cited only while the source fence is still"
 echo "##   $FENCE_END.  Gate finished $FINISHED_AT."

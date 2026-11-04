@@ -484,8 +484,11 @@ final class Usage {
         // How old the monthly plan is on this session, and whether it will
         // renew. A canceller's last sessions carry `autoRenew = false`
         // with the age they reached.
-        if let subscriptionAgeDays { set("subscription.ageDays", String(subscriptionAgeDays)) }
-        if let autoRenew { set("subscription.autoRenew", autoRenew ? "true" : "false") }
+        // `nil` clears the fact, so a session that moved from monthly to
+        // lifetime, or lost the plan, does not keep stale subscription facts.
+        if let subscriptionAgeDays { set("subscription.ageDays", String(subscriptionAgeDays)) } else { unset("subscription.ageDays") }
+        if let autoRenew { set("subscription.autoRenew", autoRenew ? "true" : "false") } else { unset("subscription.autoRenew") }
+        if trialDaysLeft == nil { unset("trial.daysLeft") }
     }
 
     /// `pose` is passed in, not read from `poseNow`: the same turn that
@@ -1096,6 +1099,12 @@ final class Usage {
             self.set("installChannel", channel)
         }
         #endif
+    }
+
+    private func unset(_ key: String) {
+        guard current.endedAt == nil, current.facts[key] != nil else { return }
+        current.facts.removeValue(forKey: key)
+        markDirty()
     }
 
     private func set(_ key: String, _ value: String) {

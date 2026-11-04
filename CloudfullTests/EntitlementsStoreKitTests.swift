@@ -160,7 +160,7 @@ struct EntitlementsStoreKitTests {
         #expect(entitlements.hasLiveSubscription)
     }
 
-    // No StoreKit-level "expire the trial" test. `SKTestSession.expireSubscription`
+    // No StoreKit-level "expire the monthly plan" test. `SKTestSession.expireSubscription`
     // left the trial's status at `.subscribed`, auto-renew on, expiry a week
     // out, for the whole 10 s poll (run 2026-11-03, diagnostics in the log),
     // so that lever does not work in this StoreKit Test environment. The
@@ -279,7 +279,7 @@ struct EntitlementsStoreKitTests {
         #expect(label(outcome) == "failed")
     }
 
-    @Test("Buying lifetime while the monthly trial is still auto-renewing prompts to cancel it")
+    @Test("Buying lifetime while the monthly plan is still auto-renewing prompts to cancel it")
     func handlePurchaseLifetimeAfterAutoRenewingTrialPromptsCancel() async throws {
         defer { tearDown() }
         let fake = FakeStoreFactsSource()
@@ -302,7 +302,7 @@ struct EntitlementsStoreKitTests {
         #expect(label(outcome) == "successCancelTrialPrompt")
     }
 
-    @Test("Buying lifetime after the monthly subscription's auto-renew is disabled is a plain success")
+    @Test("Buying lifetime after the monthly plan's auto-renew is disabled is a plain success")
     func handlePurchaseLifetimeAfterCancelledTrialIsPlainSuccess() async throws {
         defer { tearDown() }
         let fake = FakeStoreFactsSource()

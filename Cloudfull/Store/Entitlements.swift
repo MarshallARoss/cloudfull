@@ -114,6 +114,10 @@ final class Entitlements: ObservableObject {
     private var purchaseSource: PaywallSource?
     /// For the `subscription.ageDays` fact.
     private var monthlyOriginalPurchaseDate: Date?
+    /// For the `subscription.autoRenew` fact: Apple's own renewal flag,
+    /// or `nil` when it could not be read (offline, products not loaded),
+    /// so a canceller is never reported as "will renew" by assumption.
+    private var monthlyWillAutoRenew: Bool?
 
     /// Also erased by `-cloudfull-reset-deck-state` (`CloudfullApp.init`).
     static let cacheKey = "store.access.v1"
@@ -220,7 +224,9 @@ final class Entitlements: ObservableObject {
         #endif
 
         let entitlements = await enriched(source.currentEntitlements())
-        monthlyOriginalPurchaseDate = entitlements.first { $0.productID == StoreProducts.monthly }?.originalPurchaseDate
+        let monthlyFact = entitlements.first { $0.productID == StoreProducts.monthly }
+        monthlyOriginalPurchaseDate = monthlyFact?.originalPurchaseDate
+        monthlyWillAutoRenew = monthlyFact?.willAutoRenew
         let resolved = AccessResolver.resolve(
             isOfficial: StoreProducts.isOfficialBuild,
             appTx: appTx,
@@ -232,6 +238,11 @@ final class Entitlements: ObservableObject {
         apply(resolved)
 
         await refreshSubscriptionDerivedState()
+        // The facts below can change without the access kind changing
+        // (a cancel in iOS Settings, a day passing), and a cold launch
+        // records the session before this first refresh is done. So they
+        // are re-recorded after every refresh; `set` is idempotent.
+        Usage.shared.accessState(access.analyticsKind, trialDaysLeft: trialDaysLeft, subscriptionAgeDays: subscriptionAgeDays, autoRenew: autoRenew)
     }
 
     /// `cache: false` for a DEBUG override or `.debugUnlocked`: a fixed
@@ -455,7 +466,11 @@ final class Entitlements: ObservableObject {
                 // A fixed override (None, Trial, …) would hide the real
                 // result of the purchase that just succeeded. Flip to
                 // Real so the phone shows what Apple now says.
-                if AccessOverride.shared.value != .auto, AccessOverride.shared.value != .real {
+                // Not under `-cloudfull-access=`: the launch argument wins
+                // over the stored override anyway, so a flip would change
+                // nothing now and only surprise the next launch.
+                if Self.launchArgumentToken() == nil,
+                   AccessOverride.shared.value != .auto, AccessOverride.shared.value != .real {
                     AccessOverride.shared.value = .real
                 }
                 #endif
@@ -556,8 +571,8 @@ final class Entitlements: ObservableObject {
 
     /// Whether the monthly plan will renew, or `nil` without one.
     var autoRenew: Bool? {
-        guard case .monthly(_, _, let willAutoRenew, _) = access else { return nil }
-        return willAutoRenew
+        guard case .monthly = access else { return nil }
+        return monthlyWillAutoRenew
     }
 
     /// Days left in a free trial, or `nil` when `access` is not an active

@@ -16,7 +16,7 @@ import XCTest
 /// section shows only the rows that apply to the current access state,
 /// and Settings' own Unlock row raises the same paywall the rail does.
 ///
-/// This class has exactly eight `func test…` methods. `scripts/gate_all.sh`
+/// This class has exactly nine `func test…` methods. `scripts/gate_all.sh`
 /// parses `Executed N tests` from the output, so this count is a
 /// contract; adding or removing a method without updating that script's
 /// expected count fails the gate.
@@ -354,6 +354,47 @@ final class M12PaywallTests: FeedUITestCase {
         add(paywallShot)
         closePaywall()
         XCTAssertTrue(element("settings_root").waitForExistence(timeout: 5), "settings_root did not reappear after closing the paywall raised from Settings")
+    }
+
+    // MARK: - 9. The paywall at the largest accessibility text size
+
+    /// Proves the paywall survives Dynamic Type at its largest
+    /// accessibility size: the price rows, the purchase buttons, the
+    /// close button and the link row all exist, and the screen scrolls to
+    /// reach the link row. The screenshot attachment is the evidence for
+    /// the price-prominence check.
+    func testPaywallAtLargestAccessibilityTextSize() throws {
+        launch(resettingState: true, extraArguments: [
+            "-cloudfull-access=none",
+            "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL",
+        ])
+        XCTAssertNotNil(centeredPage(timeout: 10), "No centered feed page")
+        app.buttons["rail_like"].tap()
+        XCTAssertTrue(element("paywall_root").waitForExistence(timeout: 5), "paywall_root did not appear at AX text size")
+        for id in ["paywall_close", "paywall_monthly", "paywall_lifetime"] {
+            XCTAssertTrue(element(id).waitForExistence(timeout: 5), "\(id) does not exist at AX text size")
+        }
+        let top = XCTAttachment(screenshot: app.screenshot())
+        top.name = "paywall_ax_top"
+        top.lifetime = .keepAlways
+        add(top)
+        var swipes = 6
+        while !element("paywall_restore").exists && swipes > 0 {
+            element("paywall_root").swipeUp()
+            swipes -= 1
+        }
+        XCTAssertTrue(element("paywall_restore").waitForExistence(timeout: 3), "paywall_restore not reachable by scrolling at AX text size")
+        XCTAssertTrue(element("paywall_support_page").exists, "paywall_support_page missing at AX text size")
+        let bottom = XCTAttachment(screenshot: app.screenshot())
+        bottom.name = "paywall_ax_bottom"
+        bottom.lifetime = .keepAlways
+        add(bottom)
+        swipes = 6
+        while !element("paywall_close").isHittable && swipes > 0 {
+            element("paywall_root").swipeDown()
+            swipes -= 1
+        }
+        closePaywall()
     }
 
     // MARK: - Photo double-tap helpers

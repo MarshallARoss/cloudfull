@@ -32,7 +32,7 @@ enum QuickActions {
     /// takes (`DailyReminder.handleNotificationTap`).
     static let onThisDateType = prefix + "onThisDate"
 
-    /// Registers the two items. This is idempotent. It is not called from
+    /// Registers the three items. This is idempotent. It is not called from
     /// `CloudfullApp.init()`: items set that early, before
     /// `didFinishLaunching`, never appear on the icon's menu. This runs
     /// once launch has finished, and again whenever the scene becomes

@@ -306,7 +306,9 @@ struct SettingsView: View {
     }
 
     // Default tab and Open unmuted apply at launch. Add keeps and App
-    // icon are one-time choices. One section holds all four.
+    // icon are one-time choices. One section holds all five, with the
+    // left-handed toggle last (its old "Layout" section merged here,
+    // owner 2026-11-04).
     /// Preferences, including the left-handed toggle that used to be its
     /// own "Layout" section (owner, 2026-11-03: "combine layout and
     /// preferences"). The toggle only shows on a regular iPhone.
@@ -336,6 +338,10 @@ struct SettingsView: View {
             }
             .accessibilityIdentifier("settings_app_icon")
             .onChange(of: appIcon) { _, choice in AppIconChoice.apply(choice) }
+            // Left-handed: moves the rail, the chin, and the stage's own
+            // alignment to the LEADING edge wherever `DuoLayout.isMirrored`
+            // reads it. Hidden on the Duo (owner, 2026-10-12), where it
+            // has no effect; the same foldable signal the mirror rule uses.
             if !isDuo {
                 Toggle("Left-handed controls", isOn: $leftHandedControls)
                     .accessibilityIdentifier("settings_left_handed_controls")
@@ -346,18 +352,6 @@ struct SettingsView: View {
         }
     }
 
-    // Owner ask (iPhone Duo mirrored-layout round): a left-handed
-    // preference that moves the rail, the chin, and the stage's own
-    // alignment to the LEADING edge wherever `DuoLayout.isMirrored`
-    // reads it — see that property's own comment for the full rule.
-    // Shown on every regular iPhone, default OFF.
-    //
-    // Owner 2026-10-12: hide the left handed control toggle on the
-    // duo instead of saying it does nothing. The same foldable signal
-    // the mirror rule itself uses (current pose, or the `seenFoldable`
-    // latch for a frame that has not classified yet) now hides the
-    // whole row — and its "Layout" header — on the Duo, instead of
-    // showing the toggle beside a footer explaining it has no effect.
     // This screen shows free space because that is the app's declared
     // reason for reading it (privacy reason code 85F4.1). The `.task`
     // reads it off the main thread each time the view appears.

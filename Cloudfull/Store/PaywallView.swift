@@ -204,6 +204,7 @@ struct PaywallView: View {
                     .font(.system(size: 44, weight: .semibold))
                     .foregroundStyle(Self.sky)
                     .shadow(color: Self.sky.opacity(0.55), radius: 22, x: 0, y: 6)
+                    .accessibilityHidden(true)   // decoration
                 Spacer()
                 closeButton
             }
@@ -481,7 +482,7 @@ private struct PaywallCardStyle: ProductViewStyle {
     func makeBody(configuration: Configuration) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Text(eyebrow.uppercased())
-                .font(.system(size: 12, weight: .bold, design: .rounded))
+                .font(.system(.caption, design: .rounded).weight(.bold))
                 .tracking(1.2)
                 .foregroundStyle(.white.opacity(0.55))
 
@@ -511,7 +512,7 @@ private struct PaywallCardStyle: ProductViewStyle {
                 .font(.footnote)
                 .foregroundStyle(.white.opacity(0.7))
                 .fixedSize(horizontal: false, vertical: true)
-                .accessibilityIdentifier(captionIdentifier)
+                .modifier(OptionalIdentifier(id: captionIdentifier))
 
             Button {
                 configuration.purchase()
@@ -570,6 +571,15 @@ private struct PaywallCardStyle: ProductViewStyle {
         default:
             Text("—")
         }
+    }
+}
+
+/// Sets an accessibility identifier only when one is given, so a card
+/// without one keeps whatever identifier it inherits.
+private struct OptionalIdentifier: ViewModifier {
+    let id: String
+    func body(content: Content) -> some View {
+        if id.isEmpty { content } else { content.accessibilityIdentifier(id) }
     }
 }
 
