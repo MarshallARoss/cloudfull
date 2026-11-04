@@ -71,7 +71,25 @@ final class Entitlements: ObservableObject {
     /// Set by `require(_:_:)` or `presentPaywall(from:)`; cleared by
     /// `dismissPaywall()`, or automatically once `access` becomes
     /// unlocked.
-    @Published private(set) var paywallRequest: PaywallSource?
+    @Published private(set) var paywallRequest: PaywallSource? {
+        didSet { muteFeedWhilePaywallIsUp(wasUp: oldValue != nil, isUp: paywallRequest != nil) }
+    }
+    /// The feed's mute value from before the paywall rose, restored when
+    /// it drops. `nil` while no paywall is up.
+    private var mutedBeforePaywall: Bool?
+    /// The video keeps playing under the cover, so the paywall mutes it
+    /// (owner, 2026-11-04) and puts the user's own setting back after.
+    /// `feed.isMuted` is the `@AppStorage` key every player page reads.
+    private func muteFeedWhilePaywallIsUp(wasUp: Bool, isUp: Bool) {
+        let defaults = UserDefaults.standard
+        if isUp, !wasUp {
+            mutedBeforePaywall = defaults.bool(forKey: "feed.isMuted")
+            defaults.set(true, forKey: "feed.isMuted")
+        } else if !isUp, wasUp, let before = mutedBeforePaywall {
+            defaults.set(before, forKey: "feed.isMuted")
+            mutedBeforePaywall = nil
+        }
+    }
     /// True for a verified, currently live subscription — subscribed, in
     /// its grace period, or in billing retry, or one still set to
     /// auto-renew. Independent of `access`: a trial that has not yet
@@ -91,6 +109,11 @@ final class Entitlements: ObservableObject {
     /// auto-renewing and the user's answer to the cancel-your-trial
     /// prompt. While true, the unlock does not drop the paywall cover.
     private var holdsPaywallForPrompt = false
+    /// The paywall source at the moment the purchase sheet opened, for
+    /// `purchase.<kind>.from.<source>` on success.
+    private var purchaseSource: PaywallSource?
+    /// For the `subscription.ageDays` fact.
+    private var monthlyOriginalPurchaseDate: Date?
 
     /// Also erased by `-cloudfull-reset-deck-state` (`CloudfullApp.init`).
     static let cacheKey = "store.access.v1"
@@ -197,6 +220,7 @@ final class Entitlements: ObservableObject {
         #endif
 
         let entitlements = await enriched(source.currentEntitlements())
+        monthlyOriginalPurchaseDate = entitlements.first { $0.productID == StoreProducts.monthly }?.originalPurchaseDate
         let resolved = AccessResolver.resolve(
             isOfficial: StoreProducts.isOfficialBuild,
             appTx: appTx,
@@ -221,7 +245,7 @@ final class Entitlements: ObservableObject {
         // after a lifetime purchase; `clearPaywall()` ends it.
         if newAccess.isUnlocked, !holdsPaywallForPrompt { paywallRequest = nil }
         if changedKind {
-            Usage.shared.accessState(newAccess.analyticsKind, trialDaysLeft: trialDaysLeft)
+            Usage.shared.accessState(newAccess.analyticsKind, trialDaysLeft: trialDaysLeft, subscriptionAgeDays: subscriptionAgeDays, autoRenew: autoRenew)
         }
         if cache { saveCache() }
     }
@@ -395,6 +419,7 @@ final class Entitlements: ObservableObject {
     /// access and drop the paywall cover before `handlePurchase` runs.
     func purchaseStarted(_ product: Product) {
         guard let kind = Usage.purchaseProduct(for: product.id) else { return }
+        purchaseSource = paywallRequest
         Usage.shared.purchase(kind, .started)
         holdsPaywallForPrompt = kind == .lifetime && hasLiveSubscription
     }
@@ -443,7 +468,7 @@ final class Entitlements: ObservableObject {
                 }
                 holdsPaywallForPrompt = promptToCancelMonthly
                 await refresh()
-                Usage.shared.purchase(kind, .success)
+                Usage.shared.purchase(kind, .success, from: purchaseSource)
                 if promptToCancelMonthly {
                     return .successCancelTrialPrompt
                 }
@@ -521,6 +546,18 @@ final class Entitlements: ObservableObject {
     /// comment on `StoreProducts`.
     var subscriptionGroupID: String? {
         products.first { $0.id == StoreProducts.monthly }?.subscription?.subscriptionGroupID
+    }
+
+    /// Days since the monthly plan was first bought, or `nil` without one.
+    var subscriptionAgeDays: Int? {
+        guard case .monthly = access, let start = monthlyOriginalPurchaseDate else { return nil }
+        return max(Calendar.current.dateComponents([.day], from: start, to: now()).day ?? 0, 0)
+    }
+
+    /// Whether the monthly plan will renew, or `nil` without one.
+    var autoRenew: Bool? {
+        guard case .monthly(_, _, let willAutoRenew, _) = access else { return nil }
+        return willAutoRenew
     }
 
     /// Days left in a free trial, or `nil` when `access` is not an active
@@ -607,7 +644,8 @@ struct LiveStoreFactsSource: StoreFactsSource {
                 isIntroOffer: transaction.offer?.type == .introductory,
                 renewalState: nil,
                 gracePeriodExpiresAt: nil,
-                willAutoRenew: nil
+                willAutoRenew: nil,
+                originalPurchaseDate: transaction.originalPurchaseDate
             ))
         }
         return facts

@@ -102,7 +102,12 @@ struct PermissionGateView: View {
                     reminderOn: DailyReminder.shared.isEnabled,
                     reminderHour: DailyReminder.shared.isEnabled ? Calendar.current.component(.hour, from: DailyReminder.shared.time) : nil
                 )
-                Usage.shared.accessState(Entitlements.shared.access.analyticsKind, trialDaysLeft: Entitlements.shared.trialDaysLeft)
+                Usage.shared.accessState(
+                    Entitlements.shared.access.analyticsKind,
+                    trialDaysLeft: Entitlements.shared.trialDaysLeft,
+                    subscriptionAgeDays: Entitlements.shared.subscriptionAgeDays,
+                    autoRenew: Entitlements.shared.autoRenew
+                )
                 Self.hasOpenedThisProcess = true
                 Usage.shared.uploadPending()   // retries an upload that the last background period stopped
                 let v = FeedOptionsStore.shared.options

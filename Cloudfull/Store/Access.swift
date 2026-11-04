@@ -43,6 +43,9 @@ struct EntitlementFact: Equatable {
     var renewalState: RenewalState?
     var gracePeriodExpiresAt: Date?
     var willAutoRenew: Bool?
+    /// When this subscription was first bought, for the
+    /// `subscription.ageDays` analytics fact. Not used by the resolver.
+    var originalPurchaseDate: Date? = nil
 }
 
 /// What `AccessResolver` decided the app is allowed to do, and why. A pure

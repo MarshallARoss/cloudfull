@@ -458,9 +458,14 @@ final class Usage {
         if productID.hasSuffix(".lifetime") { return .lifetime }
         return nil
     }
-    func purchase(_ product: PurchaseProduct, _ outcome: PurchaseOutcome) {
+    func purchase(_ product: PurchaseProduct, _ outcome: PurchaseOutcome, from source: Entitlements.PaywallSource? = nil) {
         bump("purchase.\(product.rawValue).\(outcome.rawValue)")
-        if outcome == .success { firstEver("purchase") }
+        if outcome == .success {
+            firstEver("purchase")
+            // Which locked action the buyer had tapped when the paywall
+            // rose, so "which action converts?" has an answer.
+            if let source { bump("purchase.\(product.rawValue).from.\(source.rawValue)") }
+        }
     }
     /// A purchase was completed by redeeming an App Store offer code.
     /// Never the code itself.
@@ -469,13 +474,18 @@ final class Usage {
     func manageSubscriptionOpened() { bump("manageSubscriptionOpened") }
     /// `Entitlements.access`'s bucket, recorded whenever it changes, plus
     /// at every session's own `appOpened`.
-    func accessState(_ kind: AccessKind, trialDaysLeft: Int?) {
+    func accessState(_ kind: AccessKind, trialDaysLeft: Int?, subscriptionAgeDays: Int? = nil, autoRenew: Bool? = nil) {
         // `entitlement` is the latest value; `entitlementAtOpen` is the
         // first one this session, so a session that starts locked and
         // buys still counts as a locked session in the funnel.
         if current.facts["entitlementAtOpen"] == nil { set("entitlementAtOpen", kind.rawValue) }
         set("entitlement", kind.rawValue)
         if let trialDaysLeft { set("trial.daysLeft", String(trialDaysLeft)) }
+        // How old the monthly plan is on this session, and whether it will
+        // renew. A canceller's last sessions carry `autoRenew = false`
+        // with the age they reached.
+        if let subscriptionAgeDays { set("subscription.ageDays", String(subscriptionAgeDays)) }
+        if let autoRenew { set("subscription.autoRenew", autoRenew ? "true" : "false") }
     }
 
     /// `pose` is passed in, not read from `poseNow`: the same turn that

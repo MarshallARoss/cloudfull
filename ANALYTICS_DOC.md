@@ -265,11 +265,14 @@ on a change of shape/mode or at the end of a session.
 | `postsSeenBeforeFirstPaywall` | Posts seen in the feed before the first paywall raise of the session. | Exact integer, written once per session, at the first paywall. |
 | `postsSeenAfterPaywallDismiss.<mode>` | Posts seen after the paywall was dismissed, for the rest of the session, by feed. | Exact integer, running total. |
 | `purchase.<product>.<outcome>` | How a purchase attempt of an unlock plan ended (`product` = `monthly`, `lifetime`; `outcome` = `started`, `success`, `cancelled`, `pending`, `failed`, `unverified`). Never the product's price, currency, or id. | Exact integer, running total. |
+| `purchase.<product>.from.<source>` | A completed purchase, by the locked action whose paywall it came from (`source` = `keep`, `unkeep`, `delete`, `share`, `album`, `shrink`, `emptyBin`, `settings`). | Exact integer, running total. |
 | `purchase.viaOfferCode` | A purchase was completed by redeeming an App Store offer code. Never the code itself. | Exact integer, running total. |
 | `restore.<outcome>` | How a tap on "Restore Purchases" ended (`outcome` = `tapped`, `restored`, `nothingFound`, `failed`). | Exact integer, running total. |
 | `manageSubscriptionOpened` | The system "Manage Subscription" sheet was opened. | Exact integer, running total. |
 | `entitlement` | The access state the app resolved to for this session (`unknown`, `fork`, `debug`, `grandfathered`, `trial`, `monthly`, `lifetime`, `none`). | One of a fixed set of names. |
 | `entitlementAtOpen` | The first access state of the session, written once. A session that starts locked and then buys keeps `none` here while `entitlement` moves on, so the locked-session funnel still counts it. | One of the same fixed set of names. |
+| `subscription.ageDays` | Days since the monthly plan was first bought, on a session with an active monthly plan. | Exact integer. |
+| `subscription.autoRenew` | Whether the monthly plan will renew (`true`/`false`). `false` with a rising `subscription.ageDays` is a canceller running out the clock. | `true` or `false`. |
 | `trial.daysLeft` | Days left in a free trial, written only while `entitlement` is `trial`. | Exact integer. |
 | `daysToFirst.paywall` / `daysToFirst.purchase` | Days from install to the first paywall raise, and to the first successful purchase, each written once ever. | Exact integer, written once per phone. |
 | `mainThreadStallsOver250ms` | Main-thread stalls longer than 250ms this session. Written only in DEBUG builds, never in the App Store build. | Exact integer. |
