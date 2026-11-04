@@ -155,8 +155,8 @@ struct SettingsView: View {
                         storageSection
                         accessSection
                         assistanceSection
-                        tipJarSection
                         otherProjectsSection
+                        tipJarSection   // last (owner, 2026-11-04)
                         #if DEBUG
                         diagnosticsSection
                         #endif
@@ -553,6 +553,10 @@ struct SettingsView: View {
                 linkRow("BarkBarkBark")
             }
             .accessibilityIdentifier("settings_project_barkbarkbark")
+            Link(destination: SettingsLinks.instagram) {
+                linkRow("Instagram: @marshallaross")
+            }
+            .accessibilityIdentifier("settings_project_instagram")
         }
     }
 
@@ -758,6 +762,7 @@ private enum SettingsLinks {
     static let carlyAndTheUniverse = URL(string: "https://www.carlyandtheuniverse.com/")!
     static let tabzTech = URL(string: "https://tabztech.com/")!
     static let barkBarkBark = URL(string: "https://barkbarkbark.app/")!
+    static let instagram = URL(string: "https://www.instagram.com/marshallaross/")!
 
     /// Maps a tapped URL back to its fixed link name, for the `OpenURLAction`
     /// on the Settings list. `nil` for any URL not in this file — none is
@@ -774,6 +779,7 @@ private enum SettingsLinks {
         case carlyAndTheUniverse: return .carlyAndTheUniverse
         case tabzTech: return .tabzTech
         case barkBarkBark: return .barkBarkBark
+        case instagram: return .instagram
         default: return nil
         }
     }

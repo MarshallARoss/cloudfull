@@ -100,7 +100,7 @@ final class Usage {
     /// screen; the raw URL is never sent, only which fixed link it was.
     enum SettingsLink: String {
         case website, contact, privacy, sourceCode, terms
-        case feelsMusic, guestBets, carlyAndTheUniverse, tabzTech, barkBarkBark
+        case feelsMusic, guestBets, carlyAndTheUniverse, tabzTech, barkBarkBark, instagram
     }
     /// A tip jar product, by its price tier. Matches the last dot-separated
     /// part of the product id (`com.cloudfull.app.tip.10` → `ten`).

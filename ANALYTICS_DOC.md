@@ -249,7 +249,7 @@ on a change of shape/mode or at the end of a session.
 | `slowDownloadCount` | An iCloud download was slow to arrive. | Exact integer, running total. |
 | `settingsOpened` | The Settings screen was opened. | Exact integer, running total. |
 | `setting.<name>` | A setting was changed, by name (`name` = `keepsAlbum`, `defaultTab`, `openMuted`, `dailyReminder`, `dailyReminderHour`, `leftHandedControls`). | Exact integer, running total. |
-| `settingsLink.<name>` | A link row was tapped in Settings, by which link (`name` = `website`, `contact`, `privacy`, `sourceCode`, `terms`, `feelsMusic`, `guestBets`, `carlyAndTheUniverse`, `tabzTech`, `barkBarkBark`). Caught by one handler for every link on the screen; never the raw URL. | Exact integer, running total. |
+| `settingsLink.<name>` | A link row was tapped in Settings, by which link (`name` = `website`, `contact`, `privacy`, `sourceCode`, `terms`, `feelsMusic`, `guestBets`, `carlyAndTheUniverse`, `tabzTech`, `barkBarkBark`, `instagram`). Caught by one handler for every link on the screen; never the raw URL. | Exact integer, running total. |
 | `showWelcomeTapped` | "Show welcome screen" was tapped in Settings. | Exact integer, running total. |
 | `showOnboardingAgainTapped` | "Show onboarding again" was tapped in Settings. | Exact integer, running total. |
 | `settingsOpenIOSSettingsTapped` | "Turn on notifications in iOS Settings" was tapped in Settings (shown only after the daily reminder's notification permission is denied). | Exact integer, running total. |
