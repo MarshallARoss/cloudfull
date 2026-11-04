@@ -139,10 +139,10 @@ struct EntitlementsStoreKitTests {
         }
     }
 
-    // MARK: - 1 & 2: monthly trial purchase, then expiry
+    // MARK: - 1 & 2: monthly purchase, then expiry
 
-    @Test("Buying the monthly product unlocks as a trial with a live subscription")
-    func monthlyTrialPurchaseUnlocks() async throws {
+    @Test("Buying the monthly product unlocks with a live subscription (no trial: the owner dropped the intro offer 2026-11-04)")
+    func monthlyPurchaseUnlocks() async throws {
         defer { tearDown() }
         let fake = FakeStoreFactsSource()
         let entitlements = Entitlements(source: fake)
@@ -155,7 +155,7 @@ struct EntitlementsStoreKitTests {
             Issue.record("Expected .monthly, got \(entitlements.access)")
             return
         }
-        #expect(isTrial)
+        #expect(!isTrial)   // no introductory offer in Cloudfull.storekit
         #expect(entitlements.access.isUnlocked)
         #expect(entitlements.hasLiveSubscription)
     }

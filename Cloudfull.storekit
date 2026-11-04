@@ -131,11 +131,6 @@
           "familyShareable": false,
           "groupNumber": 1,
           "internalID": "F5D2A011",
-          "introductoryOffer": {
-            "internalID": "F5D2A012",
-            "paymentMode": "free",
-            "subscriptionPeriod": "P1W"
-          },
           "localizations": [
             {
               "description": "Keep, delete, share and shrink.",
