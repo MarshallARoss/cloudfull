@@ -14,10 +14,11 @@ import os
 /// can buy with no entitlement attached. A tip unlocks nothing, so this
 /// type stores no purchase record beyond the in-flight state below.
 ///
-/// `Transaction.updates` can hand this app a transaction outside a direct
-/// `purchase(_:)` call, for example one an interrupted launch left
-/// unfinished. The listener task started in `init` finishes any verified
-/// tip transaction it sees. StoreKit requires every transaction to be
+/// `Entitlements.handle(_:)` owns the single `Transaction.updates`
+/// listener for the whole app, and finishes a tip transaction StoreKit
+/// hands the app outside a direct `purchase(_:)` call — for example one an
+/// interrupted launch left unfinished — the same way it finishes an
+/// unlock transaction. StoreKit requires every transaction to be
 /// finished, or it keeps handing it back on every launch.
 @MainActor
 final class TipJar: ObservableObject {
@@ -55,19 +56,6 @@ final class TipJar: ObservableObject {
     @Published private(set) var purchasingID: String?
 
     private let logger = Logger(subsystem: "com.cloudfull.app", category: "TipJar")
-    private var updatesTask: Task<Void, Never>?
-
-    init() {
-        updatesTask = Task { [weak self] in
-            for await update in Transaction.updates {
-                await self?.finishIfVerifiedTip(update)
-            }
-        }
-    }
-
-    deinit {
-        updatesTask?.cancel()
-    }
 
     // MARK: - Load
 
@@ -137,22 +125,6 @@ final class TipJar: ObservableObject {
     private static func tier(for productID: String) -> Usage.TipTier? {
         let suffix = productID.split(separator: ".").last.map(String.init) ?? productID
         return Usage.TipTier(rawValue: suffix)
-    }
-
-    // MARK: - Transaction.updates
-
-    /// Finishes a verified tip transaction handed to the app outside a
-    /// direct `purchase(_:)` call. Ignores anything unverified and
-    /// anything that is not one of this jar's products, in case StoreKit
-    /// ever routes other transactions through this stream.
-    private func finishIfVerifiedTip(_ update: VerificationResult<Transaction>) async {
-        guard let transaction = try? checkVerified(update) else {
-            logger.error("Ignored an unverified transaction update")
-            return
-        }
-        guard Self.productIDs.contains(transaction.productID) else { return }
-        await transaction.finish()
-        logger.log("Finished a tip transaction from Transaction.updates: \(transaction.productID, privacy: .public)")
     }
 
     private func checkVerified<T>(_ result: VerificationResult<T>) throws -> T {

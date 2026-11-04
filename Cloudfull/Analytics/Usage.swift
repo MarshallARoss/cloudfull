@@ -99,7 +99,7 @@ final class Usage {
     /// Marshall's other projects". One event covers every `Link` on the
     /// screen; the raw URL is never sent, only which fixed link it was.
     enum SettingsLink: String {
-        case website, contact, privacy, sourceCode
+        case website, contact, privacy, sourceCode, terms
         case feelsMusic, guestBets, carlyAndTheUniverse, tabzTech, barkBarkBark
     }
     /// A tip jar product, by its price tier. Matches the last dot-separated
@@ -111,6 +111,20 @@ final class Usage {
     enum TipOutcome: String { case success, cancelled, pending }
     /// Why the tip jar has no products to show.
     enum TipUnavailableReason: String { case loadFailed, empty }
+
+    /// A purchasable unlock plan. Never the product's price or id, only
+    /// which of the two it was.
+    enum PurchaseProduct: String { case monthly, lifetime }
+    /// How a purchase attempt ended.
+    enum PurchaseOutcome: String { case started, success, cancelled, pending, failed, unverified }
+    /// How a tap on "Restore Purchases" ended.
+    enum RestoreOutcome: String { case tapped, restored, nothingFound, failed }
+    /// The bucket `Entitlements.access` resolved to, for the `entitlement`
+    /// fact. Never the exact expiration date or renewal flag.
+    enum AccessKind: String { case unknown, fork, debug, grandfathered, trial, monthly, lifetime, none }
+    /// A link row tapped on the paywall screen itself, separate from
+    /// `SettingsLink`.
+    enum PaywallLink: String { case terms, privacy, support, restore, close }
 
     /// The iPhone Duo's physical pose, as analytics records it. Mirrors
     /// `DuoPose` (`DuoLayout.swift`), but splits the closed pose into
@@ -414,6 +428,56 @@ final class Usage {
     func tipTapped(_ tier: TipTier) { bump("tip.tapped.\(tier.rawValue)") }
     func tipOutcome(_ tier: TipTier, _ outcome: TipOutcome) { bump("tip.outcome.\(tier.rawValue).\(outcome.rawValue)") }
     func tipProductsUnavailable(_ reason: TipUnavailableReason) { bump("tip.unavailable.\(reason.rawValue)") }
+
+    // Paywall and purchase. Never a product's price, currency, id,
+    // transaction id, or offer code — only the fixed plan and outcome.
+    /// A paywall was raised, by what required it. `Entitlements.require`
+    /// and `presentPaywall` both call this before showing it.
+    func paywallShown(_ source: Entitlements.PaywallSource) {
+        bump("paywall.shown.\(source.rawValue)")
+        paywallShownThisSession += 1
+        raise("paywall.shownInSession", to: paywallShownThisSession)
+        firstEver("paywall")
+        if paywallShownThisSession == 1 {
+            set("postsSeenBeforeFirstPaywall", String(postsSeenThisSession))
+        }
+        if paywallDismissedThisSession {
+            bump("paywall.reopened")
+        }
+    }
+    func paywallDismissed() {
+        bump("paywall.dismissed")
+        paywallDismissedThisSession = true
+    }
+    /// A tap on one of the paywall's own outbound links.
+    func paywallLink(_ name: PaywallLink) { bump("paywall.link.\(name.rawValue)") }
+    /// Maps a product id's suffix to its plan, e.g.
+    /// `com.cloudfull.app.unlock.monthly` → `.monthly`.
+    static func purchaseProduct(for productID: String) -> PurchaseProduct? {
+        if productID.hasSuffix(".monthly") { return .monthly }
+        if productID.hasSuffix(".lifetime") { return .lifetime }
+        return nil
+    }
+    func purchase(_ product: PurchaseProduct, _ outcome: PurchaseOutcome) {
+        bump("purchase.\(product.rawValue).\(outcome.rawValue)")
+        if outcome == .success { firstEver("purchase") }
+    }
+    /// A purchase was completed by redeeming an App Store offer code.
+    /// Never the code itself.
+    func purchaseViaOfferCode() { bump("purchase.viaOfferCode") }
+    func restore(_ outcome: RestoreOutcome) { bump("restore.\(outcome.rawValue)") }
+    func manageSubscriptionOpened() { bump("manageSubscriptionOpened") }
+    /// `Entitlements.access`'s bucket, recorded whenever it changes, plus
+    /// at every session's own `appOpened`.
+    func accessState(_ kind: AccessKind, trialDaysLeft: Int?) {
+        // `entitlement` is the latest value; `entitlementAtOpen` is the
+        // first one this session, so a session that starts locked and
+        // buys still counts as a locked session in the funnel.
+        if current.facts["entitlementAtOpen"] == nil { set("entitlementAtOpen", kind.rawValue) }
+        set("entitlement", kind.rawValue)
+        if let trialDaysLeft { set("trial.daysLeft", String(trialDaysLeft)) }
+    }
+
     /// `pose` is passed in, not read from `poseNow`: the same turn that
     /// enters fullscreen also changes the pose, and the tracker's own
     /// debounce — plus the order `onChange` calls run in across views —
@@ -431,7 +495,14 @@ final class Usage {
     func duoGridScrolled() { bump("duoGrid.scroll", poseTwin: false) }
 
     // Feed
-    func postSeen(mode: Mode) { bump("postsSeen.\(mode.rawValue)"); postsSeenSinceFilter += 1 }
+    func postSeen(mode: Mode) {
+        bump("postsSeen.\(mode.rawValue)")
+        postsSeenSinceFilter += 1
+        postsSeenThisSession += 1
+        if paywallDismissedThisSession {
+            bump("postsSeenAfterPaywallDismiss.\(mode.rawValue)")
+        }
+    }
     func swipe(mode: Mode, up: Bool) {
         bump("swipes.\(mode.rawValue)"); if up { bump("swipesBack.\(mode.rawValue)") }
         // Counts the first swipe within 5 seconds of a delete, back or
@@ -717,6 +788,15 @@ final class Usage {
     /// on the one, early, chance it gives to correct `startPose`.
     private var startPoseFinalized = false
     private var postsSeenSinceFilter = 0
+    /// Posts seen so far this session, for `postsSeenBeforeFirstPaywall`
+    /// and `postsSeenAfterPaywallDismiss.<mode>`. Unlike
+    /// `postsSeenSinceFilter`, never reset by a filter change.
+    private var postsSeenThisSession = 0
+    /// How many times the paywall has been raised this session, for
+    /// `paywall.shownInSession` and `paywall.reopened`.
+    private var paywallShownThisSession = 0
+    /// True from the first `paywall.dismissed` of this session onward.
+    private var paywallDismissedThisSession = false
     private let defaults = UserDefaults.standard
     private static let currentKey = "usage.session.current"
     private static let installKey = "usage.install"
@@ -781,6 +861,9 @@ final class Usage {
         gateShownAt = nil
         lastDelete = nil
         postsSeenSinceFilter = 0
+        postsSeenThisSession = 0
+        paywallShownThisSession = 0
+        paywallDismissedThisSession = false
         modeSince = Date()
         startPoseFinalized = false
         // Does not reset `committedPose`: no host reports again on a

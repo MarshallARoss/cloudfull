@@ -249,13 +249,28 @@ on a change of shape/mode or at the end of a session.
 | `slowDownloadCount` | An iCloud download was slow to arrive. | Exact integer, running total. |
 | `settingsOpened` | The Settings screen was opened. | Exact integer, running total. |
 | `setting.<name>` | A setting was changed, by name (`name` = `keepsAlbum`, `defaultTab`, `openMuted`, `dailyReminder`, `dailyReminderHour`, `leftHandedControls`). | Exact integer, running total. |
-| `settingsLink.<name>` | A link row was tapped in Settings, by which link (`name` = `website`, `contact`, `privacy`, `sourceCode`, `feelsMusic`, `guestBets`, `carlyAndTheUniverse`, `tabzTech`, `barkBarkBark`). Caught by one handler for every link on the screen; never the raw URL. | Exact integer, running total. |
+| `settingsLink.<name>` | A link row was tapped in Settings, by which link (`name` = `website`, `contact`, `privacy`, `sourceCode`, `terms`, `feelsMusic`, `guestBets`, `carlyAndTheUniverse`, `tabzTech`, `barkBarkBark`). Caught by one handler for every link on the screen; never the raw URL. | Exact integer, running total. |
 | `showWelcomeTapped` | "Show welcome screen" was tapped in Settings. | Exact integer, running total. |
 | `showOnboardingAgainTapped` | "Show onboarding again" was tapped in Settings. | Exact integer, running total. |
 | `settingsOpenIOSSettingsTapped` | "Turn on notifications in iOS Settings" was tapped in Settings (shown only after the daily reminder's notification permission is denied). | Exact integer, running total. |
 | `tip.tapped.<tier>` | A tip jar button was tapped, by price tier (`tier` = `1`, `10`, `100`). Never the product's actual price or currency. | Exact integer, running total. |
 | `tip.outcome.<tier>.<outcome>` | How a tapped tip purchase ended (`outcome` = `success`, `cancelled`, `pending`). | Exact integer, running total. |
 | `tip.unavailable.<reason>` | The tip jar had no products to show (`reason` = `loadFailed` when StoreKit's load threw, `empty` when it returned zero products). | Exact integer, running total. |
+| `paywall.shown.<source>` | The paywall was raised, by what required it (`source` = `keep`, `unkeep`, `delete`, `share`, `album`, `shrink`, `emptyBin`, `settings`). | Exact integer, running total. |
+| `paywall.shownInSession` | The most paywall raises seen in one session. | Exact integer, running max for the session. |
+| `paywall.dismissed` | The paywall was closed without a purchase. | Exact integer, running total. |
+| `paywall.reopened` | The paywall was raised again after already being dismissed once this session. | Exact integer, running total. |
+| `paywall.link.<name>` | A link row on the paywall itself was tapped (`name` = `terms`, `privacy`, `support`, `restore`, `close`). | Exact integer, running total. |
+| `postsSeenBeforeFirstPaywall` | Posts seen in the feed before the first paywall raise of the session. | Exact integer, written once per session, at the first paywall. |
+| `postsSeenAfterPaywallDismiss.<mode>` | Posts seen after the paywall was dismissed, for the rest of the session, by feed. | Exact integer, running total. |
+| `purchase.<product>.<outcome>` | How a purchase attempt of an unlock plan ended (`product` = `monthly`, `lifetime`; `outcome` = `started`, `success`, `cancelled`, `pending`, `failed`, `unverified`). Never the product's price, currency, or id. | Exact integer, running total. |
+| `purchase.viaOfferCode` | A purchase was completed by redeeming an App Store offer code. Never the code itself. | Exact integer, running total. |
+| `restore.<outcome>` | How a tap on "Restore Purchases" ended (`outcome` = `tapped`, `restored`, `nothingFound`, `failed`). | Exact integer, running total. |
+| `manageSubscriptionOpened` | The system "Manage Subscription" sheet was opened. | Exact integer, running total. |
+| `entitlement` | The access state the app resolved to for this session (`unknown`, `fork`, `debug`, `grandfathered`, `trial`, `monthly`, `lifetime`, `none`). | One of a fixed set of names. |
+| `entitlementAtOpen` | The first access state of the session, written once. A session that starts locked and then buys keeps `none` here while `entitlement` moves on, so the locked-session funnel still counts it. | One of the same fixed set of names. |
+| `trial.daysLeft` | Days left in a free trial, written only while `entitlement` is `trial`. | Exact integer. |
+| `daysToFirst.paywall` / `daysToFirst.purchase` | Days from install to the first paywall raise, and to the first successful purchase, each written once ever. | Exact integer, written once per phone. |
 | `mainThreadStallsOver250ms` | Main-thread stalls longer than 250ms this session. Written only in DEBUG builds, never in the App Store build. | Exact integer. |
 
 ## Never sent
@@ -272,6 +287,7 @@ verified against the code, not assumed:
 - Anything the user types.
 - A tip jar product's price or currency. Only its fixed tier (`1`, `10`, or `100`) is sent.
 - The destination URL of a tapped link. Only the fixed name of the link row is sent.
+- A purchase's price, currency, product id, transaction id, or offer code. Only the plan (`monthly`/`lifetime`) and the outcome are sent.
 
 The only identifiers Cloudfull sends about media are exact pixel dimensions
 (such as `1920x1080`) and, for a deleted video, its duration in
