@@ -88,7 +88,7 @@ struct PaywallView: View {
                         // 1.2: "Have a code?" row (.offerCodeRedemption) goes here
                     }
                     .padding(.horizontal, 20)
-                    .padding(.top, 56)   // clears the close button
+                    .padding(.top, 16)
                     .padding(.bottom, 20)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .frame(minHeight: proxy.size.height)
@@ -96,8 +96,6 @@ struct PaywallView: View {
                 .scrollBounceBehavior(.basedOnSize)
                 .accessibilityIdentifier("paywall_root")
             }
-
-            closeButton
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.black)
@@ -185,8 +183,6 @@ struct PaywallView: View {
                 .feedGlassButton(in: .circle)
         }
         .buttonStyle(.plain)
-        .padding(.top, 12)
-        .padding(.trailing, 20)
         .accessibilityIdentifier("paywall_close")
         .accessibilityLabel("Close")
     }
@@ -195,11 +191,17 @@ struct PaywallView: View {
 
     private var hero: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Image(systemName: "cloud.fill")
-                .font(.system(size: 44, weight: .semibold))
-                .foregroundStyle(Self.sky)
-                .shadow(color: Self.sky.opacity(0.55), radius: 22, x: 0, y: 6)
-                .padding(.bottom, 4)
+            // One row: the cloud on the left, the close button across
+            // from it on the right (owner, 2026-11-04).
+            HStack(alignment: .center) {
+                Image(systemName: "cloud.fill")
+                    .font(.system(size: 44, weight: .semibold))
+                    .foregroundStyle(Self.sky)
+                    .shadow(color: Self.sky.opacity(0.55), radius: 22, x: 0, y: 6)
+                Spacer()
+                closeButton
+            }
+            .padding(.bottom, 4)
             // App Review 3.1.2 compares the billed price with any "free"
             // or trial wording: the price must be at least as prominent.
             // The card price below is 32 pt bold; this title is 32 pt, so
