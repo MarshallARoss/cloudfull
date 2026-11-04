@@ -260,7 +260,7 @@ on a change of shape/mode or at the end of a session.
 | `paywall.shownInSession` | The most paywall raises seen in one session. | Exact integer, running max for the session. |
 | `paywall.dismissed` | The paywall was closed without a purchase. | Exact integer, running total. |
 | `paywall.reopened` | The paywall was raised again after already being dismissed once this session. | Exact integer, running total. |
-| `paywall.link.<name>` | A link row on the paywall itself was tapped (`name` = `terms`, `privacy`, `support`, `restore`, `close`). | Exact integer, running total. |
+| `paywall.link.<name>` | A link row on the paywall itself was tapped (`name` = `terms`, `privacy`, `support` (the mail link), `supportPage` (the website support page), `restore`, `close`). | Exact integer, running total. |
 | `postsSeenBeforeFirstPaywall` | Posts seen in the feed before the first paywall raise of the session. | Exact integer, written once per session, at the first paywall. |
 | `postsSeenAfterPaywallDismiss.<mode>` | Posts seen after the paywall was dismissed, for the rest of the session, by feed. | Exact integer, running total. |
 | `purchase.<product>.<outcome>` | How a purchase attempt of an unlock plan ended (`product` = `monthly`, `lifetime`; `outcome` = `started`, `success`, `cancelled`, `pending`, `failed`, `unverified`). Never the product's price, currency, or id. | Exact integer, running total. |

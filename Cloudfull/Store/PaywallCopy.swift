@@ -15,8 +15,8 @@ enum PaywallCopy {
 
     // MARK: - Paywall body
 
-    static let title = "Keep, delete, share and shrink"
-    static let body = "Scrolling is free, always. The actions are the paid part."
+    static let title = "Purchase Cloudfull"
+    static let body = "Subscribe or buy to keep, delete, share, shrink, and more."
     static let ongoingValueLine = "Monthly keeps the updates and new features coming."
 
     // MARK: - Product captions
@@ -63,7 +63,7 @@ enum PaywallCopy {
 
     // MARK: - Support
 
-    static let support = "I don’t want you to feel tricked. Message me about pricing."
+    static let support = "Questions about Cloudfull or pricing? Message me to chat."
 
     // MARK: - Restore outcomes
 
@@ -73,7 +73,7 @@ enum PaywallCopy {
 
     // MARK: - Settings status row
 
-    static let settingsStatusNone = "Scrolling is free. Keep, delete, share and shrink need Cloudfull."
+    static let settingsStatusNone = "Subscribe or buy to keep, delete, share, shrink, and more."
     static let settingsStatusUnknown = "Checking your purchase…"
     /// Takes one `%@`: the trial's end date.
     static let settingsStatusTrial = "Free trial · ends %@"
@@ -118,6 +118,8 @@ enum PaywallCopy {
     static let termsLinkLabel = "Terms"
     static let privacyLinkLabel = "Privacy"
     static let supportLinkLabel = "Message Marshall"
+    /// The website support page, in the footer link row.
+    static let supportPageLinkLabel = "Support"
 
     // MARK: - Per-source action line
 

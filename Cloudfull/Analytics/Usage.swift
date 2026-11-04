@@ -124,7 +124,7 @@ final class Usage {
     enum AccessKind: String { case unknown, fork, debug, grandfathered, trial, monthly, lifetime, none }
     /// A link row tapped on the paywall screen itself, separate from
     /// `SettingsLink`.
-    enum PaywallLink: String { case terms, privacy, support, restore, close }
+    enum PaywallLink: String { case terms, privacy, support, supportPage, restore, close }
 
     /// The iPhone Duo's physical pose, as analytics records it. Mirrors
     /// `DuoPose` (`DuoLayout.swift`), but splits the closed pose into

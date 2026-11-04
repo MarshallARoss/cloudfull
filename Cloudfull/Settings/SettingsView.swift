@@ -24,7 +24,7 @@ struct SettingsView: View {
     @AppStorage("settings.openMuted") private var openMuted = false
     @AppStorage(KeepsAlbum.settingKey) private var keepsAlbum = true
     /// Mirrored-layout round: the owner's own "Left-handed controls"
-    /// setting, shown in `layoutSection` below. Only takes effect with
+    /// setting, shown in `preferencesSection` below. Only takes effect with
     /// no system bar at all — see `DuoLayout.isMirrored`'s own comment.
     /// Default OFF: a regular iPhone's layout must stay pixel-identical
     /// until the owner turns this on themselves.
@@ -151,8 +151,7 @@ struct SettingsView: View {
                     List {
                         appHeaderSection
                         reminderSection
-                        preferencesSection
-                        layoutSection(duoLayout: duoLayout)
+                        preferencesSection(duoLayout: duoLayout)
                         storageSection
                         accessSection
                         assistanceSection
@@ -308,8 +307,12 @@ struct SettingsView: View {
 
     // Default tab and Open unmuted apply at launch. Add keeps and App
     // icon are one-time choices. One section holds all four.
-    private var preferencesSection: some View {
-        Section {
+    /// Preferences, including the left-handed toggle that used to be its
+    /// own "Layout" section (owner, 2026-11-03: "combine layout and
+    /// preferences"). The toggle only shows on a regular iPhone.
+    private func preferencesSection(duoLayout: DuoLayout) -> some View {
+        let isDuo = duoLayout.pose != .regularPhone || DuoLayout.seenFoldable
+        return Section {
             Picker("Default tab", selection: $openMode) {
                 Text("Videos").tag(AppMode.videos.rawValue)
                 Text("Photos").tag(AppMode.photos.rawValue)
@@ -333,6 +336,11 @@ struct SettingsView: View {
             }
             .accessibilityIdentifier("settings_app_icon")
             .onChange(of: appIcon) { _, choice in AppIconChoice.apply(choice) }
+            if !isDuo {
+                Toggle("Left-handed controls", isOn: $leftHandedControls)
+                    .accessibilityIdentifier("settings_left_handed_controls")
+                    .onChange(of: leftHandedControls) { _, _ in Usage.shared.settingChanged("leftHandedControls") }
+            }
         } header: {
             Text("Preferences")
         }
@@ -350,21 +358,6 @@ struct SettingsView: View {
     // latch for a frame that has not classified yet) now hides the
     // whole row — and its "Layout" header — on the Duo, instead of
     // showing the toggle beside a footer explaining it has no effect.
-    private func layoutSection(duoLayout: DuoLayout) -> some View {
-        let isDuo = duoLayout.pose != .regularPhone || DuoLayout.seenFoldable
-        return Group {
-            if !isDuo {
-                Section {
-                    Toggle("Left-handed controls", isOn: $leftHandedControls)
-                        .accessibilityIdentifier("settings_left_handed_controls")
-                        .onChange(of: leftHandedControls) { _, _ in Usage.shared.settingChanged("leftHandedControls") }
-                } header: {
-                    Text("Layout")
-                }
-            }
-        }
-    }
-
     // This screen shows free space because that is the app's declared
     // reason for reading it (privacy reason code 85F4.1). The `.task`
     // reads it off the main thread each time the view appears.

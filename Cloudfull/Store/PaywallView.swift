@@ -23,8 +23,9 @@ import SwiftUI
 /// sheet and still reports through `.onInAppPurchaseStart/Completion`.
 /// Every word on the screen comes from `PaywallCopy`.
 struct PaywallView: View {
-    /// Which rail action, or Settings, raised this paywall. Feeds
-    /// `PaywallCopy.actionLine(for:)` and lights the matching chip.
+    /// Which rail action, or Settings, raised this paywall. Recorded in
+    /// analytics by `Entitlements.require`; the screen itself reads the
+    /// same for every source (owner, 2026-11-03).
     let source: Entitlements.PaywallSource
 
     @ObservedObject private var entitlements = Entitlements.shared
@@ -46,6 +47,7 @@ struct PaywallView: View {
     private static let termsURL = URL(string: "https://cloudfull.app/terms/")!
     private static let privacyURL = URL(string: "https://cloudfull.app/privacy/")!
     private static let supportURL = URL(string: "mailto:fluffy@cloudfull.app")!
+    private static let supportPageURL = URL(string: "https://cloudfull.app/support/")!
 
     /// The brand sky blue, the same value as `AccentColor`.
     static let sky = Color(red: 0x81 / 255, green: 0xD3 / 255, blue: 0xFE / 255)
@@ -65,16 +67,14 @@ struct PaywallView: View {
                 VStack(alignment: .leading, spacing: 28) {
                     hero
                         .reveal(revealed, order: 0, reduceMotion: reduceMotion)
-                    unlockChips
-                        .reveal(revealed, order: 1, reduceMotion: reduceMotion)
                     if showsPaymentIssueBanner {
                         paymentIssueBanner
-                            .reveal(revealed, order: 2, reduceMotion: reduceMotion)
+                            .reveal(revealed, order: 1, reduceMotion: reduceMotion)
                     }
                     productSection
-                        .reveal(revealed, order: 2, reduceMotion: reduceMotion)
+                        .reveal(revealed, order: 1, reduceMotion: reduceMotion)
                     footer
-                        .reveal(revealed, order: 4, reduceMotion: reduceMotion)
+                        .reveal(revealed, order: 3, reduceMotion: reduceMotion)
                     // 1.2: "Have a code?" row (.offerCodeRedemption) goes here
                 }
                 .padding(.horizontal, 20)
@@ -152,6 +152,7 @@ struct PaywallView: View {
             case Self.termsURL: Usage.shared.paywallLink(.terms)
             case Self.privacyURL: Usage.shared.paywallLink(.privacy)
             case Self.supportURL: Usage.shared.paywallLink(.support)
+            case Self.supportPageURL: Usage.shared.paywallLink(.supportPage)
             default: break
             }
             return .systemAction
@@ -196,48 +197,11 @@ struct PaywallView: View {
                 .font(.system(size: 32, weight: .bold, design: .rounded))
                 .foregroundStyle(.white)
                 .accessibilityAddTraits(.isHeader)
-            Text(PaywallCopy.actionLine(for: source))
-                .font(.system(.title3, design: .rounded).weight(.medium))
-                .foregroundStyle(Self.sky)
-            Text("\(PaywallCopy.body) \(PaywallCopy.ongoingValueLine)")
-                .font(.body)
-                .foregroundStyle(.white.opacity(0.7))
+            Text(PaywallCopy.body)
+                .font(.system(.title3, design: .rounded))
+                .foregroundStyle(.white.opacity(0.75))
                 .lineSpacing(3)
         }
-    }
-
-    // MARK: - Unlock chips
-
-    /// The four paid actions, as the rail draws them. The chip for the
-    /// action that raised this screen is lit, so "That one needs
-    /// Cloudfull" points at something.
-    private var unlockChips: some View {
-        HStack(spacing: 8) {
-            chip("heart.fill", "Keep", lit: source == .keep || source == .unkeep)
-            chip("trash.fill", "Delete", lit: source == .delete || source == .emptyBin)
-            chip("square.and.arrow.up", "Share", lit: source == .share || source == .album)
-            chip("arrow.down.right.and.arrow.up.left", "Shrink", lit: source == .shrink)
-        }
-    }
-
-    private func chip(_ symbol: String, _ word: String, lit: Bool) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: symbol)
-                .font(.system(size: 13, weight: .semibold))
-            Text(word)
-                .font(.system(size: 14, weight: .semibold, design: .rounded))
-        }
-        .foregroundStyle(lit ? Color.black : .white)
-        .padding(.horizontal, 12)
-        .frame(height: 34)
-        .background {
-            if lit {
-                Capsule().fill(Self.sky)
-                    .shadow(color: Self.sky.opacity(0.5), radius: 10, x: 0, y: 3)
-            }
-        }
-        .feedGlass(in: Capsule())
-        .accessibilityLabel(word)
     }
 
     // MARK: - Products / dead ends
@@ -293,7 +257,8 @@ struct PaywallView: View {
                         eyebrow: PaywallCopy.monthlyEyebrow,
                         period: PaywallCopy.monthlyPeriod,
                         caption: subscribeCaption,
-                        button: PaywallCopy.subscribeButton
+                        button: PaywallCopy.subscribeButton,
+                        captionIdentifier: "paywall_terms_text"
                     ))
                     .accessibilityIdentifier("paywall_monthly")
                 ProductView(id: StoreProducts.lifetime)
@@ -383,37 +348,6 @@ struct PaywallView: View {
 
     private var footer: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Text(PaywallCopy.terms)
-                .font(.footnote)
-                .foregroundStyle(.white.opacity(0.5))
-                .lineSpacing(2)
-                .accessibilityIdentifier("paywall_terms_text")
-
-            HStack(spacing: 22) {
-                Button(PaywallCopy.settingsRowRestore) {
-                    Usage.shared.paywallLink(.restore)
-                    Task {
-                        let outcome = await entitlements.restore()
-                        switch outcome {
-                        case .restored: restoreAlertMessage = PaywallCopy.restoreRestored
-                        case .nothingFound: restoreAlertMessage = PaywallCopy.restoreNothingFound
-                        case .failed: restoreAlertMessage = PaywallCopy.restoreFailed
-                        }
-                        showRestoreAlert = true
-                    }
-                }
-                .disabled(entitlements.isRestoring)
-                .accessibilityIdentifier("paywall_restore")
-
-                Link(PaywallCopy.termsLinkLabel, destination: Self.termsURL)
-                    .accessibilityIdentifier("paywall_terms")
-
-                Link(PaywallCopy.privacyLinkLabel, destination: Self.privacyURL)
-                    .accessibilityIdentifier("paywall_privacy")
-            }
-            .font(.system(.footnote, design: .rounded).weight(.semibold))
-            .foregroundStyle(.white.opacity(0.8))
-
             // The owner's own note, as a quiet card: one person, one
             // address, no sales voice.
             VStack(alignment: .leading, spacing: 8) {
@@ -434,6 +368,35 @@ struct PaywallView: View {
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
             .feedGlass(in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+
+            HStack(spacing: 20) {
+                Button(PaywallCopy.settingsRowRestore) {
+                    Usage.shared.paywallLink(.restore)
+                    Task {
+                        let outcome = await entitlements.restore()
+                        switch outcome {
+                        case .restored: restoreAlertMessage = PaywallCopy.restoreRestored
+                        case .nothingFound: restoreAlertMessage = PaywallCopy.restoreNothingFound
+                        case .failed: restoreAlertMessage = PaywallCopy.restoreFailed
+                        }
+                        showRestoreAlert = true
+                    }
+                }
+                .disabled(entitlements.isRestoring)
+                .accessibilityIdentifier("paywall_restore")
+
+                Link(PaywallCopy.termsLinkLabel, destination: Self.termsURL)
+                    .accessibilityIdentifier("paywall_terms")
+
+                Link(PaywallCopy.privacyLinkLabel, destination: Self.privacyURL)
+                    .accessibilityIdentifier("paywall_privacy")
+
+                Link(PaywallCopy.supportPageLinkLabel, destination: Self.supportPageURL)
+                    .accessibilityIdentifier("paywall_support_page")
+            }
+            .font(.system(.footnote, design: .rounded).weight(.semibold))
+            .foregroundStyle(.white.opacity(0.8))
+            .frame(maxWidth: .infinity)
         }
     }
 }
@@ -452,6 +415,7 @@ private struct PaywallCardStyle: ProductViewStyle {
     let period: String
     let caption: String
     let button: String
+    var captionIdentifier: String = ""
 
     func makeBody(configuration: Configuration) -> some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -470,10 +434,14 @@ private struct PaywallCardStyle: ProductViewStyle {
                     .foregroundStyle(.white.opacity(0.6))
             }
 
+            // For the monthly card this is Apple's 3.1.2 disclosure: trial
+            // length, then price and period, then "cancel any time" — all
+            // numbers read from the product, never typed.
             Text(caption)
                 .font(.footnote)
                 .foregroundStyle(.white.opacity(0.7))
                 .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier(captionIdentifier)
 
             Button {
                 configuration.purchase()
