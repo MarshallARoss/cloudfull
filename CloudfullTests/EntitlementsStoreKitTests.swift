@@ -149,7 +149,14 @@ struct EntitlementsStoreKitTests {
         await entitlements.refresh()
 
         _ = try await session.buyProduct(identifier: StoreProducts.monthly)
-        await entitlements.refresh()
+        // StoreKit Test lists the new entitlement a moment after
+        // `buyProduct` returns (seen once in the 2026-11-04 preflight: a
+        // refresh 0.1 s later still read `.locked`), so poll.
+        for _ in 0..<25 {
+            await entitlements.refresh()
+            if case .monthly = entitlements.access { break }
+            try await Task.sleep(nanoseconds: 200_000_000)
+        }
 
         guard case let .monthly(_, isTrial, _, _) = entitlements.access else {
             Issue.record("Expected .monthly, got \(entitlements.access)")
