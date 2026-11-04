@@ -271,7 +271,7 @@ on a change of shape/mode or at the end of a session.
 | `manageSubscriptionOpened` | The system "Manage Subscription" sheet was opened. | Exact integer, running total. |
 | `entitlement` | The access state the app resolved to for this session (`unknown`, `fork`, `debug`, `grandfathered`, `trial`, `monthly`, `lifetime`, `none`). | One of a fixed set of names. |
 | `entitlementAtOpen` | The first access state of the session, written once. A session that starts locked and then buys keeps `none` here while `entitlement` moves on, so the locked-session funnel still counts it. | One of the same fixed set of names. |
-| `subscription.ageDays` | Days since the monthly plan was first bought, on a session with an active monthly plan. | Exact integer. |
+| `subscription.ageDays` | Days since the monthly plan was first bought, on a session with an active monthly plan. Apple keeps the first purchase date across a lapse and a resubscribe, so this is days since the first-ever subscription, not unbroken tenure. | Exact integer. |
 | `subscription.autoRenew` | Whether the monthly plan will renew (`true`/`false`). `false` with a rising `subscription.ageDays` is a canceller running out the clock. | `true` or `false`. |
 | `trial.daysLeft` | Days left in a free trial, written only while `entitlement` is `trial`. | Exact integer. |
 | `daysToFirst.paywall` / `daysToFirst.purchase` | Days from install to the first paywall raise, and to the first successful purchase, each written once ever. | Exact integer, written once per phone. |

@@ -43,6 +43,11 @@ struct PaywallView: View {
     @State private var restoreAlertMessage = ""
     /// Drives the staggered reveal on first appearance.
     @State private var revealed = false
+    /// One size for the title and the card prices, scaled with Dynamic
+    /// Type so the price stays as big as the title at every text size.
+    @ScaledMetric(relativeTo: .largeTitle) private var headlineSize: CGFloat = 32
+    /// Duo book pose: the column stops short of spanning the hinge.
+    private static let maxColumnWidth: CGFloat = 440
 
     private static let termsURL = URL(string: "https://cloudfull.app/terms/")!
     private static let privacyURL = URL(string: "https://cloudfull.app/privacy/")!
@@ -60,7 +65,7 @@ struct PaywallView: View {
     }
 
     private var screen: some View {
-        ZStack(alignment: .topTrailing) {
+        ZStack {
             NightSky()
 
             // The column fills the screen, so the link row sits on the
@@ -90,7 +95,8 @@ struct PaywallView: View {
                     .padding(.horizontal, 20)
                     .padding(.top, 16)
                     .padding(.bottom, 20)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(maxWidth: Self.maxColumnWidth, alignment: .leading)
+                    .frame(maxWidth: .infinity)
                     .frame(minHeight: proxy.size.height)
                 }
                 .scrollBounceBehavior(.basedOnSize)
@@ -179,7 +185,7 @@ struct PaywallView: View {
             Image(systemName: "xmark")
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(.white)
-                .frame(width: 40, height: 40)
+                .frame(width: 44, height: 44)   // the 44 pt minimum tap target
                 .feedGlassButton(in: .circle)
         }
         .buttonStyle(.plain)
@@ -204,11 +210,11 @@ struct PaywallView: View {
             .padding(.bottom, 4)
             // App Review 3.1.2 compares the billed price with any "free"
             // or trial wording: the price must be at least as prominent.
-            // The card price below is 32 pt bold; this title is 32 pt, so
-            // the price is as big as anything else on the screen, and the
-            // owner's title must not say "free" (see the copy table).
+            // The card price and this title share one scaled 32 pt size
+            // (`@ScaledMetric`, so both follow Dynamic Type together), and
+            // the owner's title must not say "free".
             Text(PaywallCopy.title)
-                .font(.system(size: 32, weight: .bold, design: .rounded))
+                .font(.system(size: headlineSize, weight: .bold, design: .rounded))
                 .foregroundStyle(.white)
                 .accessibilityAddTraits(.isHeader)
             Text(PaywallCopy.body)
@@ -266,24 +272,39 @@ struct PaywallView: View {
             .feedGlass(in: RoundedRectangle(cornerRadius: 28, style: .continuous))
         } else {
             VStack(spacing: 14) {
-                ProductView(id: StoreProducts.monthly)
-                    .productViewStyle(PaywallCardStyle(
-                        eyebrow: PaywallCopy.monthlyEyebrow,
-                        period: PaywallCopy.monthlyPeriod,
-                        caption: subscribeCaption,
-                        button: PaywallCopy.subscribeButton,
-                        captionIdentifier: "paywall_terms_text"
-                    ))
-                    .accessibilityIdentifier("paywall_monthly")
-                ProductView(id: StoreProducts.lifetime)
-                    .productViewStyle(PaywallCardStyle(
-                        eyebrow: PaywallCopy.lifetimeEyebrow,
-                        period: PaywallCopy.lifetimePeriod,
-                        caption: PaywallCopy.buyLabel,
-                        button: PaywallCopy.buyButton
-                    ))
-                    .accessibilityIdentifier("paywall_lifetime")
+                // Built from the `Product` Entitlements already loaded, so
+                // the card never does a second load of its own that could
+                // fail on its own; `ProductView(id:)` is only the fallback
+                // while that first load is still in flight.
+                productCard(id: StoreProducts.monthly, style: PaywallCardStyle(
+                    eyebrow: PaywallCopy.monthlyEyebrow,
+                    period: PaywallCopy.monthlyPeriod,
+                    caption: subscribeCaption,
+                    button: PaywallCopy.subscribeButton,
+                    priceSize: headlineSize,
+                    captionIdentifier: "paywall_terms_text",
+                    retry: { Task { await entitlements.refresh() } }
+                ))
+                .accessibilityIdentifier("paywall_monthly")
+                productCard(id: StoreProducts.lifetime, style: PaywallCardStyle(
+                    eyebrow: PaywallCopy.lifetimeEyebrow,
+                    period: PaywallCopy.lifetimePeriod,
+                    caption: PaywallCopy.buyLabel,
+                    button: PaywallCopy.buyButton,
+                    priceSize: headlineSize,
+                    retry: { Task { await entitlements.refresh() } }
+                ))
+                .accessibilityIdentifier("paywall_lifetime")
             }
+        }
+    }
+
+    @ViewBuilder
+    private func productCard(id: String, style: PaywallCardStyle) -> some View {
+        if let product = entitlements.products.first(where: { $0.id == id }) {
+            ProductView(product).productViewStyle(style)
+        } else {
+            ProductView(id: id).productViewStyle(style)
         }
     }
 
@@ -384,8 +405,27 @@ struct PaywallView: View {
     }
 
     /// Restore, Terms, Privacy, Support: the last row, on the bottom edge.
+    /// One row when it fits; two rows of two at larger text sizes or on a
+    /// narrow screen, so nothing truncates.
     private var linkRow: some View {
-        HStack(spacing: 22) {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 22) {
+                restoreButton
+                termsLink
+                privacyLink
+                supportPageLink
+            }
+            VStack(spacing: 12) {
+                HStack(spacing: 22) { restoreButton; termsLink }
+                HStack(spacing: 22) { privacyLink; supportPageLink }
+            }
+        }
+        .font(.system(.footnote, design: .rounded).weight(.semibold))
+        .foregroundStyle(.white.opacity(0.7))
+        .frame(maxWidth: .infinity)
+    }
+
+    private var restoreButton: some View {
             Button(PaywallCopy.settingsRowRestore) {
                 Usage.shared.paywallLink(.restore)
                 Task {
@@ -400,19 +440,21 @@ struct PaywallView: View {
             }
             .disabled(entitlements.isRestoring)
             .accessibilityIdentifier("paywall_restore")
+    }
 
-            Link(PaywallCopy.termsLinkLabel, destination: Self.termsURL)
-                .accessibilityIdentifier("paywall_terms")
+    private var termsLink: some View {
+        Link(PaywallCopy.termsLinkLabel, destination: Self.termsURL)
+            .accessibilityIdentifier("paywall_terms")
+    }
 
-            Link(PaywallCopy.privacyLinkLabel, destination: Self.privacyURL)
-                .accessibilityIdentifier("paywall_privacy")
+    private var privacyLink: some View {
+        Link(PaywallCopy.privacyLinkLabel, destination: Self.privacyURL)
+            .accessibilityIdentifier("paywall_privacy")
+    }
 
-            Link(PaywallCopy.supportPageLinkLabel, destination: Self.supportPageURL)
-                .accessibilityIdentifier("paywall_support_page")
-        }
-        .font(.system(.footnote, design: .rounded).weight(.semibold))
-        .foregroundStyle(.white.opacity(0.7))
-        .frame(maxWidth: .infinity)
+    private var supportPageLink: some View {
+        Link(PaywallCopy.supportPageLinkLabel, destination: Self.supportPageURL)
+            .accessibilityIdentifier("paywall_support_page")
     }
 }
 
@@ -423,14 +465,18 @@ struct PaywallView: View {
 /// through the `.onInAppPurchase…` modifiers on `PaywallView`; this style
 /// only draws the card and calls `configuration.purchase()`.
 ///
-/// The price is the biggest text on the whole screen (32 pt bold), which
-/// is what App Review's price-prominence rule asks for.
+/// The price shares the title's scaled 32 pt size, the biggest text on the
+/// screen, which is what App Review's price-prominence rule asks for.
 private struct PaywallCardStyle: ProductViewStyle {
     let eyebrow: String
     let period: String
     let caption: String
     let button: String
+    let priceSize: CGFloat
     var captionIdentifier: String = ""
+    /// Runs when StoreKit reports `.failure`/`.unavailable` for this one
+    /// product and the user taps Try again.
+    var retry: () -> Void = {}
 
     func makeBody(configuration: Configuration) -> some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -439,19 +485,28 @@ private struct PaywallCardStyle: ProductViewStyle {
                 .tracking(1.2)
                 .foregroundStyle(.white.opacity(0.55))
 
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                priceText(configuration)
-                    .font(.system(size: 32, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white)
-                    .monospacedDigit()
-                Text(period)
-                    .font(.system(.subheadline, design: .rounded).weight(.medium))
-                    .foregroundStyle(.white.opacity(0.6))
+            // Price and period side by side when they fit; the period
+            // drops under the price at large text sizes. The price never
+            // truncates.
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    price(configuration)
+                    periodText
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    price(configuration)
+                    periodText
+                }
             }
 
-            // For the monthly card this is Apple's 3.1.2 disclosure: trial
-            // length, then price and period, then "cancel any time" — all
-            // numbers read from the product, never typed.
+            if case .failure = configuration.state {
+                unavailableRow
+            } else if case .unavailable = configuration.state {
+                unavailableRow
+            }
+
+            // The monthly card's caption is the owner's "cancel or
+            // purchase anytime" line under Apple's own price.
             Text(caption)
                 .font(.footnote)
                 .foregroundStyle(.white.opacity(0.7))
@@ -475,6 +530,34 @@ private struct PaywallCardStyle: ProductViewStyle {
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .feedGlass(in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+    }
+
+    private func price(_ configuration: Configuration) -> some View {
+        priceText(configuration)
+            .font(.system(size: priceSize, weight: .bold, design: .rounded))
+            .foregroundStyle(.white)
+            .monospacedDigit()
+            .fixedSize()
+            .layoutPriority(1)
+    }
+
+    private var periodText: some View {
+        Text(period)
+            .font(.system(.subheadline, design: .rounded).weight(.medium))
+            .foregroundStyle(.white.opacity(0.6))
+    }
+
+    /// This one product did not load, even though the others might have:
+    /// say so in the card and offer the same Try again as the dead-end card.
+    private var unavailableRow: some View {
+        HStack(spacing: 10) {
+            Text(PaywallCopy.deadEndProductsFailed)
+                .font(.footnote)
+                .foregroundStyle(.white.opacity(0.7))
+            Button(PaywallCopy.tryAgain, action: retry)
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(PaywallView.sky)
+        }
     }
 
     @ViewBuilder

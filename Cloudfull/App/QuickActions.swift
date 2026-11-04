@@ -229,6 +229,9 @@ final class CloudfullSceneDelegate: NSObject, UIWindowSceneDelegate {
     private static func open(_ item: UIApplicationShortcutItem) -> Bool {
         if item.type == QuickActions.onThisDateType {
             Usage.shared.quickActionOnThisDate()
+            if let usageMode = Usage.Mode(rawValue: AppModeStore.preferredOpenMode().rawValue) {
+                Usage.shared.modeSwitch(to: usageMode, via: .quickAction)
+            }
             AppModeStore.shared.selectPreferredOpenMode()
             FeedOptionsStore.shared.applyOnThisDateReminder()
             PhotoOptionsStore.shared.applyOnThisDateReminder()

@@ -17,15 +17,15 @@ enum PaywallCopy {
 
     static let title = "Purchase Cloudfull"
     static let body = "Subscribe or buy to delete, keep, share, organize your media, shrink videos, and more."
-    static let ongoingValueLine = "Monthly keeps the updates and new features coming."
 
     // MARK: - Product captions
 
     /// Two `%@` slots: the trial length ("7 days"), then the localized
-    /// price ("$2.99"). Example shape: "%@ free, then %@ a month."
+    /// price ("$2.99"). Only used if Apple ever reports an introductory
+    /// offer; there is none today (owner, 2026-11-04).
     static let subscribeLabel = "%@ free, then %@ a month. Cancel or purchase anytime."
-    /// One `%@` slot: the localized price. Shown when Apple says the
-    /// user is not eligible for the trial (used it before).
+    /// Shown under the price when there is no introductory offer (today,
+    /// always). No slot: the price sits above it in big type.
     static let subscribeNoTrialLabel = "Cancel or purchase anytime."   // owner, 2026-11-04; no price slot, the price sits above in big type
     static let buyLabel = "Buy forever now."
     /// The small label above each card's price, and the word after it.
@@ -40,7 +40,6 @@ enum PaywallCopy {
 
     // MARK: - Terms footnote
 
-    static let terms = "7 days free, then $2.99 a month until you cancel in Settings. Lifetime is one payment. Buying Lifetime during a trial does not cancel the trial."
 
     // MARK: - Cancel-trial prompt (after a lifetime purchase while a trial auto-renews)
 
@@ -56,9 +55,6 @@ enum PaywallCopy {
     static let deadEndProductsFailed = "The App Store did not answer."
     static let deadEndPaymentsOff = "Purchases are turned off on this iPhone."
     static let deadEndAskToBuyPending = "Waiting for approval."
-    /// Unused since billing retry is no longer a dead end; kept so the
-    /// copy table stays stable. Remove once the owner's copy lands.
-    static let deadEndBillingRetry = "Your last payment did not go through."
     static let tryAgain = "Try again"
 
     // MARK: - Support
@@ -123,13 +119,4 @@ enum PaywallCopy {
 
     // MARK: - Per-source action line
 
-    /// The line naming what unlocking lets the user do, specific to
-    /// whichever rail action raised the paywall. Owner dictates one line
-    /// per `Entitlements.PaywallSource` case; the owner edits them in context.
-    static func actionLine(for source: Entitlements.PaywallSource) -> String {
-        switch source {
-        case .settings: return "Unlock the actions. Scrolling stays free."
-        default: return "That one needs Cloudfull."
-        }
-    }
 }
