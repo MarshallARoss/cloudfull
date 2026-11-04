@@ -426,6 +426,14 @@ final class Entitlements: ObservableObject {
                     return .unverified
                 }
                 await transaction.finish()
+                #if DEBUG
+                // A fixed override (None, Trial, …) would hide the real
+                // result of the purchase that just succeeded. Flip to
+                // Real so the phone shows what Apple now says.
+                if AccessOverride.shared.value != .auto, AccessOverride.shared.value != .real {
+                    AccessOverride.shared.value = .real
+                }
+                #endif
                 // Checked before `refresh()`: the refresh unlocks access,
                 // and the unlock drops the paywall cover unless the hold
                 // is already set.
