@@ -19,8 +19,8 @@
 #
 # Each standard round reseeds the library, then compares the seeder
 # count, Photos.sqlite, and the app's reported library count. It then
-# runs, in order: M8Tests, M6Tests, M3ShrinkTests, M4Tests, M5Tests, and
-# finally M1ExitTests together with M2TrashTests.
+# runs, in order: M8Tests, M6Tests, M3ShrinkTests, M4Tests, M5Tests, then
+# M1ExitTests together with M2TrashTests, and finally M12PaywallTests.
 #
 # M8Tests runs first, right after the reseed. It needs three tests live
 # and unqueued: testShrinkableFilterNarrowsPoolAndEveryPageMatches,
@@ -34,13 +34,16 @@
 #
 # M4Tests runs next, and the gate then counts the album M4Tests
 # created. M5Tests runs after that, skipping its scale-only performance
-# test. M1ExitTests and M2TrashTests run last together, and the gate
+# test. M1ExitTests and M2TrashTests run together next, and the gate
 # then verifies that M2TrashTests' bin-emptying deleted and restored
 # the correct assets. It compares each id with Photos.sqlite.
+# M12PaywallTests runs last, once that verification has already read its
+# log window — see the comment above its own invocation for why the
+# order matters there.
 #
-# Each standard round runs 30 tests. It runs 8 from M8Tests, 4 from
-# M6Tests, 4 from M3ShrinkTests, 3 from M4Tests, 7 from M5Tests, and 4
-# from M1ExitTests and M2TrashTests together.
+# Each standard round runs 38 tests. It runs 8 from M8Tests, 4 from
+# M6Tests, 4 from M3ShrinkTests, 3 from M4Tests, 7 from M5Tests, 4 from
+# M1ExitTests and M2TrashTests together, and 8 from M12PaywallTests.
 #
 # The gate runs these suites as separate xcodebuild invocations, in this
 # fixed order, for two reasons. First, M2TrashTests queues 20 videos and
@@ -572,6 +575,24 @@ for run in 1 2; do
 
   run_m2_identity_proof "$m1m2_start"
 
+  # M12PaywallTests runs last in the round, after `run_m2_identity_proof`
+  # has already read its log window. `testLockedEmptyBinGates` and
+  # `testLapsedUserCanUnqueueInFeed` each restore one queued video (the
+  # first through the bin's own Restore button, the second through a
+  # second rail_trash tap in the feed), and both paths log the same
+  # "trash_restored_" line `run_m2_identity_proof` scans for. Running M12
+  # any earlier, or in the same invocation, would let those lines land
+  # inside the M1+M2 identity proof's window and inflate its restored
+  # count past 3. M12 deletes nothing: every video it queues it also
+  # un-queues, so it changes nothing else this round depends on.
+  echo "## --- M12 ---"
+  if ! run_and_check "$LOGDIR/gate_run${run}_m12.log" "run $run M12" 8 \
+      xcodebuild test-without-building -project "$PROJ/Cloudfull.xcodeproj" -scheme Cloudfull \
+      -only-testing:CloudfullUITests/M12PaywallTests \
+      -destination "$DEST" -derivedDataPath "$DD"; then
+    exit 1
+  fi
+
   # `export_probe_values` forwards every "## PROBE " line. This includes
   # the m5_*, m6_*, and m8_* probes.
   export_probe_values "round $run" "$LOGDIR/gate_run${run}_m5.log" "$LOGDIR/gate_run${run}_m6.log" "$LOGDIR/gate_run${run}_m8.log"
@@ -638,6 +659,6 @@ if [[ "$FENCE_END" != "$FENCE_START" ]]; then
 fi
 
 FINISHED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-echo "################ GATE COMPLETE — 2/2 standard rounds + 1 scale round, 63/63 tests passed ################"
+echo "################ GATE COMPLETE — 2/2 standard rounds + 1 scale round, 78/78 tests passed ################"
 echo "## RECORD RULE: this log may be cited only while the source fence is still"
 echo "##   $FENCE_END.  Gate finished $FINISHED_AT."
