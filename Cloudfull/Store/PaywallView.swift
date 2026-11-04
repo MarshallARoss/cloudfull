@@ -71,7 +71,7 @@ struct PaywallView: View {
                     VStack(alignment: .leading, spacing: 0) {
                         hero
                             .reveal(revealed, order: 0, reduceMotion: reduceMotion)
-                        Spacer(minLength: 36)
+                        Spacer(minLength: 28)
                         if showsPaymentIssueBanner {
                             paymentIssueBanner
                                 .reveal(revealed, order: 1, reduceMotion: reduceMotion)
@@ -79,16 +79,16 @@ struct PaywallView: View {
                         }
                         productSection
                             .reveal(revealed, order: 1, reduceMotion: reduceMotion)
-                        Spacer(minLength: 36)
+                        Spacer(minLength: 28)
                         messageCard
                             .reveal(revealed, order: 2, reduceMotion: reduceMotion)
-                        Spacer(minLength: 28)
+                        Spacer(minLength: 22)
                         linkRow
                             .reveal(revealed, order: 3, reduceMotion: reduceMotion)
                         // 1.2: "Have a code?" row (.offerCodeRedemption) goes here
                     }
                     .padding(.horizontal, 20)
-                    .padding(.top, 84)   // clears the close button
+                    .padding(.top, 56)   // clears the close button
                     .padding(.bottom, 20)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .frame(minHeight: proxy.size.height)
@@ -196,21 +196,21 @@ struct PaywallView: View {
     private var hero: some View {
         VStack(alignment: .leading, spacing: 16) {
             Image(systemName: "cloud.fill")
-                .font(.system(size: 48, weight: .semibold))
+                .font(.system(size: 44, weight: .semibold))
                 .foregroundStyle(Self.sky)
                 .shadow(color: Self.sky.opacity(0.55), radius: 22, x: 0, y: 6)
-                .padding(.bottom, 10)
+                .padding(.bottom, 4)
             // App Review 3.1.2 compares the billed price with any "free"
             // or trial wording: the price must be at least as prominent.
-            // The card price below is 34 pt bold; this title is 32 pt, so
-            // the price stays the biggest number on the screen, and the
+            // The card price below is 32 pt bold; this title is 32 pt, so
+            // the price is as big as anything else on the screen, and the
             // owner's title must not say "free" (see the copy table).
             Text(PaywallCopy.title)
                 .font(.system(size: 32, weight: .bold, design: .rounded))
                 .foregroundStyle(.white)
                 .accessibilityAddTraits(.isHeader)
             Text(PaywallCopy.body)
-                .font(.system(.title3, design: .rounded))
+                .font(.system(.body, design: .rounded))
                 .foregroundStyle(.white.opacity(0.75))
                 .lineSpacing(3)
         }
@@ -263,7 +263,7 @@ struct PaywallView: View {
             .padding(.horizontal, 20)
             .feedGlass(in: RoundedRectangle(cornerRadius: 28, style: .continuous))
         } else {
-            VStack(spacing: 18) {
+            VStack(spacing: 14) {
                 ProductView(id: StoreProducts.monthly)
                     .productViewStyle(PaywallCardStyle(
                         eyebrow: PaywallCopy.monthlyEyebrow,
@@ -376,7 +376,7 @@ struct PaywallView: View {
             }
             .accessibilityIdentifier("paywall_support")
         }
-        .padding(18)
+        .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .feedGlass(in: RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
@@ -421,7 +421,7 @@ struct PaywallView: View {
 /// through the `.onInAppPurchase…` modifiers on `PaywallView`; this style
 /// only draws the card and calls `configuration.purchase()`.
 ///
-/// The price is the biggest text on the whole screen (34 pt bold), which
+/// The price is the biggest text on the whole screen (32 pt bold), which
 /// is what App Review's price-prominence rule asks for.
 private struct PaywallCardStyle: ProductViewStyle {
     let eyebrow: String
@@ -431,7 +431,7 @@ private struct PaywallCardStyle: ProductViewStyle {
     var captionIdentifier: String = ""
 
     func makeBody(configuration: Configuration) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 10) {
             Text(eyebrow.uppercased())
                 .font(.system(size: 12, weight: .bold, design: .rounded))
                 .tracking(1.2)
@@ -439,7 +439,7 @@ private struct PaywallCardStyle: ProductViewStyle {
 
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 priceText(configuration)
-                    .font(.system(size: 34, weight: .bold, design: .rounded))
+                    .font(.system(size: 32, weight: .bold, design: .rounded))
                     .foregroundStyle(.white)
                     .monospacedDigit()
                 Text(period)
@@ -462,7 +462,7 @@ private struct PaywallCardStyle: ProductViewStyle {
                 Text(button)
                     .font(.system(.body, design: .rounded).weight(.bold))
                     .frame(maxWidth: .infinity)
-                    .frame(height: 48)
+                    .frame(height: 44)
             }
             .buttonStyle(.glassProminent)
             .tint(PaywallView.sky)
@@ -470,9 +470,9 @@ private struct PaywallCardStyle: ProductViewStyle {
             .disabled(configuration.product == nil)
             .padding(.top, 2)
         }
-        .padding(20)
+        .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .feedGlass(in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+        .feedGlass(in: RoundedRectangle(cornerRadius: 26, style: .continuous))
     }
 
     @ViewBuilder
