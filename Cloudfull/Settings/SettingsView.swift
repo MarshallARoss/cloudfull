@@ -44,6 +44,15 @@ struct SettingsView: View {
     /// independent readers of the same `UserDefaults` key are not
     /// reliable enough for this button to work.
     @ObservedObject private var onboardingGate = OnboardingGateState.shared
+    /// Backs `accessSection` below: the unlock status row, and the
+    /// Unlock / Manage Subscription / Buy Lifetime / Restore rows that
+    /// depend on it.
+    @ObservedObject private var entitlements = Entitlements.shared
+    #if DEBUG
+    /// Backs the DEBUG-only "Access override" picker in
+    /// `diagnosticsSection`.
+    @ObservedObject private var accessOverride = AccessOverride.shared
+    #endif
     /// Drives the on-demand welcome screen. See the Help section below.
     @State private var showWelcome = false
     @State private var freeSpaceText = "…"
@@ -55,6 +64,11 @@ struct SettingsView: View {
     @StateObject private var tipJar = TipJar()
     /// Shows the thank-you alert after a successful tip purchase.
     @State private var showTipThankYou = false
+    /// Backs `settings_manage_subscription`'s `.manageSubscriptionsSheet`.
+    @State private var showManageSubscriptions = false
+    /// Backs `settings_restore`'s outcome alert.
+    @State private var showRestoreAlert = false
+    @State private var restoreAlertMessage = ""
     #if DEBUG
     /// Backs the DEBUG-only "Diagnostics readouts" row at the bottom.
     @ObservedObject private var diagnostics = DiagnosticsSwitch.shared
@@ -140,6 +154,7 @@ struct SettingsView: View {
                         preferencesSection
                         layoutSection(duoLayout: duoLayout)
                         storageSection
+                        accessSection
                         assistanceSection
                         tipJarSection
                         otherProjectsSection
@@ -231,6 +246,19 @@ struct SettingsView: View {
             } message: {
                 Text("Your tip helps keep Cloudfull going.")
             }
+            .alert("", isPresented: $showRestoreAlert) {
+                Button(PaywallCopy.alertOK, role: .cancel) {}
+                    .accessibilityIdentifier("settings_restore_alert")
+            } message: {
+                Text(restoreAlertMessage)
+            }
+            // `.manageSubscriptionsSheet` needs the subscription group id
+            // to scope itself to the Cloudfull Unlock group; falls back to
+            // the whole-app overload until the monthly product has loaded.
+            .modifier(ManageSubscriptionsSheetModifier(
+                isPresented: $showManageSubscriptions,
+                subscriptionGroupID: entitlements.subscriptionGroupID
+            ))
         }
     }
 
@@ -364,6 +392,100 @@ struct SettingsView: View {
         }
     }
 
+    // Shows the unlock status, and whichever of Unlock / Manage
+    // Subscription / Buy Lifetime / Restore applies to it.
+    private var accessSection: some View {
+        Section(PaywallCopy.settingsSectionHeader) {
+            accessStatusRow
+            if entitlements.access == .locked || entitlements.access == .unknown {
+                Button(PaywallCopy.settingsRowUnlock) {
+                    entitlements.presentPaywall(from: .settings)
+                }
+                .accessibilityIdentifier("settings_unlock")
+            }
+            if entitlements.hasLiveSubscription {
+                Button(PaywallCopy.settingsRowManageSubscription) {
+                    showManageSubscriptions = true
+                    entitlements.manageSubscriptionsOpened()
+                }
+                .accessibilityIdentifier("settings_manage_subscription")
+            }
+            if isMonthlyAccess {
+                Button(PaywallCopy.settingsRowBuyLifetime) {
+                    entitlements.presentPaywall(from: .settings)
+                }
+                .accessibilityIdentifier("settings_buy_lifetime")
+            }
+            if entitlements.access != .fork {
+                Button(PaywallCopy.settingsRowRestore) {
+                    Task {
+                        let outcome = await entitlements.restore()
+                        switch outcome {
+                        case .restored: restoreAlertMessage = PaywallCopy.restoreRestored
+                        case .nothingFound: restoreAlertMessage = PaywallCopy.restoreNothingFound
+                        case .failed: restoreAlertMessage = PaywallCopy.restoreFailed
+                        }
+                        showRestoreAlert = true
+                    }
+                }
+                .disabled(entitlements.isRestoring)
+                .accessibilityIdentifier("settings_restore")
+            }
+        }
+    }
+
+    private var isMonthlyAccess: Bool {
+        if case .monthly = entitlements.access { return true }
+        return false
+    }
+
+    /// The status line, plus up to two secondary lines: a payment
+    /// warning (grace period or billing retry), and a note for a
+    /// lifetime owner whose old monthly subscription is still live.
+    private var accessStatusRow: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(accessStatusText)
+            if showsPaymentWarning {
+                Text(PaywallCopy.settingsStatusPaymentWarning)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            if showsLifetimeStillRenewing {
+                Text(PaywallCopy.settingsStatusLifetimeStillRenewing)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("settings_access_status")
+    }
+
+    private var showsPaymentWarning: Bool {
+        entitlements.subscriptionStatus?.state == .inGracePeriod || entitlements.subscriptionStatus?.state == .inBillingRetryPeriod
+    }
+
+    private var showsLifetimeStillRenewing: Bool {
+        entitlements.access == .lifetime && entitlements.hasLiveSubscription
+    }
+
+    private var accessStatusText: String {
+        switch entitlements.access {
+        case .locked: return PaywallCopy.settingsStatusNone
+        case .unknown: return PaywallCopy.settingsStatusUnknown
+        case .monthly(let expiresAt, let isTrial, let willAutoRenew, _):
+            let dateText = expiresAt?.formatted(date: .abbreviated, time: .omitted) ?? ""
+            if isTrial { return String(format: PaywallCopy.settingsStatusTrial, dateText) }
+            if willAutoRenew { return String(format: PaywallCopy.settingsStatusMonthlyRenews, dateText) }
+            return String(format: PaywallCopy.settingsStatusMonthlyCancelled, dateText)
+        case .lifetime: return PaywallCopy.settingsStatusLifetime
+        case .grandfathered: return PaywallCopy.settingsStatusGrandfathered
+        case .fork: return "Open-source build"   // not owner copy: this only shows in a fork, which the owner never ships
+        #if DEBUG
+        case .debugUnlocked: return "Debug: unlocked"
+        #endif
+        }
+    }
+
     // The app has two first-run screens: the welcome screen before
     // photo access and the tour after it. After the user grants access,
     // only this section can show the welcome screen. The links after
@@ -393,6 +515,10 @@ struct SettingsView: View {
                 linkRow("Privacy policy")
             }
             .accessibilityIdentifier("settings_privacy")
+            Link(destination: SettingsLinks.terms) {
+                linkRow(PaywallCopy.settingsRowTerms)
+            }
+            .accessibilityIdentifier("settings_terms")
             Link(destination: SettingsLinks.sourceCode) {
                 linkRow("Contribute to the source code")
             }
@@ -444,6 +570,17 @@ struct SettingsView: View {
         Section {
             Toggle("Diagnostics readouts", isOn: $diagnostics.isOn)
                 .accessibilityIdentifier("settings_diagnostics")
+            // Exercises every paywall/access state with no sandbox
+            // purchase. See `AccessOverride`'s own doc comment.
+            Picker("Access override", selection: $accessOverride.value) {
+                ForEach(AccessOverride.Value.allCases, id: \.self) { value in
+                    Text(value.rawValue.capitalized).tag(value)
+                }
+            }
+            .accessibilityIdentifier("settings_debug_access")
+            .onChange(of: accessOverride.value) { _, _ in
+                Task { await Entitlements.shared.refresh() }
+            }
         }
     }
     #endif
@@ -621,6 +758,7 @@ private enum SettingsLinks {
     static let website = URL(string: "https://cloudfull.app")!
     static let support = URL(string: "https://cloudfull.app/support/")!
     static let privacy = URL(string: "https://cloudfull.app/privacy/")!
+    static let terms = URL(string: "https://cloudfull.app/terms/")!
     static let sourceCode = URL(string: "https://github.com/MarshallARoss/cloudfull")!
     static let feelsMusic = URL(string: "https://feelsmusic.com/")!
     static let guestBets = URL(string: "https://guestbets.com/")!
@@ -636,6 +774,7 @@ private enum SettingsLinks {
         case website: return .website
         case support: return .contact
         case privacy: return .privacy
+        case terms: return .terms
         case sourceCode: return .sourceCode
         case feelsMusic: return .feelsMusic
         case guestBets: return .guestBets

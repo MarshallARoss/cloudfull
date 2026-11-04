@@ -19,6 +19,8 @@ import AVFoundation
 /// The visual design matches Photos' Recently Deleted screen.
 struct TrashView: View {
     @ObservedObject var trashService: TrashService
+    /// Drives the Empty Bin paywall cover at the end of `body`.
+    @ObservedObject private var entitlements = Entitlements.shared
     @Environment(\.dismiss) private var dismiss
     /// At an accessibility Dynamic Type size, `binChin` drops the
     /// explainer text — the button alone can already need the chin's full
@@ -147,6 +149,16 @@ struct TrashView: View {
         // makes a new `TrashView` each time. It checks which queued assets
         // still exist in the library immediately.
         .task { await trashService.refreshLiveness() }
+        // The Empty Bin paywall. This bin is itself a sheet, so the root
+        // cover in `PermissionGateView` cannot appear above it; this
+        // view presents that one source itself, and the root cover skips
+        // it. Same `PaywallView`, same dismissal.
+        .fullScreenCover(item: Binding(
+            get: { entitlements.paywallRequest == .emptyBin ? Entitlements.PaywallSource.emptyBin : nil },
+            set: { if $0 == nil, entitlements.paywallRequest != nil { entitlements.dismissPaywall() } }
+        )) { source in
+            PaywallView(source: source)
+        }
     }
 
     /// A `false` result means the restore save failed, so the row is still
@@ -404,8 +416,11 @@ struct TrashView: View {
     /// change. An empty result means none of the queued ids still resolved
     /// in the library, so the delete frees nothing.
     private func performEmpty() async {
+        var allowed = false
+        Entitlements.shared.require(.emptyBin) { allowed = true }
+        guard allowed else { return }
         isEmptying = true
-        Usage.shared.binEmptyAttempted()   // Counts each Empty Bin tap. Compare with `binEmptied` to find how many users cancel the system dialog.
+        Usage.shared.binEmptyAttempted()   // Counts each unlocked Empty Bin tap (a locked tap counts `paywall.shown.emptyBin` instead). Compare with `binEmptied` to find how many users cancel the system dialog.
         // Record the bytes for each id before the delete. Do not read
         // `trashService.pendingBytes` after it. PhotoKit skips an id that
         // no longer resolves. The freed-space message counts only deleted
