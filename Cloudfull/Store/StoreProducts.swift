@@ -34,12 +34,13 @@ enum StoreProducts {
     /// signal: an original purchase dated before this day was a paid
     /// download, even if `paidBuilds` does not name its exact build.
     ///
-    /// Until release day this is `.distantPast`, so the signal is OFF: no
-    /// purchase date can be earlier than it. (A far-future placeholder
-    /// would do the opposite and grandfather every install.) Release day
-    /// (PR 7) sets it to the real date the price changed, for example
-    /// `ISO8601DateFormatter().date(from: "2026-11-20T00:00:00Z")!`.
-    static let freeSinceDate: Date = .distantPast
+    /// Set to the day of the 1.1 TestFlight upload (2026-11-04): every
+    /// original purchase before it was a $6.99 download, since the price
+    /// cannot become Free before this build exists. A later date would
+    /// only risk missing a paid buyer; an earlier one changes nothing.
+    /// (A far-future value would grandfather every install; `.distantPast`
+    /// turns the signal off.)
+    static let freeSinceDate: Date = ISO8601DateFormatter().date(from: "2026-11-04T00:00:00Z") ?? .distantPast
 
     /// False for an open-source fork built under a different bundle id. A
     /// fork never shows the paywall.
