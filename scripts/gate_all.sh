@@ -41,8 +41,8 @@
 # log window — see the comment above its own invocation for why the
 # order matters there.
 #
-# Each standard round runs 41 tests. It runs 8 from M8Tests, 4 from
-# M6Tests, 4 from M3ShrinkTests, 5 from M4Tests, 7 from M5Tests, 4 from
+# Each standard round runs 40 tests. It runs 8 from M8Tests, 4 from
+# M6Tests, 4 from M3ShrinkTests, 4 from M4Tests (the parked backfill test is skipped), 7 from M5Tests, 4 from
 # M1ExitTests and M2TrashTests together, and 9 from M12PaywallTests.
 #
 # The gate runs these suites as separate xcodebuild invocations, in this
@@ -541,9 +541,14 @@ for run in 1 2; do
   run_hdr_proof
 
   echo "## --- M4 ---"
-  if ! run_and_check "$LOGDIR/gate_run${run}_m4.log" "run $run M4" 5 \
+  # testCloudKeyBackfillAccountsForEveryRow is the stale test the owner
+  # parked on 2026-09-27 (plan.md, item 65 notes: the seeding launch's own
+  # backfill resolves rows before the relaunch counts them). Skipped here
+  # until it is unparked, the same way the M5 scale test is skipped.
+  if ! run_and_check "$LOGDIR/gate_run${run}_m4.log" "run $run M4" 4 \
       xcodebuild test-without-building -project "$PROJ/Cloudfull.xcodeproj" -scheme Cloudfull \
       -only-testing:CloudfullUITests/M4Tests \
+      -skip-testing:CloudfullUITests/M4Tests/testCloudKeyBackfillAccountsForEveryRow \
       -destination "$DEST" -derivedDataPath "$DD"; then
     exit 1
   fi
@@ -659,6 +664,6 @@ if [[ "$FENCE_END" != "$FENCE_START" ]]; then
 fi
 
 FINISHED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-echo "################ GATE COMPLETE — 2/2 standard rounds + 1 scale round, 85/85 tests passed ################"
+echo "################ GATE COMPLETE — 2/2 standard rounds + 1 scale round, 83/83 tests passed ################"
 echo "## RECORD RULE: this log may be cited only while the source fence is still"
 echo "##   $FENCE_END.  Gate finished $FINISHED_AT."
