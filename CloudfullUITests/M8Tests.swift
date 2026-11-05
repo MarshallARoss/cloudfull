@@ -652,8 +652,33 @@ final class M8Tests: FeedUITestCase {
 
     /// Any accessibility element by identifier, not only buttons. Several
     /// menu items and probes are plain views or bare `Text`, not controls.
+    /// The menu's item titles by identifier. On iOS 27 a SwiftUI `Menu`
+    /// reaches XCUITest as plain buttons in a collection view, carrying
+    /// their title as the label and no identifier at all (measured
+    /// 2026-11-04 from the app's own accessibility tree). The lookup by
+    /// identifier is tried first, for any runtime that still passes the
+    /// identifier through; the lookup by title is the fallback.
+    private static let menuTitles: [String: String] = [
+        "feed_sort_random": "Random",
+        "feed_sort_datenewest": "Newest first",
+        "feed_sort_dateoldest": "Oldest first",
+        "feed_filter_shrinkable": "Shrinkable",
+        "feed_filter_big": "Big (over 100 MB)",
+        "feed_filter_long": "Longer than a minute",
+        "feed_filter_onthisdate": "On this date",
+        "feed_type_video": "Video",
+        "feed_type_slomo": "Slo-mo",
+        "feed_type_timelapse": "Time-lapse",
+        "feed_type_screenrecording": "Screen recording",
+        "feed_type_cinematic": "Cinematic",
+        "feed_filter_reset": "Reset",
+    ]
+
     private func menuItem(_ id: String) -> XCUIElement {
-        app.descendants(matching: .any)[id]
+        let inApp = app.descendants(matching: .any)[id]
+        if inApp.exists { return inApp }
+        guard let title = Self.menuTitles[id] else { return inApp }
+        return app.buttons[title]
     }
 
     /// Taps `feed_filter_button` and waits for the menu to open, proven by

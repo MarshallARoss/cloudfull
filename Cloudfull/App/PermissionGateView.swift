@@ -35,6 +35,11 @@ struct PermissionGateView: View {
     // for why a plain `UserDefaults` reader cannot reliably show the
     // cover again from another screen.
     @ObservedObject private var onboardingGate = OnboardingGateState.shared
+    /// Drives the paywall's `.fullScreenCover`, in `authorizedView`
+    /// below — the same view every rail tap and Settings row routes
+    /// through, so one cover shows above both feeds, every Duo pose,
+    /// and Settings.
+    @ObservedObject private var entitlements = Entitlements.shared
 
     var body: some View {
         ZStack {
@@ -74,6 +79,12 @@ struct PermissionGateView: View {
         .onChange(of: scenePhase) { oldPhase, newPhase in
             if newPhase == .active {
                 library.refreshAuthStatus()
+                // The paywall cover hangs off `authorizedView`. If photo
+                // access just left `.authorized`, that view and its cover
+                // are gone, but a stale request would re-raise the old
+                // paywall, uncounted, when access returns.
+                if library.authStatus != .authorized { Entitlements.shared.clearPaywall() }
+                Task { await Entitlements.shared.refresh() }
             }
             // One session per real foreground. A change from `.inactive`
             // to `.active` — Control Center, a notification banner, a
@@ -90,6 +101,12 @@ struct PermissionGateView: View {
                     liveDefaultOn: UserDefaults.standard.object(forKey: "settings.liveDefaultOn") as? Bool ?? true,
                     reminderOn: DailyReminder.shared.isEnabled,
                     reminderHour: DailyReminder.shared.isEnabled ? Calendar.current.component(.hour, from: DailyReminder.shared.time) : nil
+                )
+                Usage.shared.accessState(
+                    Entitlements.shared.access.analyticsKind,
+                    trialDaysLeft: Entitlements.shared.trialDaysLeft,
+                    subscriptionAgeDays: Entitlements.shared.subscriptionAgeDays,
+                    autoRenew: Entitlements.shared.autoRenew
                 )
                 Self.hasOpenedThisProcess = true
                 Usage.shared.uploadPending()   // retries an upload that the last background period stopped
@@ -189,6 +206,31 @@ struct PermissionGateView: View {
             )) {
                 OnboardingView { onboardingGate.hasCompleted = true }
             }
+            // The paywall. Sits on the same view as the onboarding cover
+            // above, so it covers both feeds, every Duo pose, and
+            // Settings — whichever rail tap, or Settings row, raised it.
+            // A full-screen cover has no swipe; the close button calls
+            // `dismissPaywall()` itself. The setter only covers a
+            // system-driven dismissal. A purchase that unlocks access
+            // clears `paywallRequest` on its own (`Entitlements.apply`),
+            // which drops this cover the same way.
+            .fullScreenCover(item: paywallBinding) { source in
+                PaywallView(source: source)
+            }
+    }
+
+    /// `Entitlements.paywallRequest` as a `Binding`, for the
+    /// `.fullScreenCover(item:)` above.
+    private var paywallBinding: Binding<Entitlements.PaywallSource?> {
+        Binding(
+            // `.emptyBin` is presented by `TrashView` itself: the bin is a
+            // sheet, and a cover from here cannot appear above it.
+            get: { entitlements.paywallRequest == .emptyBin ? nil : entitlements.paywallRequest },
+            // Idempotent: the close button already set the request to nil
+            // and counted the dismissal, so a setter call that follows it
+            // must not count a second one.
+            set: { if $0 == nil, entitlements.paywallRequest != nil { entitlements.dismissPaywall() } }
+        )
     }
 
     // MARK: - Permission gate states

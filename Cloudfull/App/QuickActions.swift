@@ -12,9 +12,10 @@ import UserNotifications
 import os
 
 /// A long press on the home-screen icon opens Cloudfull directly to Photos
-/// or Videos. A setting in Settings sets which mode is the default.
+/// or Videos, or to "On this date" in the default mode (owner,
+/// 2026-11-04). A setting in Settings sets which mode is the default.
 ///
-/// This file defines the two home-screen quick actions and the one place
+/// This file defines the three home-screen quick actions and the one place
 /// that turns one into a mode. They are dynamic shortcut items
 /// (`UIApplication.shortcutItems`), not an Info.plist array. This target
 /// generates its Info.plist from build settings, and a shortcut list has
@@ -26,8 +27,12 @@ import os
 /// tab.
 enum QuickActions {
     private static let prefix = "com.cloudfull.app.open."
+    /// The third item. Not a mode: it opens the default mode with the
+    /// "On this date" filter on, the same path the daily reminder tap
+    /// takes (`DailyReminder.handleNotificationTap`).
+    static let onThisDateType = prefix + "onThisDate"
 
-    /// Registers the two items. This is idempotent. It is not called from
+    /// Registers the three items. This is idempotent. It is not called from
     /// `CloudfullApp.init()`: items set that early, before
     /// `didFinishLaunching`, never appear on the icon's menu. This runs
     /// once launch has finished, and again whenever the scene becomes
@@ -37,6 +42,13 @@ enum QuickActions {
         UIApplication.shared.shortcutItems = [
             item(for: .videos, title: "Videos", systemImage: "play.rectangle"),
             item(for: .photos, title: "Photos", systemImage: "photo"),
+            UIApplicationShortcutItem(
+                type: onThisDateType,
+                localizedTitle: "On this date",
+                localizedSubtitle: nil,
+                icon: UIApplicationShortcutIcon(systemImageName: "calendar"),
+                userInfo: nil
+            ),
         ]
     }
 
@@ -215,6 +227,16 @@ final class CloudfullSceneDelegate: NSObject, UIWindowSceneDelegate {
 
     @discardableResult
     private static func open(_ item: UIApplicationShortcutItem) -> Bool {
+        if item.type == QuickActions.onThisDateType {
+            Usage.shared.quickActionOnThisDate()
+            if let usageMode = Usage.Mode(rawValue: AppModeStore.preferredOpenMode().rawValue) {
+                Usage.shared.modeSwitch(to: usageMode, via: .quickAction)
+            }
+            AppModeStore.shared.selectPreferredOpenMode()
+            FeedOptionsStore.shared.applyOnThisDateReminder()
+            PhotoOptionsStore.shared.applyOnThisDateReminder()
+            return true
+        }
         guard let mode = QuickActions.mode(for: item) else { return false }
         if let usageMode = Usage.Mode(rawValue: mode.rawValue) {
             Usage.shared.quickAction(mode: usageMode)

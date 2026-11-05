@@ -566,6 +566,132 @@ def main():
         print(f"  iPads in compatibility mode: {iPadCompat}/{len(latestD)} ({pct(iPadCompat, len(latestD))})")
         print()
 
+    print("Paywall and plans")
+    SENT = [r for r in S if "entitlement" in r["facts"]]
+    skippedOld = len(S) - len(SENT)
+    if skippedOld: print(f"  ({skippedOld} session{'s' if skippedOld != 1 else ''} skipped: no entitlement fact, pre-1.1)")
+    if not SENT:
+        print("  n/a (no sessions yet)\n")
+    else:
+        byInstall = collections.defaultdict(list)
+        for r in SENT: byInstall[r["install"]].append(r)
+        PRODUCTS, SOURCES = ("monthly", "lifetime"), ("keep", "unkeep", "delete", "share", "album", "shrink", "emptyBin", "settings")
+        def hasCount(rs, key): return any(r["counts"].get(key, 0) > 0 for r in rs)
+        def hasPrefix(rs, prefix): return any(k.startswith(prefix) and v > 0 for r in rs for k, v in r["counts"].items())
+        def hasPurchaseSuccess(rs): return any(k.startswith("purchase.") and k.endswith(".success") and v > 0 for r in rs for k, v in r["counts"].items())
+        def factInt(rs, key):
+            for r in rs:
+                v = r["facts"].get(key)
+                if v is not None and v.lstrip("-").isdigit(): return int(v)
+            return None
+
+        # 1. Funnel per install.
+        nInst = len(byInstall)
+        scrolled = sum(1 for rs in byInstall.values() if hasPrefix(rs, "postsSeen."))
+        sawPaywall = sum(1 for rs in byInstall.values() if hasPrefix(rs, "paywall.shown."))
+        boughtMonthly = sum(1 for rs in byInstall.values() if hasCount(rs, "purchase.monthly.success"))
+        boughtLifetime = sum(1 for rs in byInstall.values() if hasCount(rs, "purchase.lifetime.success"))
+        earlyBuyers = sum(1 for rs in byInstall.values() if any(r["facts"].get("entitlement") == "grandfathered" or r["facts"].get("entitlementAtOpen") == "grandfathered" for r in rs))
+        successByProduct = {p: C.get(f"purchase.{p}.success", 0) for p in PRODUCTS}
+        print(f"  installs with plan data: {nInst}   scrolled: {scrolled} ({pct(scrolled, nInst)})   saw the paywall: {sawPaywall} ({pct(sawPaywall, nInst)})")
+        print(f"  bought monthly: {boughtMonthly} installs ({successByProduct['monthly']} purchase events)   bought lifetime: {boughtLifetime} installs ({successByProduct['lifetime']} purchase events)   early buyers (grandfathered): {earlyBuyers}")
+
+        # 2. Scroll-only installs: every session none/unknown, never a purchase success.
+        def scrollOnly(rs): return all(r["facts"].get("entitlement") in ("none", "unknown") for r in rs) and not hasPurchaseSuccess(rs)
+        soGroups = [rs for rs in byInstall.values() if scrollOnly(rs)]
+        soLens = sorted(len(rs) for rs in soGroups)
+        soSawPaywall = sum(1 for rs in soGroups if hasPrefix(rs, "paywall.shown."))
+        print(f"  scroll-only installs: {len(soGroups)}   sessions per install: median {soLens[len(soLens)//2] if soLens else 0} max {soLens[-1] if soLens else 0}   saw the paywall: {soSawPaywall}   never saw it: {len(soGroups) - soSawPaywall}")
+
+        # 3. Monthly/trial -> lifetime upgrades.
+        def upgraded(rs):
+            sawMonthlyOrTrial = False
+            for r in sorted(rs, key=lambda r: r["startedAt"] or ""):
+                ent = r["facts"].get("entitlement")
+                if sawMonthlyOrTrial and (r["counts"].get("purchase.lifetime.success", 0) > 0 or ent == "lifetime"): return True
+                if ent in ("monthly", "trial"): sawMonthlyOrTrial = True
+            return False
+        print(f"  monthly/trial -> lifetime upgrades: {sum(1 for rs in byInstall.values() if upgraded(rs))}")
+
+        # 4. Sessions per week by plan (last 8 ISO weeks ending at the latest session day this pull has).
+        sentDays = [r["day"] for r in SENT if r.get("day")]
+        cols = ("none", "monthly", "lifetime", "grandfathered")
+        if sentDays:
+            monday = datetime.date.fromisoformat(max(sentDays))
+            monday -= datetime.timedelta(days=monday.weekday())
+            weekStarts = sorted(monday - datetime.timedelta(weeks=i) for i in range(8))
+            print("  sessions per week by plan:")
+            print("    " + f"{'week':10}" + "".join(f"{c:>14}" for c in cols))
+            for ws in weekStarts:
+                we = ws + datetime.timedelta(days=6)
+                iso = ws.isocalendar()
+                wc = collections.Counter()
+                for r in SENT:
+                    d = r.get("day")
+                    if not d: continue
+                    try: rd = datetime.date.fromisoformat(d)
+                    except ValueError: continue
+                    if ws <= rd <= we:
+                        plan = r["facts"].get("entitlementAtOpen") or r["facts"].get("entitlement")
+                        if plan in cols: wc[plan] += 1
+                label = f"{iso[0]}-W{iso[1]:02d}"
+                print("    " + f"{label:10}" + "".join(f"{wc.get(c,0):>14}" for c in cols))
+        else:
+            print("  sessions per week by plan: n/a (no sessions yet)")
+
+        # 5. Paywall seen but never bought, vs. purchased, by days since install.
+        buckets = ("0", "1", "2-3", "4-7", "8-14", "15+")
+        def bucket(n):
+            if n <= 1: return str(n)
+            if n <= 3: return "2-3"
+            if n <= 7: return "4-7"
+            if n <= 14: return "8-14"
+            return "15+"
+        neverBought, bought = collections.Counter(), collections.Counter()
+        for rs in byInstall.values():
+            if hasPurchaseSuccess(rs):
+                d = factInt(rs, "daysToFirst.purchase")
+                if d is not None: bought[bucket(d)] += 1
+            else:
+                d = factInt(rs, "daysToFirst.paywall")
+                if d is not None: neverBought[bucket(d)] += 1
+        if sum(neverBought.values()) + sum(bought.values()):
+            print("  days from install to first paywall (never bought) and to first purchase (bought):")
+            print("    " + f"{'days':16}" + "".join(f"{b:>8}" for b in buckets))
+            print("    " + f"{'never bought':16}" + "".join(f"{neverBought.get(b,0):>8}" for b in buckets))
+            print("    " + f"{'bought':16}" + "".join(f"{bought.get(b,0):>8}" for b in buckets))
+        else:
+            print("  days from install to first paywall/purchase: n/a (no sessions yet)")
+
+        # 6. Paywall funnel per source.
+        shown = {s: C.get(f"paywall.shown.{s}", 0) for s in SOURCES}
+        boughtBySource, boughtBySourceProduct = collections.Counter(), collections.defaultdict(dict)
+        for p in PRODUCTS:
+            for s in SOURCES:
+                n = C.get(f"purchase.{p}.from.{s}", 0)
+                if n: boughtBySource[s] += n; boughtBySourceProduct[s][p] = n
+        if sum(shown.values()):
+            print("  paywall funnel by source:")
+            for s, n in sorted(shown.items(), key=lambda kv: -kv[1]):
+                if not n and not boughtBySource.get(s): continue
+                b = boughtBySource.get(s, 0)
+                br = "  ".join(f"{p}={c}" for p, c in boughtBySourceProduct.get(s, {}).items())
+                print(f"    {s:10} shown={n:<5} bought={b} ({pct(b, n)})" + (f"   {br}" if br else ""))
+        else:
+            print("  paywall funnel by source: n/a (no sessions yet)")
+        pwBefore = [int(r["facts"]["postsSeenBeforeFirstPaywall"]) for r in SENT if r["facts"].get("postsSeenBeforeFirstPaywall", "").lstrip("-").isdigit()]
+        afterDismiss = "  ".join(f"postsSeenAfterPaywallDismiss.{m}={C.get(f'postsSeenAfterPaywallDismiss.{m}', 0)}" for m in ("videos", "photos"))
+        print(f"  posts seen before first paywall (locked sessions): median {sorted(pwBefore)[len(pwBefore)//2] if pwBefore else '–'} (n={len(pwBefore)})   dismissed {C.get('paywall.dismissed',0)}   reopened {C.get('paywall.reopened',0)}   {afterDismiss}")
+
+        # 7. Cancellers.
+        cancellers = [r for r in SENT if r["facts"].get("subscription.autoRenew") == "false"]
+        ages = [int(r["facts"]["subscription.ageDays"]) for r in cancellers if r["facts"].get("subscription.ageDays", "").lstrip("-").isdigit()]
+        if cancellers:
+            print(f"  cancellers (autoRenew=false): {len(cancellers)} sessions   subscription age in days: median {sorted(ages)[len(ages)//2] if ages else '–'}  max {max(ages) if ages else '–'}")
+        else:
+            print("  cancellers (autoRenew=false): n/a (no sessions yet)")
+        print()
+
     print("Health")
     print(f"  photo load failed {C.get('photoLoadFailedCount',0)}   video load failed {C.get('videoLoadFailedCount',0)}   slow downloads {C.get('slowDownloadCount',0)}   "
           f"stalls>250ms {sum(fnums('mainThreadStallsOver250ms'))}   ended by: " + "  ".join(f"{v}={n}" for v,n in F['endReason'].most_common()))

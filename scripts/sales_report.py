@@ -136,6 +136,15 @@ def _fetch_report_day(key_id, issuer_id, vendor_number, date_str):
     # report the day after) or there were truly no transactions that
     # day. Apple returns a 404 for both, so any 404 here is treated as
     # "no report yet", never as a crash.
+    #
+    # TODO: this always asks for filter[reportType]=SALES. Apple's
+    # Sales and Trends reports also have a SUBSCRIPTION reportType
+    # (active subscriber counts, as opposed to this report's
+    # subscribe/renew/cancel *events*), which this script does not fetch
+    # yet. A later --subscribers flag could fetch that report type too,
+    # as a separate request, to show point-in-time subscriber counts
+    # alongside the event counts (monthly_new, monthly_renewal,
+    # trial_starts) this script already computes from SALES rows.
     params = urllib.parse.urlencode({
         "filter[frequency]": "DAILY",
         "filter[reportDate]": date_str,
@@ -192,14 +201,52 @@ def _dec(s):
 
 def _day_stats(rows):
     downloads = redownloads = updates = Decimal(0)
+    # Free vs. paid downloads, split by "Customer Price" -- Cloudfull 1.1
+    # is a free download, so most download rows should land in
+    # downloads_free, but a 1.0-era paid download row still lands in
+    # downloads_paid if Apple ever backfills or re-reports one.
+    downloads_paid = downloads_free = Decimal(0)
+    # Subscription rows for the monthly SKU: "Subscription" is "New" for
+    # a fresh subscribe and "Renewal" for a renewal. A free-trial start
+    # is a "New" row with a $0 "Customer Price" (Apple's introductory
+    # offer), counted separately in trial_starts as well as monthly_new.
+    monthly_new = monthly_renewal = trial_starts = Decimal(0)
     iap_units, proceeds, unmapped = collections.Counter(), collections.Counter(), collections.Counter()
+    # The same iap_units total, split by SKU substring into the three
+    # known in-app purchase families, plus a raw-SKU fallback bucket for
+    # any purchase SKU that matches none of the three (so a future
+    # product never silently vanishes from the totals).
+    iap_tips, iap_lifetime, iap_monthly, iap_other = (
+        collections.Counter(), collections.Counter(), collections.Counter(), collections.Counter())
     for r in rows:
+        # Units keeps its sign as-is, including a negative value for a
+        # refund row -- a refund should subtract from the day's totals,
+        # not be dropped.
         units = _dec(r.get("Units"))
+        sku = r.get("SKU") or "?"
         cat = PRODUCT_TYPE_CATEGORY.get(r.get("Product Type Identifier", ""))
-        if cat == "download": downloads += units
+        if cat == "download":
+            downloads += units
+            if _dec(r.get("Customer Price")) == 0: downloads_free += units
+            else: downloads_paid += units
         elif cat == "redownload": redownloads += units
         elif cat == "update": updates += units
-        elif cat == "iap": iap_units[r.get("SKU") or "?"] += units
+        elif cat == "iap":
+            iap_units[sku] += units
+            if ".tip." in sku:
+                iap_tips[sku] += units
+            elif ".lifetime" in sku:
+                iap_lifetime[sku] += units
+            elif ".monthly" in sku:
+                iap_monthly[sku] += units
+                sub = r.get("Subscription")
+                if sub == "New":
+                    monthly_new += units
+                    if _dec(r.get("Customer Price")) == 0: trial_starts += units
+                elif sub == "Renewal":
+                    monthly_renewal += units
+            else:
+                iap_other[sku] += units
         else: unmapped[r.get("Product Type Identifier") or "?"] += units
         # "Developer Proceeds" is a PER-UNIT amount -- multiply by Units
         # ourselves and group the result by the currency Apple actually
@@ -207,14 +254,23 @@ def _day_stats(rows):
         amount = units * _dec(r.get("Developer Proceeds"))
         if amount: proceeds[r.get("Currency of Proceeds") or "?"] += amount
     return {"downloads": downloads, "redownloads": redownloads, "updates": updates,
-            "iap_units": iap_units, "proceeds": proceeds, "unmapped": unmapped}
+            "downloads_paid": downloads_paid, "downloads_free": downloads_free,
+            "iap_units": iap_units, "iap_tips": iap_tips, "iap_lifetime": iap_lifetime,
+            "iap_monthly": iap_monthly, "iap_other": iap_other,
+            "monthly_new": monthly_new, "monthly_renewal": monthly_renewal, "trial_starts": trial_starts,
+            "proceeds": proceeds, "unmapped": unmapped}
 
 
 def _empty_day_stats():
     # Same shape as _day_stats(), all zero -- for a day Apple will
     # never post a report for (see _is_pending_day below).
     return {"downloads": Decimal(0), "redownloads": Decimal(0), "updates": Decimal(0),
-            "iap_units": collections.Counter(), "proceeds": collections.Counter(), "unmapped": collections.Counter()}
+            "downloads_paid": Decimal(0), "downloads_free": Decimal(0),
+            "iap_units": collections.Counter(), "iap_tips": collections.Counter(),
+            "iap_lifetime": collections.Counter(), "iap_monthly": collections.Counter(),
+            "iap_other": collections.Counter(),
+            "monthly_new": Decimal(0), "monthly_renewal": Decimal(0), "trial_starts": Decimal(0),
+            "proceeds": collections.Counter(), "unmapped": collections.Counter()}
 
 
 def _is_pending_day(day):
@@ -235,7 +291,12 @@ def _is_pending_day(day):
 
 def _aggregate(cache, days):
     agg = {"downloads": Decimal(0), "redownloads": Decimal(0), "updates": Decimal(0),
-           "iap_units": collections.Counter(), "proceeds": collections.Counter(), "unmapped": collections.Counter()}
+           "downloads_paid": Decimal(0), "downloads_free": Decimal(0),
+           "iap_units": collections.Counter(), "iap_tips": collections.Counter(),
+           "iap_lifetime": collections.Counter(), "iap_monthly": collections.Counter(),
+           "iap_other": collections.Counter(),
+           "monthly_new": Decimal(0), "monthly_renewal": Decimal(0), "trial_starts": Decimal(0),
+           "proceeds": collections.Counter(), "unmapped": collections.Counter()}
     pending = []
     for d in days:
         st = cache.get(d)
@@ -243,7 +304,13 @@ def _aggregate(cache, days):
             pending.append(d)
             continue
         agg["downloads"] += st["downloads"]; agg["redownloads"] += st["redownloads"]; agg["updates"] += st["updates"]
-        agg["iap_units"].update(st["iap_units"]); agg["proceeds"].update(st["proceeds"]); agg["unmapped"].update(st["unmapped"])
+        agg["downloads_paid"] += st["downloads_paid"]; agg["downloads_free"] += st["downloads_free"]
+        agg["monthly_new"] += st["monthly_new"]; agg["monthly_renewal"] += st["monthly_renewal"]
+        agg["trial_starts"] += st["trial_starts"]
+        agg["iap_units"].update(st["iap_units"]); agg["iap_tips"].update(st["iap_tips"])
+        agg["iap_lifetime"].update(st["iap_lifetime"]); agg["iap_monthly"].update(st["iap_monthly"])
+        agg["iap_other"].update(st["iap_other"])
+        agg["proceeds"].update(st["proceeds"]); agg["unmapped"].update(st["unmapped"])
     return agg, pending
 
 
@@ -275,9 +342,14 @@ def _print_day(day, stats):
         print(f"  {day}  no report yet (Apple posts it the day after)")
         return
     parts = [f"downloads={_fmt_units(stats['downloads'])}"]
+    if stats["downloads_paid"] or stats["downloads_free"]:
+        parts.append(f"(paid={_fmt_units(stats['downloads_paid'])} free={_fmt_units(stats['downloads_free'])})")
     if stats["redownloads"]: parts.append(f"re-downloads={_fmt_units(stats['redownloads'])}")
     if stats["updates"]: parts.append(f"updates={_fmt_units(stats['updates'])}")
     if stats["iap_units"]: parts.append("IAP " + " ".join(f"{k}={_fmt_units(v)}" for k, v in sorted(stats["iap_units"].items())))
+    if stats["monthly_new"] or stats["monthly_renewal"]:
+        parts.append(f"subscription new={_fmt_units(stats['monthly_new'])} renewal={_fmt_units(stats['monthly_renewal'])}")
+    if stats["trial_starts"]: parts.append(f"trial-starts={_fmt_units(stats['trial_starts'])}")
     if stats["unmapped"]: parts.append("unknown product type " + " ".join(f"{k}={_fmt_units(v)}" for k, v in sorted(stats["unmapped"].items())))
     proceeds = "  ".join(f"{v:.2f} {c}" for c, v in sorted(stats["proceeds"].items())) or "0.00"
     print(f"  {day}  " + "  ".join(parts) + f"   proceeds {proceeds}")
@@ -289,7 +361,16 @@ def _print_totals(title, totals, pending):
     if totals["redownloads"]: parts.append(f"re-downloads={_fmt_units(totals['redownloads'])}")
     if totals["updates"]: parts.append(f"updates={_fmt_units(totals['updates'])}")
     print("  " + "  ".join(parts))
+    if totals["downloads_paid"] or totals["downloads_free"]:
+        print(f"  downloads paid={_fmt_units(totals['downloads_paid'])} free={_fmt_units(totals['downloads_free'])}")
     if totals["iap_units"]: print("  IAP units by product: " + "  ".join(f"{k}={_fmt_units(v)}" for k, v in sorted(totals["iap_units"].items())))
+    if totals["iap_tips"]: print("  IAP tips: " + "  ".join(f"{k}={_fmt_units(v)}" for k, v in sorted(totals["iap_tips"].items())))
+    if totals["iap_lifetime"]: print("  IAP lifetime: " + "  ".join(f"{k}={_fmt_units(v)}" for k, v in sorted(totals["iap_lifetime"].items())))
+    if totals["iap_monthly"]: print("  IAP monthly: " + "  ".join(f"{k}={_fmt_units(v)}" for k, v in sorted(totals["iap_monthly"].items())))
+    if totals["iap_other"]: print("  IAP other: " + "  ".join(f"{k}={_fmt_units(v)}" for k, v in sorted(totals["iap_other"].items())))
+    if totals["monthly_new"] or totals["monthly_renewal"]:
+        print(f"  subscription new={_fmt_units(totals['monthly_new'])} renewal={_fmt_units(totals['monthly_renewal'])}")
+    if totals["trial_starts"]: print(f"  trial starts: {_fmt_units(totals['trial_starts'])}")
     if totals["unmapped"]: print("  unknown product type: " + "  ".join(f"{k}={_fmt_units(v)}" for k, v in sorted(totals["unmapped"].items())))
     proceeds = "  ".join(f"{v:.2f} {c}" for c, v in sorted(totals["proceeds"].items())) or "0.00"
     print(f"  proceeds: {proceeds}")
@@ -299,7 +380,14 @@ def _print_totals(title, totals, pending):
 def _json_totals(totals):
     return {
         "downloads": _num(totals["downloads"]), "redownloads": _num(totals["redownloads"]), "updates": _num(totals["updates"]),
+        "downloads_paid": _num(totals["downloads_paid"]), "downloads_free": _num(totals["downloads_free"]),
         "iap_units": {k: _num(v) for k, v in totals["iap_units"].items()},
+        "iap_tips": {k: _num(v) for k, v in totals["iap_tips"].items()},
+        "iap_lifetime": {k: _num(v) for k, v in totals["iap_lifetime"].items()},
+        "iap_monthly": {k: _num(v) for k, v in totals["iap_monthly"].items()},
+        "iap_other": {k: _num(v) for k, v in totals["iap_other"].items()},
+        "monthly_new": _num(totals["monthly_new"]), "monthly_renewal": _num(totals["monthly_renewal"]),
+        "trial_starts": _num(totals["trial_starts"]),
         "proceeds": {c: float(v) for c, v in totals["proceeds"].items()},
         "unmapped_product_types": {k: _num(v) for k, v in totals["unmapped"].items()},
     }
@@ -345,13 +433,12 @@ def main():
         out = {
             "sku": a.sku,
             "range": {"from": lo.isoformat(), "to": hi.isoformat()},
+            # Each day's dict has the same shape _json_totals() returns for
+            # a range, so a day and the totals below can always be read
+            # with the same keys.
             "days": {
-                d.isoformat(): ({"pending": True} if cache[d] is None else {
-                    "downloads": _num(cache[d]["downloads"]), "redownloads": _num(cache[d]["redownloads"]), "updates": _num(cache[d]["updates"]),
-                    "iap_units": {k: _num(v) for k, v in cache[d]["iap_units"].items()},
-                    "proceeds": {c: float(v) for c, v in cache[d]["proceeds"].items()},
-                    "unmapped_product_types": {k: _num(v) for k, v in cache[d]["unmapped"].items()},
-                }) for d in range_days
+                d.isoformat(): ({"pending": True} if cache[d] is None else _json_totals(cache[d]))
+                for d in range_days
             },
             "totals": {**_json_totals(range_totals), "pending_days": [d.isoformat() for d in range_pending]},
             "month_to_date": {"from": mtd_start.isoformat(), "to": hi.isoformat(), **_json_totals(mtd_totals),

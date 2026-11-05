@@ -1573,8 +1573,10 @@ struct PhotoPostView: View {
             }
         } else {
             Button {
-                Haptics.tap()
-                shareCoordinator.beginShare(assetID: entry.assetID)
+                Entitlements.shared.require(.share) {
+                    Haptics.tap()
+                    shareCoordinator.beginShare(assetID: entry.assetID)
+                }
             } label: {
                 shareLabel
             }
@@ -1716,15 +1718,17 @@ struct PhotoPostView: View {
     /// `ChinNavigation.expand()`.
     private func expandSharePicker() {
         guard !isSharePickerExpanded else { return }
-        Haptics.tap()
-        sharePickerToken += 1
-        withAnimation(reduceMotion ? .easeInOut(duration: 0.2) : .spring(response: 0.35, dampingFraction: 0.86)) {
-            isSharePickerExpanded = true
-            sharePickerShellOpacity = 1
-            shareLabelOpacity = 0.35
-        }
-        withAnimation(reduceMotion ? .easeInOut(duration: 0.15) : .easeOut(duration: 0.18).delay(0.12)) {
-            sharePickerWordsOpacity = 1
+        Entitlements.shared.require(.share) {
+            Haptics.tap()
+            sharePickerToken += 1
+            withAnimation(reduceMotion ? .easeInOut(duration: 0.2) : .spring(response: 0.35, dampingFraction: 0.86)) {
+                isSharePickerExpanded = true
+                sharePickerShellOpacity = 1
+                shareLabelOpacity = 0.35
+            }
+            withAnimation(reduceMotion ? .easeInOut(duration: 0.15) : .easeOut(duration: 0.18).delay(0.12)) {
+                sharePickerWordsOpacity = 1
+            }
         }
     }
 
@@ -1830,8 +1834,10 @@ struct PhotoPostView: View {
     /// with one dismissal.
     private var albumButton: some View {
         Button {
-            Haptics.tap()
-            shareCoordinator.albumPickerTarget = .init(id: entry.assetID)
+            Entitlements.shared.require(.album) {
+                Haptics.tap()
+                shareCoordinator.albumPickerTarget = .init(id: entry.assetID)
+            }
         } label: {
             HStack(spacing: 6) {
                 // An outline glyph matches the drawing weight of the
@@ -1918,14 +1924,22 @@ struct PhotoPostView: View {
 
     /// The rail heart toggles either direction. The photo's own double
     /// tap (`keep()` below) is keep-only.
+    ///
+    /// Gates once, here, directly against the un-gated `keepBody(source:)`/
+    /// `unkeepBody()` below — not through `keep(source:)`/`unkeep()`,
+    /// which each gate their own entry too, for the double-tap and the
+    /// `unkeep()` return-value callers. Routing through them here would
+    /// nest two gates for the same tap.
     private func toggleKeepFromRail() {
-        if isKept {
-            let applied = unkeep()
-            if applied {
-                Usage.shared.action(.unkeep, source: .rail, mode: .photos)
+        Entitlements.shared.require(isKept ? .unkeep : .keep) {
+            if isKept {
+                let applied = unkeepBody()
+                if applied {
+                    Usage.shared.action(.unkeep, source: .rail, mode: .photos)
+                }
+            } else {
+                keepBody(source: .rail)
             }
-        } else {
-            keep(source: .rail)
         }
     }
 
@@ -1938,6 +1952,12 @@ struct PhotoPostView: View {
             likeBounceToken += 1
             return
         }
+        Entitlements.shared.require(.keep) {
+            keepBody(source: source)
+        }
+    }
+
+    private func keepBody(source: Usage.ActionSource) {
         let assetID = entry.assetID
         let applied = KeepStore.shared.keep(assetID: assetID)
         if applied {
@@ -1966,8 +1986,9 @@ struct PhotoPostView: View {
         }
     }
 
+    /// Un-gated. Its only caller, `toggleKeepFromRail`, gates first.
     @discardableResult
-    private func unkeep() -> Bool {
+    private func unkeepBody() -> Bool {
         let assetID = entry.assetID
         let applied = KeepStore.shared.unkeep(assetID: assetID)
         if applied { KeepsAlbum.shared.remove(assetID) }
@@ -1982,74 +2003,76 @@ struct PhotoPostView: View {
         }
         #endif
         guard deleteEnabled else { return }
-        let assetID = entry.assetID
-        let queued = trashService.queue(assetID: assetID, mediaKind: .photo)
-        guard queued else { return }
-        Haptics.tap()
-        Usage.shared.action(.delete, source: .rail, mode: .photos)
-        Usage.shared.deleted(mode: .photos, width: tier1?.pixelWidth ?? 0, height: tier1?.pixelHeight ?? 0)
-        DailyReminder.shared.noteFirstDelete()
-        // Keep this row in `deck.entries`. Removing it now makes the
-        // post disappear with no crush animation.
-        PhotoDeck.shared.removeFromFuture(assetID: assetID, keepingEntryID: entry.id)
-        // The loop below collapses this post's own height to 0. The feed
-        // is told at once, so its settle logic stands down for the whole
-        // crush instead of pruning this post and snapping the scroll
-        // mid-crush. After `crushDuration` it prunes this post in place,
-        // with no scroll.
-        isCollapsedForDelete = true
+        Entitlements.shared.require(.delete) {
+            let assetID = entry.assetID
+            let queued = trashService.queue(assetID: assetID, mediaKind: .photo)
+            guard queued else { return }
+            Haptics.tap()
+            Usage.shared.action(.delete, source: .rail, mode: .photos)
+            Usage.shared.deleted(mode: .photos, width: tier1?.pixelWidth ?? 0, height: tier1?.pixelHeight ?? 0)
+            DailyReminder.shared.noteFirstDelete()
+            // Keep this row in `deck.entries`. Removing it now makes the
+            // post disappear with no crush animation.
+            PhotoDeck.shared.removeFromFuture(assetID: assetID, keepingEntryID: entry.id)
+            // The loop below collapses this post's own height to 0. The feed
+            // is told at once, so its settle logic stands down for the whole
+            // crush instead of pruning this post and snapping the scroll
+            // mid-crush. After `crushDuration` it prunes this post in place,
+            // with no scroll.
+            isCollapsedForDelete = true
 
-        // The crush stops when this post's bottom meets the top of the
-        // scroll view, keeping whatever height was already above the
-        // screen. The content above the viewport is then exactly as it
-        // was, so the scroll view has nothing to clamp, and no picture
-        // above drops into view after a delete.
-        //
-        // A fully visible post keeps 0, which leaves the crush unchanged.
-        let fullHeight = measuredHeight ?? 0
-        // A post shrinks smoothly while its top is on screen, and
-        // jumps when its top is above it. A post whose top is above
-        // the screen is revealed first: the feed slides down until
-        // the top sits just under the top filter controls, with a
-        // sliver of the post above showing. The post then crushes,
-        // all the way, top-anchored. The post above holds its top
-        // edge throughout and never moves.
-        let offscreen = min(max(offscreenTopHeight(), 0), fullHeight)
-        let reveal = offscreen > 0 ? offscreen + Self.revealMargin : 0
-        let revealDuration: TimeInterval = reveal > 0 ? Self.revealDuration : 0
-        let target: Double = 1
+            // The crush stops when this post's bottom meets the top of the
+            // scroll view, keeping whatever height was already above the
+            // screen. The content above the viewport is then exactly as it
+            // was, so the scroll view has nothing to clamp, and no picture
+            // above drops into view after a delete.
+            //
+            // A fully visible post keeps 0, which leaves the crush unchanged.
+            let fullHeight = measuredHeight ?? 0
+            // A post shrinks smoothly while its top is on screen, and
+            // jumps when its top is above it. A post whose top is above
+            // the screen is revealed first: the feed slides down until
+            // the top sits just under the top filter controls, with a
+            // sliver of the post above showing. The post then crushes,
+            // all the way, top-anchored. The post above holds its top
+            // edge throughout and never moves.
+            let offscreen = min(max(offscreenTopHeight(), 0), fullHeight)
+            let reveal = offscreen > 0 ? offscreen + Self.revealMargin : 0
+            let revealDuration: TimeInterval = reveal > 0 ? Self.revealDuration : 0
+            let target: Double = 1
 
-        // Claimed now, not when the animation ends. The feed clears
-        // `isAdvancing` before its own prune, which lets the settle
-        // handler prune instead and bump `reanchorNonce`, and that
-        // re-anchor is `scrollTo(anchor: .top)`, a second, separate
-        // movement. Claiming the row up front closes both paths: every
-        // prune skips it from this instant.
-        PhotoDeck.shared.markCollapsed(entry.id, keeping: 0)
+            // Claimed now, not when the animation ends. The feed clears
+            // `isAdvancing` before its own prune, which lets the settle
+            // handler prune instead and bump `reanchorNonce`, and that
+            // re-anchor is `scrollTo(anchor: .top)`, a second, separate
+            // movement. Claiming the row up front closes both paths: every
+            // prune skips it from this instant.
+            PhotoDeck.shared.markCollapsed(entry.id, keeping: 0)
 
-        // The crush always takes `crushDuration` (0.5 s). For an
-        // above-the-fold post, the slide starts at `revealStart`
-        // (0 s) and runs for `revealDuration` (0.25 s) during the
-        // crush.
-        let duration = Self.crushDuration
-        onAdvanceRequested(duration)
-        Task {
-            var slideStarted = false
-            let started = Date()
-            while true {
-                let elapsed = Date().timeIntervalSince(started)
-                if reveal > 0, !slideStarted, elapsed >= Self.revealStart {
-                    slideStarted = true
-                    onRevealRequested(reveal, revealDuration)
+            // The crush always takes `crushDuration` (0.5 s). For an
+            // above-the-fold post, the slide starts at `revealStart`
+            // (0 s) and runs for `revealDuration` (0.25 s) during the
+            // crush.
+            let duration = Self.crushDuration
+            onAdvanceRequested(duration)
+            Task {
+                var slideStarted = false
+                let started = Date()
+                while true {
+                    let elapsed = Date().timeIntervalSince(started)
+                    if reveal > 0, !slideStarted, elapsed >= Self.revealStart {
+                        slideStarted = true
+                        onRevealRequested(reveal, revealDuration)
+                    }
+                    let t = min(elapsed / duration, 1)
+                    crushFraction = Self.crushEase(t) * target
+                    if t >= 1 { break }
+                    try? await Task.sleep(nanoseconds: 16_000_000)
+                    guard !Task.isCancelled else { return }
                 }
-                let t = min(elapsed / duration, 1)
-                crushFraction = Self.crushEase(t) * target
-                if t >= 1 { break }
-                try? await Task.sleep(nanoseconds: 16_000_000)
-                guard !Task.isCancelled else { return }
+                crushFinished = true
+                wdMark("photoCrushDone")
             }
-            crushFinished = true
-            wdMark("photoCrushDone")
         }
     }
 

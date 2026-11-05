@@ -24,7 +24,7 @@ struct SettingsView: View {
     @AppStorage("settings.openMuted") private var openMuted = false
     @AppStorage(KeepsAlbum.settingKey) private var keepsAlbum = true
     /// Mirrored-layout round: the owner's own "Left-handed controls"
-    /// setting, shown in `layoutSection` below. Only takes effect with
+    /// setting, shown in `preferencesSection` below. Only takes effect with
     /// no system bar at all — see `DuoLayout.isMirrored`'s own comment.
     /// Default OFF: a regular iPhone's layout must stay pixel-identical
     /// until the owner turns this on themselves.
@@ -44,6 +44,15 @@ struct SettingsView: View {
     /// independent readers of the same `UserDefaults` key are not
     /// reliable enough for this button to work.
     @ObservedObject private var onboardingGate = OnboardingGateState.shared
+    /// Backs `accessSection` below: the unlock status row, and the
+    /// Unlock / Manage Subscription / Buy Lifetime / Restore rows that
+    /// depend on it.
+    @ObservedObject private var entitlements = Entitlements.shared
+    #if DEBUG
+    /// Backs the DEBUG-only "Access override" picker in
+    /// `diagnosticsSection`.
+    @ObservedObject private var accessOverride = AccessOverride.shared
+    #endif
     /// Drives the on-demand welcome screen. See the Help section below.
     @State private var showWelcome = false
     @State private var freeSpaceText = "…"
@@ -55,6 +64,11 @@ struct SettingsView: View {
     @StateObject private var tipJar = TipJar()
     /// Shows the thank-you alert after a successful tip purchase.
     @State private var showTipThankYou = false
+    /// Backs `settings_manage_subscription`'s `.manageSubscriptionsSheet`.
+    @State private var showManageSubscriptions = false
+    /// Backs `settings_restore`'s outcome alert.
+    @State private var showRestoreAlert = false
+    @State private var restoreAlertMessage = ""
     #if DEBUG
     /// Backs the DEBUG-only "Diagnostics readouts" row at the bottom.
     @ObservedObject private var diagnostics = DiagnosticsSwitch.shared
@@ -137,12 +151,12 @@ struct SettingsView: View {
                     List {
                         appHeaderSection
                         reminderSection
-                        preferencesSection
-                        layoutSection(duoLayout: duoLayout)
+                        preferencesSection(duoLayout: duoLayout)
                         storageSection
+                        accessSection
                         assistanceSection
-                        tipJarSection
                         otherProjectsSection
+                        tipJarSection   // last (owner, 2026-11-04)
                         #if DEBUG
                         diagnosticsSection
                         #endif
@@ -231,6 +245,19 @@ struct SettingsView: View {
             } message: {
                 Text("Your tip helps keep Cloudfull going.")
             }
+            .alert("", isPresented: $showRestoreAlert) {
+                Button(PaywallCopy.alertOK, role: .cancel) {}
+                    .accessibilityIdentifier("settings_restore_alert")
+            } message: {
+                Text(restoreAlertMessage)
+            }
+            // `.manageSubscriptionsSheet` needs the subscription group id
+            // to scope itself to the Cloudfull Unlock group; falls back to
+            // the whole-app overload until the monthly product has loaded.
+            .modifier(ManageSubscriptionsSheetModifier(
+                isPresented: $showManageSubscriptions,
+                subscriptionGroupID: entitlements.subscriptionGroupID
+            ))
         }
     }
 
@@ -279,9 +306,15 @@ struct SettingsView: View {
     }
 
     // Default tab and Open unmuted apply at launch. Add keeps and App
-    // icon are one-time choices. One section holds all four.
-    private var preferencesSection: some View {
-        Section {
+    // icon are one-time choices. One section holds all five, with the
+    // left-handed toggle last (its old "Layout" section merged here,
+    // owner 2026-11-04).
+    /// Preferences, including the left-handed toggle that used to be its
+    /// own "Layout" section (owner, 2026-11-03: "combine layout and
+    /// preferences"). The toggle only shows on a regular iPhone.
+    private func preferencesSection(duoLayout: DuoLayout) -> some View {
+        let isDuo = duoLayout.pose != .regularPhone || DuoLayout.seenFoldable
+        return Section {
             Picker("Default tab", selection: $openMode) {
                 Text("Videos").tag(AppMode.videos.rawValue)
                 Text("Photos").tag(AppMode.photos.rawValue)
@@ -305,35 +338,17 @@ struct SettingsView: View {
             }
             .accessibilityIdentifier("settings_app_icon")
             .onChange(of: appIcon) { _, choice in AppIconChoice.apply(choice) }
+            // Left-handed: moves the rail, the chin, and the stage's own
+            // alignment to the LEADING edge wherever `DuoLayout.isMirrored`
+            // reads it. Hidden on the Duo (owner, 2026-10-12), where it
+            // has no effect; the same foldable signal the mirror rule uses.
+            if !isDuo {
+                Toggle("Left-handed controls", isOn: $leftHandedControls)
+                    .accessibilityIdentifier("settings_left_handed_controls")
+                    .onChange(of: leftHandedControls) { _, _ in Usage.shared.settingChanged("leftHandedControls") }
+            }
         } header: {
             Text("Preferences")
-        }
-    }
-
-    // Owner ask (iPhone Duo mirrored-layout round): a left-handed
-    // preference that moves the rail, the chin, and the stage's own
-    // alignment to the LEADING edge wherever `DuoLayout.isMirrored`
-    // reads it — see that property's own comment for the full rule.
-    // Shown on every regular iPhone, default OFF.
-    //
-    // Owner 2026-10-12: hide the left handed control toggle on the
-    // duo instead of saying it does nothing. The same foldable signal
-    // the mirror rule itself uses (current pose, or the `seenFoldable`
-    // latch for a frame that has not classified yet) now hides the
-    // whole row — and its "Layout" header — on the Duo, instead of
-    // showing the toggle beside a footer explaining it has no effect.
-    private func layoutSection(duoLayout: DuoLayout) -> some View {
-        let isDuo = duoLayout.pose != .regularPhone || DuoLayout.seenFoldable
-        return Group {
-            if !isDuo {
-                Section {
-                    Toggle("Left-handed controls", isOn: $leftHandedControls)
-                        .accessibilityIdentifier("settings_left_handed_controls")
-                        .onChange(of: leftHandedControls) { _, _ in Usage.shared.settingChanged("leftHandedControls") }
-                } header: {
-                    Text("Layout")
-                }
-            }
         }
     }
 
@@ -361,6 +376,100 @@ struct SettingsView: View {
             }
             .accessibilityElement(children: .combine)
             .accessibilityIdentifier("settings_icloud_status")
+        }
+    }
+
+    // Shows the unlock status, and whichever of Unlock / Manage
+    // Subscription / Buy Lifetime / Restore applies to it.
+    private var accessSection: some View {
+        Section(PaywallCopy.settingsSectionHeader) {
+            accessStatusRow
+            if entitlements.access == .locked || entitlements.access == .unknown {
+                Button(PaywallCopy.settingsRowUnlock) {
+                    entitlements.presentPaywall(from: .settings)
+                }
+                .accessibilityIdentifier("settings_unlock")
+            }
+            if entitlements.hasLiveSubscription {
+                Button(PaywallCopy.settingsRowManageSubscription) {
+                    showManageSubscriptions = true
+                    entitlements.manageSubscriptionsOpened()
+                }
+                .accessibilityIdentifier("settings_manage_subscription")
+            }
+            if isMonthlyAccess {
+                Button(PaywallCopy.settingsRowBuyLifetime) {
+                    entitlements.presentPaywall(from: .settings)
+                }
+                .accessibilityIdentifier("settings_buy_lifetime")
+            }
+            if entitlements.access != .fork {
+                Button(PaywallCopy.settingsRowRestore) {
+                    Task {
+                        let outcome = await entitlements.restore()
+                        switch outcome {
+                        case .restored: restoreAlertMessage = PaywallCopy.restoreRestored
+                        case .nothingFound: restoreAlertMessage = PaywallCopy.restoreNothingFound
+                        case .failed: restoreAlertMessage = PaywallCopy.restoreFailed
+                        }
+                        showRestoreAlert = true
+                    }
+                }
+                .disabled(entitlements.isRestoring)
+                .accessibilityIdentifier("settings_restore")
+            }
+        }
+    }
+
+    private var isMonthlyAccess: Bool {
+        if case .monthly = entitlements.access { return true }
+        return false
+    }
+
+    /// The status line, plus up to two secondary lines: a payment
+    /// warning (grace period or billing retry), and a note for a
+    /// lifetime owner whose old monthly subscription is still live.
+    private var accessStatusRow: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(accessStatusText)
+            if showsPaymentWarning {
+                Text(PaywallCopy.settingsStatusPaymentWarning)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            if showsLifetimeStillRenewing {
+                Text(PaywallCopy.settingsStatusLifetimeStillRenewing)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("settings_access_status")
+    }
+
+    private var showsPaymentWarning: Bool {
+        entitlements.subscriptionStatus?.state == .inGracePeriod || entitlements.subscriptionStatus?.state == .inBillingRetryPeriod
+    }
+
+    private var showsLifetimeStillRenewing: Bool {
+        entitlements.access == .lifetime && entitlements.hasLiveSubscription
+    }
+
+    private var accessStatusText: String {
+        switch entitlements.access {
+        case .locked: return PaywallCopy.settingsStatusNone
+        case .unknown: return PaywallCopy.settingsStatusUnknown
+        case .monthly(let expiresAt, let isTrial, let willAutoRenew, _):
+            let dateText = expiresAt?.formatted(date: .abbreviated, time: .omitted) ?? ""
+            if isTrial { return String(format: PaywallCopy.settingsStatusTrial, dateText) }
+            if willAutoRenew { return String(format: PaywallCopy.settingsStatusMonthlyRenews, dateText) }
+            return String(format: PaywallCopy.settingsStatusMonthlyCancelled, dateText)
+        case .lifetime: return PaywallCopy.settingsStatusLifetime
+        case .grandfathered: return PaywallCopy.settingsStatusGrandfathered
+        case .fork: return "Open-source build"   // not owner copy: this only shows in a fork, which the owner never ships
+        #if DEBUG
+        case .debugUnlocked: return "Debug: unlocked"
+        #endif
         }
     }
 
@@ -393,6 +502,10 @@ struct SettingsView: View {
                 linkRow("Privacy policy")
             }
             .accessibilityIdentifier("settings_privacy")
+            Link(destination: SettingsLinks.terms) {
+                linkRow(PaywallCopy.settingsRowTerms)
+            }
+            .accessibilityIdentifier("settings_terms")
             Link(destination: SettingsLinks.sourceCode) {
                 linkRow("Contribute to the source code")
             }
@@ -434,6 +547,10 @@ struct SettingsView: View {
                 linkRow("BarkBarkBark")
             }
             .accessibilityIdentifier("settings_project_barkbarkbark")
+            Link(destination: SettingsLinks.instagram) {
+                linkRow("Instagram: @marshallaross")
+            }
+            .accessibilityIdentifier("settings_project_instagram")
         }
     }
 
@@ -444,6 +561,17 @@ struct SettingsView: View {
         Section {
             Toggle("Diagnostics readouts", isOn: $diagnostics.isOn)
                 .accessibilityIdentifier("settings_diagnostics")
+            // Exercises every paywall/access state with no sandbox
+            // purchase. See `AccessOverride`'s own doc comment.
+            Picker("Access override", selection: $accessOverride.value) {
+                ForEach(AccessOverride.Value.allCases, id: \.self) { value in
+                    Text(value.rawValue.capitalized).tag(value)
+                }
+            }
+            .accessibilityIdentifier("settings_debug_access")
+            .onChange(of: accessOverride.value) { _, _ in
+                Task { await Entitlements.shared.refresh() }
+            }
         }
     }
     #endif
@@ -621,12 +749,14 @@ private enum SettingsLinks {
     static let website = URL(string: "https://cloudfull.app")!
     static let support = URL(string: "https://cloudfull.app/support/")!
     static let privacy = URL(string: "https://cloudfull.app/privacy/")!
+    static let terms = URL(string: "https://cloudfull.app/terms/")!
     static let sourceCode = URL(string: "https://github.com/MarshallARoss/cloudfull")!
     static let feelsMusic = URL(string: "https://feelsmusic.com/")!
     static let guestBets = URL(string: "https://guestbets.com/")!
     static let carlyAndTheUniverse = URL(string: "https://www.carlyandtheuniverse.com/")!
     static let tabzTech = URL(string: "https://tabztech.com/")!
     static let barkBarkBark = URL(string: "https://barkbarkbark.app/")!
+    static let instagram = URL(string: "https://www.instagram.com/marshallaross/")!
 
     /// Maps a tapped URL back to its fixed link name, for the `OpenURLAction`
     /// on the Settings list. `nil` for any URL not in this file — none is
@@ -636,12 +766,14 @@ private enum SettingsLinks {
         case website: return .website
         case support: return .contact
         case privacy: return .privacy
+        case terms: return .terms
         case sourceCode: return .sourceCode
         case feelsMusic: return .feelsMusic
         case guestBets: return .guestBets
         case carlyAndTheUniverse: return .carlyAndTheUniverse
         case tabzTech: return .tabzTech
         case barkBarkBark: return .barkBarkBark
+        case instagram: return .instagram
         default: return nil
         }
     }

@@ -29,6 +29,9 @@ maintainer under [CLA.md](CLA.md), and to everyone under
 
 You do not need to change any of this to build and run on a simulator.
 
+A build with a different bundle id has no paywall (`StoreProducts.isOfficialBuild`) and no analytics uploads.
+In a Debug build with no override (the Xcode StoreKit environment, or a Debug build installed on a phone, which StoreKit calls the sandbox), the app is unlocked; pass `-cloudfull-access=none` as a launch argument to see the paywall, or `-cloudfull-access=real` to run the real StoreKit purchase flow against `Cloudfull.storekit`. The Debug section of Settings has the same Access override picker (Auto / Real / None / Trial / Monthly / Lifetime / Grandfathered / Unknown).
+
 ## Running the UI tests
 
 The UI tests need a seeded simulator photo library. Two scripts help with
