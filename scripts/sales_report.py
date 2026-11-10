@@ -155,12 +155,12 @@ def _fetch_report_day(key_id, issuer_id, vendor_number, date_str):
     except urllib.error.HTTPError as e:
         if e.code == 404:
             return None
-        sys.exit(f"App Store Connect request failed for {date_str}: {e.code} {e.reason}\n{e.read().decode(errors='replace')}")
+        raise RuntimeError(f"App Store Connect request failed for {date_str}: {e.code} {e.reason}\n{e.read().decode(errors='replace')}")
     except OSError as e:
         # Covers urllib.error.URLError and a bare socket timeout (both
-        # are OSError subclasses) -- a clear message and a non-zero
-        # exit instead of a long hang or a raw traceback.
-        sys.exit(f"App Store Connect request failed for {date_str} (network/timeout): {e}")
+        # are OSError subclasses) -- a clear message instead of a long
+        # hang or a raw traceback.
+        raise RuntimeError(f"App Store Connect request failed for {date_str} (network/timeout): {e}")
 
 
 def _parse_tsv(raw):
@@ -322,7 +322,10 @@ def main():
     cache = {}
     def ensure(day):
         if day not in cache:
-            raw = _fetch_report_day(key_id, issuer_id, vendor_number, day.isoformat())
+            try:
+                raw = _fetch_report_day(key_id, issuer_id, vendor_number, day.isoformat())
+            except RuntimeError as e:
+                sys.exit(str(e))
             if raw is not None:
                 cache[day] = _day_stats(_rows_for_sku(_parse_tsv(raw), a.sku))
             elif _is_pending_day(day):
