@@ -23,7 +23,7 @@ enum RenewalState: String, Codable, Equatable {
 }
 
 /// The facts `Entitlements.LiveStoreFactsSource` reads from
-/// `AppTransaction.shared`. A grandfathered 1.0 customer is proven from
+/// `AppTransaction.shared`. A legacy 1.0 customer is proven from
 /// this alone, with no entitlement to check.
 struct AppTransactionFacts: Codable, Equatable {
     var environment: StoreEnvironment
@@ -60,7 +60,7 @@ enum Access: Codable, Equatable {
     case fork
     /// A paid-era customer (build 17, or any original purchase before the
     /// app went free), carried forward with no new purchase required.
-    case grandfathered
+    case legacy
     /// The non-consumable lifetime unlock.
     case lifetime
     /// The auto-renewable monthly unlock, trial or paid.
@@ -88,7 +88,7 @@ enum Access: Codable, Equatable {
         switch self {
         case .unknown: return .unknown
         case .fork: return .fork
-        case .grandfathered: return .grandfathered
+        case .legacy: return .legacy
         case .lifetime: return .lifetime
         case .monthly(_, let isTrial, _, _): return isTrial ? .trial : .monthly
         case .locked: return .none
@@ -156,7 +156,7 @@ enum AccessResolver {
             let wasPaidBuild = StoreProducts.paidBuilds.contains(appTx.originalAppVersion)
             let boughtBeforeFree = (appTx.originalPurchaseDate ?? .distantFuture) < freeSinceDate
             if wasPaidBuild || boughtBeforeFree {
-                return .grandfathered
+                return .legacy
             }
         }
 
@@ -164,12 +164,12 @@ enum AccessResolver {
             return cached ?? .unknown
         }
 
-        // A cached grandfathered customer never falls back to `.locked`
+        // A cached legacy customer never falls back to `.locked`
         // because one refresh came back with no app transaction, or an
         // unverified one. A real revocation would show up as a changed
         // fact, not as an absence of one.
-        if case .grandfathered = cached, appTx == nil || appTx?.isVerified == false {
-            return .grandfathered
+        if case .legacy = cached, appTx == nil || appTx?.isVerified == false {
+            return .legacy
         }
 
         return .locked

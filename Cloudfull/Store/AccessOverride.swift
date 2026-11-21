@@ -32,7 +32,7 @@ final class AccessOverride: ObservableObject {
         /// end-to-end purchase check in the simulator with
         /// `Cloudfull.storekit`.
         case real
-        case unknown, none, trial, monthly, lifetime, grandfathered
+        case unknown, none, trial, monthly, lifetime, legacy
     }
 
     @Published var value: Value {

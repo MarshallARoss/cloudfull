@@ -470,7 +470,7 @@ struct SettingsView: View {
             if willAutoRenew { return String(format: PaywallCopy.settingsStatusMonthlyRenews, dateText) }
             return String(format: PaywallCopy.settingsStatusMonthlyCancelled, dateText)
         case .lifetime: return PaywallCopy.settingsStatusLifetime
-        case .grandfathered: return PaywallCopy.settingsStatusGrandfathered
+        case .legacy: return PaywallCopy.settingsStatusLegacy
         case .fork: return "Open-source build"   // not owner copy: this only shows in a fork, which the owner never ships
         #if DEBUG
         case .debugUnlocked: return "Debug: unlocked"

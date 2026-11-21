@@ -46,7 +46,7 @@ LOGDIR="$PROJ/build/preflight-logs"
 mkdir -p "$LOGDIR"
 
 # Build "17" was the only paid build of 1.0 (StoreProducts.paidBuilds).
-# The grandfather rule reads AppTransaction.originalAppVersion, which
+# The legacy rule reads AppTransaction.originalAppVersion, which
 # holds only the build number, so a later version numbered 17 would
 # unlock every new free install for life. The unit test guards this
 # too; this check runs even when the tests are skipped by hand.

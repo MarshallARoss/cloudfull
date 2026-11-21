@@ -25,7 +25,7 @@ struct AccessResolverTests {
             isOfficial: false,
             appTx: AppTransactionFacts(environment: .production, originalAppVersion: "17", originalPurchaseDate: nil, isVerified: true),
             entitlements: [EntitlementFact(productID: StoreProducts.lifetime, expirationDate: nil, revocationDate: nil, isIntroOffer: false, renewalState: nil, gracePeriodExpiresAt: nil, willAutoRenew: nil)],
-            cached: .grandfathered,
+            cached: .legacy,
             now: Date()
         )
         #expect(resolved == .fork)
@@ -193,10 +193,10 @@ struct AccessResolverTests {
         #expect(resolved.isUnlocked)
     }
 
-    // MARK: - Grandfathering by build
+    // MARK: - Legacy rule by build
 
-    @Test("Build 17 verified in production is grandfathered")
-    func paidBuildIsGrandfathered() {
+    @Test("Build 17 verified in production is legacy")
+    func paidBuildIsLegacy() {
         let resolved = AccessResolver.resolve(
             isOfficial: true,
             appTx: AppTransactionFacts(environment: .production, originalAppVersion: "17", originalPurchaseDate: nil, isVerified: true),
@@ -204,11 +204,11 @@ struct AccessResolverTests {
             cached: nil,
             now: Date()
         )
-        #expect(resolved == .grandfathered)
+        #expect(resolved == .legacy)
     }
 
-    @Test("Builds outside the paid list are not grandfathered", arguments: ["18", "1", "2"])
-    func unlistedBuildsAreNotGrandfathered(version: String) {
+    @Test("Builds outside the paid list are not legacy", arguments: ["18", "1", "2"])
+    func unlistedBuildsAreNotLegacy(version: String) {
         let resolved = AccessResolver.resolve(
             isOfficial: true,
             appTx: AppTransactionFacts(environment: .production, originalAppVersion: version, originalPurchaseDate: nil, isVerified: true),
@@ -219,8 +219,8 @@ struct AccessResolverTests {
         #expect(resolved == .locked)
     }
 
-    @Test("A paid build id in sandbox does not grandfather")
-    func paidBuildInSandboxIsNotGrandfathered() {
+    @Test("A paid build id in sandbox does not count as legacy")
+    func paidBuildInSandboxIsNotLegacy() {
         let resolved = AccessResolver.resolve(
             isOfficial: true,
             appTx: AppTransactionFacts(environment: .sandbox, originalAppVersion: "1.0", originalPurchaseDate: nil, isVerified: true),
@@ -231,8 +231,8 @@ struct AccessResolverTests {
         #expect(resolved == .locked)
     }
 
-    @Test("A paid build id under the Xcode environment does not grandfather; that override lives outside the resolver")
-    func paidBuildUnderXcodeEnvironmentIsNotGrandfathered() {
+    @Test("A paid build id under the Xcode environment does not count as legacy; that override lives outside the resolver")
+    func paidBuildUnderXcodeEnvironmentIsNotLegacy() {
         let resolved = AccessResolver.resolve(
             isOfficial: true,
             appTx: AppTransactionFacts(environment: .xcode, originalAppVersion: "17", originalPurchaseDate: nil, isVerified: true),
@@ -243,8 +243,8 @@ struct AccessResolverTests {
         #expect(resolved == .locked)
     }
 
-    @Test("An unverified app transaction never grandfathers on its own")
-    func unverifiedPaidBuildIsNotGrandfathered() {
+    @Test("An unverified app transaction never counts as legacy on its own")
+    func unverifiedPaidBuildIsNotLegacy() {
         let resolved = AccessResolver.resolve(
             isOfficial: true,
             appTx: AppTransactionFacts(environment: .production, originalAppVersion: "17", originalPurchaseDate: nil, isVerified: false),
@@ -255,15 +255,15 @@ struct AccessResolverTests {
         #expect(resolved == .locked)
     }
 
-    // MARK: - Grandfathering by purchase date
+    // MARK: - Legacy rule by purchase date
     //
     // `StoreProducts.freeSinceDate` is 2026-11-04 (the 1.1 TestFlight upload
     // day), so the signal is ON by default — see the two boundary tests
     // below. The first pair exercises the signal with an explicit
     // `freeSinceDate:`.
 
-    @Test("A production purchase dated before an explicit freeSinceDate is grandfathered even off the paid-builds list")
-    func purchaseDateBeforeFreeSinceDateIsGrandfathered() {
+    @Test("A production purchase dated before an explicit freeSinceDate is legacy even off the paid-builds list")
+    func purchaseDateBeforeFreeSinceDateIsLegacy() {
         let freeSinceDate = ISO8601DateFormatter().date(from: "2026-11-20T00:00:00Z")!
         let purchaseDate = ISO8601DateFormatter().date(from: "2020-01-01T00:00:00Z")!
         #expect(purchaseDate < freeSinceDate)
@@ -275,11 +275,11 @@ struct AccessResolverTests {
             now: Date(),
             freeSinceDate: freeSinceDate
         )
-        #expect(resolved == .grandfathered)
+        #expect(resolved == .legacy)
     }
 
-    @Test("A production purchase dated after an explicit freeSinceDate is not grandfathered")
-    func purchaseDateAfterFreeSinceDateIsNotGrandfathered() {
+    @Test("A production purchase dated after an explicit freeSinceDate is not legacy")
+    func purchaseDateAfterFreeSinceDateIsNotLegacy() {
         let freeSinceDate = ISO8601DateFormatter().date(from: "2026-11-20T00:00:00Z")!
         let purchaseDate = ISO8601DateFormatter().date(from: "2026-12-01T00:00:00Z")!
         #expect(purchaseDate > freeSinceDate)
@@ -294,11 +294,11 @@ struct AccessResolverTests {
         #expect(resolved == .locked)
     }
 
-    @Test("With the default freeSinceDate (2026-11-04), a production purchase dated 2026-11-03 is grandfathered even off the paid-builds list")
-    func purchaseDateBeforeDefaultFreeSinceDateIsGrandfathered() {
+    @Test("With the default freeSinceDate (2026-11-04), a production purchase dated 2026-11-03 is legacy even off the paid-builds list")
+    func purchaseDateBeforeDefaultFreeSinceDateIsLegacy() {
         // No `freeSinceDate:` argument: this uses the real default,
         // `StoreProducts.freeSinceDate`. Build "16" is not in `paidBuilds`,
-        // so only the purchase-date signal can grandfather it.
+        // so only the purchase-date signal can make it legacy.
         let purchaseDate = ISO8601DateFormatter().date(from: "2026-11-03T12:00:00Z")!
         #expect(!StoreProducts.paidBuilds.contains("16"))
         let resolved = AccessResolver.resolve(
@@ -308,11 +308,11 @@ struct AccessResolverTests {
             cached: nil,
             now: Date()
         )
-        #expect(resolved == .grandfathered)
+        #expect(resolved == .legacy)
     }
 
-    @Test("With the default freeSinceDate (2026-11-04), a production purchase on or after that day, off the paid-builds list, is not grandfathered", arguments: ["2026-11-04T00:00:00Z", "2026-11-04T12:00:00Z", "2026-12-01T00:00:00Z"])
-    func purchaseDateOnOrAfterDefaultFreeSinceDateIsNotGrandfathered(iso: String) {
+    @Test("With the default freeSinceDate (2026-11-04), a production purchase on or after that day, off the paid-builds list, is not legacy", arguments: ["2026-11-04T00:00:00Z", "2026-11-04T12:00:00Z", "2026-12-01T00:00:00Z"])
+    func purchaseDateOnOrAfterDefaultFreeSinceDateIsNotLegacy(iso: String) {
         let purchaseDate = ISO8601DateFormatter().date(from: iso)!
         let resolved = AccessResolver.resolve(
             isOfficial: true,
@@ -339,24 +339,24 @@ struct AccessResolverTests {
         #expect(resolved == .locked)
     }
 
-    // MARK: - Never-downgrade grandfathered
+    // MARK: - Never-downgrade legacy
 
-    @Test("A cached grandfathered customer stays grandfathered when the app transaction comes back unverified")
-    func cachedGrandfatheredSurvivesUnverifiedAppTransaction() {
+    @Test("A cached legacy customer stays legacy when the app transaction comes back unverified")
+    func cachedLegacySurvivesUnverifiedAppTransaction() {
         let resolved = AccessResolver.resolve(
             isOfficial: true,
             appTx: AppTransactionFacts(environment: .production, originalAppVersion: "2", originalPurchaseDate: nil, isVerified: false),
             entitlements: [],
-            cached: .grandfathered,
+            cached: .legacy,
             now: Date()
         )
-        #expect(resolved == .grandfathered)
+        #expect(resolved == .legacy)
     }
 
-    @Test("A cached grandfathered customer stays grandfathered with no app transaction at all")
-    func cachedGrandfatheredSurvivesNilAppTransaction() {
-        let resolved = AccessResolver.resolve(isOfficial: true, appTx: nil, entitlements: [], cached: .grandfathered, now: Date())
-        #expect(resolved == .grandfathered)
+    @Test("A cached legacy customer stays legacy with no app transaction at all")
+    func cachedLegacySurvivesNilAppTransaction() {
+        let resolved = AccessResolver.resolve(isOfficial: true, appTx: nil, entitlements: [], cached: .legacy, now: Date())
+        #expect(resolved == .legacy)
     }
 
     // MARK: - Host build sanity

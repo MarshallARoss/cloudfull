@@ -121,7 +121,7 @@ final class Usage {
     enum RestoreOutcome: String { case tapped, restored, nothingFound, failed }
     /// The bucket `Entitlements.access` resolved to, for the `entitlement`
     /// fact. Never the exact expiration date or renewal flag.
-    enum AccessKind: String { case unknown, fork, debug, grandfathered, trial, monthly, lifetime, none }
+    enum AccessKind: String { case unknown, fork, debug, legacy, trial, monthly, lifetime, none }
     /// A link row tapped on the paywall screen itself, separate from
     /// `SettingsLink`.
     enum PaywallLink: String { case terms, privacy, support, supportPage, restore, close }

@@ -591,10 +591,10 @@ def main():
         sawPaywall = sum(1 for rs in byInstall.values() if hasPrefix(rs, "paywall.shown."))
         boughtMonthly = sum(1 for rs in byInstall.values() if hasCount(rs, "purchase.monthly.success"))
         boughtLifetime = sum(1 for rs in byInstall.values() if hasCount(rs, "purchase.lifetime.success"))
-        earlyBuyers = sum(1 for rs in byInstall.values() if any(r["facts"].get("entitlement") == "grandfathered" or r["facts"].get("entitlementAtOpen") == "grandfathered" for r in rs))
+        earlyBuyers = sum(1 for rs in byInstall.values() if any(r["facts"].get("entitlement") == "legacy" or r["facts"].get("entitlementAtOpen") == "legacy" for r in rs))
         successByProduct = {p: C.get(f"purchase.{p}.success", 0) for p in PRODUCTS}
         print(f"  installs with plan data: {nInst}   scrolled: {scrolled} ({pct(scrolled, nInst)})   saw the paywall: {sawPaywall} ({pct(sawPaywall, nInst)})")
-        print(f"  bought monthly: {boughtMonthly} installs ({successByProduct['monthly']} purchase events)   bought lifetime: {boughtLifetime} installs ({successByProduct['lifetime']} purchase events)   early buyers (grandfathered): {earlyBuyers}")
+        print(f"  bought monthly: {boughtMonthly} installs ({successByProduct['monthly']} purchase events)   bought lifetime: {boughtLifetime} installs ({successByProduct['lifetime']} purchase events)   early buyers (legacy): {earlyBuyers}")
 
         # 2. Scroll-only installs: every session none/unknown, never a purchase success.
         def scrollOnly(rs): return all(r["facts"].get("entitlement") in ("none", "unknown") for r in rs) and not hasPurchaseSuccess(rs)
@@ -615,7 +615,7 @@ def main():
 
         # 4. Sessions per week by plan (last 8 ISO weeks ending at the latest session day this pull has).
         sentDays = [r["day"] for r in SENT if r.get("day")]
-        cols = ("none", "monthly", "lifetime", "grandfathered")
+        cols = ("none", "monthly", "lifetime", "legacy")
         if sentDays:
             monday = datetime.date.fromisoformat(max(sentDays))
             monday -= datetime.timedelta(days=monday.weekday())

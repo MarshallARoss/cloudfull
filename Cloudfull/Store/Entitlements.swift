@@ -246,7 +246,7 @@ final class Entitlements: ObservableObject {
 
         // `AppTransaction.shared` never shows a sign-in sheet. An
         // unverified result resolves as the rules say (a cached
-        // grandfathered customer is never downgraded); Restore Purchases
+        // legacy customer is never downgraded); Restore Purchases
         // is the one place that asks Apple again, with a sign-in if needed.
         let appTx = await source.appTransaction()
         logInstallFactsIfNeeded(appTx)
@@ -407,7 +407,7 @@ final class Entitlements: ObservableObject {
     }
 
     /// Logs the raw `originalAppVersion` and environment once per process,
-    /// for the TestFlight grandfathering check.
+    /// for the TestFlight legacy check.
     private func logInstallFactsIfNeeded(_ appTx: AppTransactionFacts?) {
         guard !loggedInstallFacts else { return }
         loggedInstallFacts = true
@@ -650,7 +650,7 @@ final class Entitlements: ObservableObject {
         await refresh()
         let outcome: RestoreOutcome
         switch access {
-        case .lifetime, .monthly, .grandfathered:
+        case .lifetime, .monthly, .legacy:
             outcome = .restored
         default:
             outcome = .nothingFound
@@ -710,7 +710,7 @@ final class Entitlements: ObservableObject {
         case "trial": return .monthly(expiresAt: now.addingTimeInterval(7 * 86_400), isTrial: true, willAutoRenew: true, inGracePeriod: false)
         case "monthly": return .monthly(expiresAt: now.addingTimeInterval(30 * 86_400), isTrial: false, willAutoRenew: true, inGracePeriod: false)
         case "lifetime": return .lifetime
-        case "grandfathered": return .grandfathered
+        case "legacy": return .legacy
         default: return nil
         }
     }

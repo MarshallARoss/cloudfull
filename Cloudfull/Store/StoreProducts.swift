@@ -30,16 +30,16 @@ enum StoreProducts {
     /// 2026-11-03: build 17 (version 1.0) was the only paid build.
     static let paidBuilds: Set<String> = ["17"]
 
-    /// The day the App Store price became Free. The second grandfather
+    /// The day the App Store price became Free. The second legacy
     /// signal: an original purchase dated before this day was a paid
     /// download, even if `paidBuilds` does not name its exact build.
     ///
     /// Set to the day of the 1.1 TestFlight upload (2026-11-04): every
     /// original purchase before it was a $6.99 download, since the price
     /// cannot become Free before this build exists. A later date would
-    /// grandfather free downloads made after the price change, so it gives
+    /// count free downloads made after the price change as legacy, so it gives
     /// away MORE free unlocks; an earlier one would miss paid buyers.
-    /// (A far-future value would grandfather every install; `.distantPast`
+    /// (A far-future value would make every install legacy; `.distantPast`
     /// turns the signal off.)
     static let freeSinceDate: Date = ISO8601DateFormatter().date(from: "2026-11-04T00:00:00Z") ?? .distantPast
 

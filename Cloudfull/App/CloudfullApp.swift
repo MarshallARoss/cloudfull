@@ -115,7 +115,7 @@ struct CloudfullApp: App {
 
     /// Launch argument that overrides `Entitlements.access` for this
     /// launch only: `-cloudfull-access=<real|unknown|none|trial|monthly|
-    /// lifetime|grandfathered>`. Never persisted, and never compiled into
+    /// lifetime|legacy>`. Never persisted, and never compiled into
     /// a release build. See `Entitlements.refresh()`.
     static let accessArgument = "-cloudfull-access="
     #endif

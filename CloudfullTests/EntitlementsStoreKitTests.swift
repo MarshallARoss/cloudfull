@@ -356,10 +356,10 @@ struct EntitlementsStoreKitTests {
         #expect(entitlements.canMakePayments == false)
     }
 
-    // MARK: - 7: grandfathering through the live refresh path
+    // MARK: - 7: legacy through the live refresh path
 
-    @Test("A production app transaction for build 17 grandfathers with no purchase at all")
-    func grandfatheredFromProductionBuild17() async {
+    @Test("A production app transaction for build 17 is legacy with no purchase at all")
+    func legacyFromProductionBuild17() async {
         defer { tearDown() }
         let fake = FakeStoreFactsSource()
         fake.appTransactionFacts = AppTransactionFacts(
@@ -370,11 +370,11 @@ struct EntitlementsStoreKitTests {
         )
         let entitlements = Entitlements(source: fake)
         await entitlements.refresh()
-        #expect(entitlements.access == .grandfathered)
+        #expect(entitlements.access == .legacy)
     }
 
-    @Test("A grandfathered customer stays grandfathered after the app transaction later comes back unverified")
-    func grandfatheredStaysWhenAppTransactionLaterUnverified() async {
+    @Test("A legacy customer stays legacy after the app transaction later comes back unverified")
+    func legacyStaysWhenAppTransactionLaterUnverified() async {
         defer { tearDown() }
         let fake = FakeStoreFactsSource()
         fake.appTransactionFacts = AppTransactionFacts(
@@ -385,18 +385,18 @@ struct EntitlementsStoreKitTests {
         )
         let entitlements = Entitlements(source: fake)
         await entitlements.refresh()
-        #expect(entitlements.access == .grandfathered)
+        #expect(entitlements.access == .legacy)
 
         fake.appTransactionFacts?.isVerified = false
         await entitlements.refresh()
-        #expect(entitlements.access == .grandfathered)
+        #expect(entitlements.access == .legacy)
     }
 
-    // No test here for the purchase-date grandfather signal through the live
+    // No test here for the purchase-date legacy signal through the live
     // `Entitlements` flow: the fake's `AppTransactionFacts` could carry a
     // purchase date before `StoreProducts.freeSinceDate` (2026-11-04), but
     // `AccessResolverTests` already covers that signal against the real
-    // default (`purchaseDateBeforeDefaultFreeSinceDateIsGrandfathered`) and
+    // default (`purchaseDateBeforeDefaultFreeSinceDateIsLegacy`) and
     // against an explicit `freeSinceDate:`.
 
     // MARK: - Review fixes: paywall hold, purchase floor, serialized refresh, restore
@@ -405,11 +405,11 @@ struct EntitlementsStoreKitTests {
         AppTransactionFacts(environment: .production, originalAppVersion: "17", originalPurchaseDate: nil, isVerified: true)
     }
 
-    /// A verified production app transaction that is NOT grandfathered
+    /// A verified production app transaction that is NOT legacy
     /// (build "18", bought after `freeSinceDate`): with no entitlement it
     /// resolves `.locked`, and unlike `appTx == nil` it never falls back to
     /// the cached value.
-    private var notGrandfathered: AppTransactionFacts {
+    private var notLegacy: AppTransactionFacts {
         AppTransactionFacts(
             environment: .production,
             originalAppVersion: "18",
@@ -425,7 +425,7 @@ struct EntitlementsStoreKitTests {
         fake.appTransactionFacts = build17
         let entitlements = Entitlements(source: fake)
         await entitlements.refresh()
-        #expect(entitlements.access == .grandfathered)
+        #expect(entitlements.access == .legacy)
 
         entitlements.presentPaywall(from: .settings)
         await entitlements.refresh()   // what every scene `.active` does
@@ -437,7 +437,7 @@ struct EntitlementsStoreKitTests {
     func unlockClosesPaywall() async {
         defer { tearDown() }
         let fake = FakeStoreFactsSource()
-        fake.appTransactionFacts = notGrandfathered
+        fake.appTransactionFacts = notLegacy
         let entitlements = Entitlements(source: fake)
         await entitlements.refresh()
         #expect(entitlements.access == .locked)
@@ -446,12 +446,12 @@ struct EntitlementsStoreKitTests {
 
         fake.appTransactionFacts = build17
         await entitlements.refresh()
-        #expect(entitlements.access == .grandfathered)
+        #expect(entitlements.access == .legacy)
         #expect(entitlements.paywallRequest == nil)
     }
 
     // The floor tests hide the entitlement list BEFORE the purchase, so
-    // StoreKit "lags" for the whole test, and use a non-grandfathered app
+    // StoreKit "lags" for the whole test, and use a non-legacy app
     // transaction, so a refresh that finds no entitlement resolves
     // `.locked` instead of keeping the cached unlock.
 
@@ -472,7 +472,7 @@ struct EntitlementsStoreKitTests {
     func lifetimePurchaseFloorSurvivesLag() async throws {
         defer { tearDown() }
         let fake = FakeStoreFactsSource()
-        fake.appTransactionFacts = notGrandfathered
+        fake.appTransactionFacts = notLegacy
         fake.hideEntitlements = true
         let entitlements = Entitlements(source: fake)
         await entitlements.refresh()
@@ -489,7 +489,7 @@ struct EntitlementsStoreKitTests {
     func monthlyPurchaseFloorSurvivesLag() async throws {
         defer { tearDown() }
         let fake = FakeStoreFactsSource()
-        fake.appTransactionFacts = notGrandfathered
+        fake.appTransactionFacts = notLegacy
         fake.hideEntitlements = true
         let entitlements = Entitlements(source: fake)
         await entitlements.refresh()
@@ -511,7 +511,7 @@ struct EntitlementsStoreKitTests {
     func monthlyThenLifetimeEndsLifetime() async throws {
         defer { tearDown() }
         let fake = FakeStoreFactsSource()
-        fake.appTransactionFacts = notGrandfathered
+        fake.appTransactionFacts = notLegacy
         fake.hideEntitlements = true
         let entitlements = Entitlements(source: fake)
         await entitlements.refresh()
@@ -534,7 +534,7 @@ struct EntitlementsStoreKitTests {
     func floorIsDroppedWhenFactsCatchUp() async throws {
         defer { tearDown() }
         let fake = FakeStoreFactsSource()
-        fake.appTransactionFacts = notGrandfathered
+        fake.appTransactionFacts = notLegacy
         fake.hideEntitlements = true
         let entitlements = Entitlements(source: fake)
         await entitlements.refresh()
@@ -554,7 +554,7 @@ struct EntitlementsStoreKitTests {
     func noFactsRefreshDoesNotDropFloor() async throws {
         defer { tearDown() }
         let fake = FakeStoreFactsSource()
-        fake.appTransactionFacts = notGrandfathered
+        fake.appTransactionFacts = notLegacy
         fake.hideEntitlements = true
         let entitlements = Entitlements(source: fake)
         await entitlements.refresh()
@@ -565,7 +565,7 @@ struct EntitlementsStoreKitTests {
         await entitlements.refresh()
         #expect(entitlements.access == .lifetime)
 
-        fake.appTransactionFacts = notGrandfathered   // back online, the list still lags
+        fake.appTransactionFacts = notLegacy   // back online, the list still lags
         await entitlements.refresh()
         #expect(entitlements.access == .lifetime)
     }
@@ -574,7 +574,7 @@ struct EntitlementsStoreKitTests {
     func listedMonthlyDoesNotCoverLifetimeFloor() async throws {
         defer { tearDown() }
         let fake = FakeStoreFactsSource()
-        fake.appTransactionFacts = notGrandfathered
+        fake.appTransactionFacts = notLegacy
         let entitlements = Entitlements(source: fake)
         await entitlements.refresh()
 
@@ -601,7 +601,7 @@ struct EntitlementsStoreKitTests {
     func revocationEndsFloor() async throws {
         defer { tearDown() }
         let fake = FakeStoreFactsSource()
-        fake.appTransactionFacts = notGrandfathered
+        fake.appTransactionFacts = notLegacy
         fake.hideEntitlements = true
         let entitlements = Entitlements(source: fake)
         await entitlements.refresh()
@@ -618,13 +618,13 @@ struct EntitlementsStoreKitTests {
     func refreshesAreSerialized() async throws {
         defer { tearDown() }
         let fake = FakeStoreFactsSource()
-        fake.appTransactionFacts = notGrandfathered
+        fake.appTransactionFacts = notLegacy
         let entitlements = Entitlements(source: fake)
         await entitlements.refresh()
         #expect(entitlements.access == .locked)
 
         fake.holdFirstAppTransaction = true
-        let older = Task { await entitlements.refresh() }   // reads the not-grandfathered facts, then waits
+        let older = Task { await entitlements.refresh() }   // reads the not-legacy facts, then waits
         for _ in 0..<100 where !fake.isHolding { try await Task.sleep(nanoseconds: 20_000_000) }
         #expect(fake.isHolding)
 
@@ -634,7 +634,7 @@ struct EntitlementsStoreKitTests {
         fake.releaseHeld()
         await older.value
         await newer.value
-        #expect(entitlements.access == .grandfathered)
+        #expect(entitlements.access == .legacy)
     }
 
     @Test("A refund of a lifetime purchase is not counted as a purchase success")
@@ -689,7 +689,7 @@ struct EntitlementsStoreKitTests {
     func restoreKeepsPaywallUpUntilCleared() async {
         defer { tearDown() }
         let fake = FakeStoreFactsSource()
-        fake.appTransactionFacts = notGrandfathered   // verified, so `restore()` never calls the real `AppTransaction.refresh()`
+        fake.appTransactionFacts = notLegacy   // verified, so `restore()` never calls the real `AppTransaction.refresh()`
         let entitlements = Entitlements(source: fake)
         await entitlements.refresh()
         entitlements.require(.keep) {}
@@ -707,7 +707,7 @@ struct EntitlementsStoreKitTests {
     func unlockDuringSyncKeepsPaywallUp() async throws {
         defer { tearDown() }
         let fake = FakeStoreFactsSource()
-        fake.appTransactionFacts = notGrandfathered
+        fake.appTransactionFacts = notLegacy
         let entitlements = Entitlements(source: fake)
         await entitlements.refresh()
         entitlements.require(.keep) {}
@@ -720,7 +720,7 @@ struct EntitlementsStoreKitTests {
         // What the scene going `.active` after Apple's sheet does.
         fake.appTransactionFacts = build17
         await entitlements.refresh()
-        #expect(entitlements.access == .grandfathered)
+        #expect(entitlements.access == .legacy)
         #expect(entitlements.paywallRequest == .keep)
 
         fake.releaseSync()
@@ -734,7 +734,7 @@ struct EntitlementsStoreKitTests {
     func cancelledRestoreIsNotNothingFound() async {
         defer { tearDown() }
         let fake = FakeStoreFactsSource()
-        fake.appTransactionFacts = notGrandfathered
+        fake.appTransactionFacts = notLegacy
         fake.syncError = StoreKitError.userCancelled
         let entitlements = Entitlements(source: fake)
         await entitlements.refresh()
@@ -756,7 +756,7 @@ struct EntitlementsStoreKitTests {
     func restoreNothingFoundLeavesPaywall() async {
         defer { tearDown() }
         let fake = FakeStoreFactsSource()
-        fake.appTransactionFacts = notGrandfathered
+        fake.appTransactionFacts = notLegacy
         let entitlements = Entitlements(source: fake)
         await entitlements.refresh()
         entitlements.require(.keep) {}

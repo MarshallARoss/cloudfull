@@ -78,7 +78,7 @@ enum PaywallCopy {
     /// Takes one `%@`: the date the subscription ends.
     static let settingsStatusMonthlyCancelled = "Monthly · cancelled, ends %@"
     static let settingsStatusLifetime = "Lifetime"
-    static let settingsStatusGrandfathered = "Unlocked. Thanks for buying early."
+    static let settingsStatusLegacy = "Unlocked. Thanks for buying early."
     static let settingsStatusPaymentWarning = "Payment problem. Check Manage subscription."
     static let settingsStatusLifetimeStillRenewing = "Your monthly plan still renews. Cancel it to stop the charge."
 

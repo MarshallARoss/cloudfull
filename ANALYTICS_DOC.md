@@ -269,7 +269,7 @@ on a change of shape/mode or at the end of a session.
 | `purchase.viaOfferCode` | A purchase was completed by redeeming an App Store offer code. Never the code itself. | Exact integer, running total. |
 | `restore.<outcome>` | How a tap on "Restore Purchases" ended (`outcome` = `tapped`, `restored`, `nothingFound`, `failed`). | Exact integer, running total. |
 | `manageSubscriptionOpened` | The system "Manage Subscription" sheet was opened. | Exact integer, running total. |
-| `entitlement` | The access state the app resolved to for this session (`unknown`, `fork`, `debug`, `grandfathered`, `trial`, `monthly`, `lifetime`, `none`). | One of a fixed set of names. |
+| `entitlement` | The access state the app resolved to for this session (`unknown`, `fork`, `debug`, `legacy`, `trial`, `monthly`, `lifetime`, `none`). | One of a fixed set of names. |
 | `entitlementAtOpen` | The first access state of the session, written once. A session that starts locked and then buys keeps `none` here while `entitlement` moves on, so the locked-session funnel still counts it. | One of the same fixed set of names. |
 | `subscription.ageDays` | Days since the monthly plan was first bought, on a session with an active monthly plan. Apple keeps the first purchase date across a lapse and a resubscribe, so this is days since the first-ever subscription, not unbroken tenure. | Exact integer. |
 | `subscription.autoRenew` | Whether the monthly plan will renew (`true`/`false`). `false` with a rising `subscription.ageDays` is a canceller running out the clock. | `true` or `false`. |
