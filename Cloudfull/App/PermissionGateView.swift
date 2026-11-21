@@ -211,9 +211,11 @@ struct PermissionGateView: View {
             // Settings — whichever rail tap, or Settings row, raised it.
             // A full-screen cover has no swipe; the close button calls
             // `dismissPaywall()` itself. The setter only covers a
-            // system-driven dismissal. A purchase that unlocks access
-            // clears `paywallRequest` on its own (`Entitlements.apply`),
-            // which drops this cover the same way.
+            // system-driven dismissal. A move from locked to unlocked
+            // clears `paywallRequest` (`Entitlements.apply`), which drops
+            // this cover the same way, unless a hold keeps it up for the
+            // cancel-your-trial prompt or the restore alert. A refresh
+            // that finds access already unlocked leaves it alone.
             .fullScreenCover(item: paywallBinding) { source in
                 PaywallView(source: source)
             }

@@ -411,6 +411,7 @@ struct SettingsView: View {
                         case .restored: restoreAlertMessage = PaywallCopy.restoreRestored
                         case .nothingFound: restoreAlertMessage = PaywallCopy.restoreNothingFound
                         case .failed: restoreAlertMessage = PaywallCopy.restoreFailed
+                        case .cancelled: return   // the user backed out; nothing to say
                         }
                         showRestoreAlert = true
                     }
@@ -452,7 +453,11 @@ struct SettingsView: View {
     }
 
     private var showsLifetimeStillRenewing: Bool {
-        entitlements.access == .lifetime && entitlements.hasLiveSubscription
+        // Only a plan that will charge again. A cancelled plan stays
+        // "live" until its paid month ends, but nothing is left to stop.
+        guard entitlements.access == .lifetime,
+              case .verified(let renewalInfo)? = entitlements.subscriptionStatus?.renewalInfo else { return false }
+        return renewalInfo.willAutoRenew
     }
 
     private var accessStatusText: String {

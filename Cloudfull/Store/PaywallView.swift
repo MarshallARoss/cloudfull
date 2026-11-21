@@ -120,7 +120,7 @@ struct PaywallView: View {
                 let outcome = await entitlements.handlePurchase(product, result)
                 switch outcome {
                 case .success:
-                    break   // the access flip clears paywallRequest and drops the cover
+                    break   // `handlePurchase` already unlocked and cleared `paywallRequest` (it set `.lifetime`/`.monthly` itself)
                 case .successCancelTrialPrompt:
                     showCancelTrialAlert = true
                 case .unverified, .failed:
@@ -156,7 +156,11 @@ struct PaywallView: View {
             Text(PaywallCopy.purchaseFailedAlert)
         }
         .alert("", isPresented: $showRestoreAlert) {
-            Button(PaywallCopy.alertOK, role: .cancel) {}
+            // A restore holds the cover up for this alert; once it is
+            // answered, an unlocked user's cover goes.
+            Button(PaywallCopy.alertOK, role: .cancel) {
+                if entitlements.access.isUnlocked { entitlements.clearPaywall() }
+            }
                 .accessibilityIdentifier("paywall_restore_alert")
         } message: {
             Text(restoreAlertMessage)
@@ -435,6 +439,7 @@ struct PaywallView: View {
                     case .restored: restoreAlertMessage = PaywallCopy.restoreRestored
                     case .nothingFound: restoreAlertMessage = PaywallCopy.restoreNothingFound
                     case .failed: restoreAlertMessage = PaywallCopy.restoreFailed
+                    case .cancelled: return   // the user backed out; nothing to say
                     }
                     showRestoreAlert = true
                 }

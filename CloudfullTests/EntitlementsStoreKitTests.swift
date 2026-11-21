@@ -392,22 +392,389 @@ struct EntitlementsStoreKitTests {
         #expect(entitlements.access == .grandfathered)
     }
 
-    // No test here for the purchase-date grandfather signal
-    // (`originalPurchaseDate` before `freeSinceDate`): `Entitlements.refresh()`
-    // calls `AccessResolver.resolve(...)` with no `freeSinceDate:` argument,
-    // so it always uses the real default, `StoreProducts.freeSinceDate`.
-    // That constant is `.distantPast` until release day, so no purchase
-    // date can ever trigger this path through the live `Entitlements`
-    // flow — it is only reachable by passing `freeSinceDate:` directly to
-    // `AccessResolver.resolve(...)`, which `AccessResolverTests` covers
-    // (`purchaseDateBeforeFreeSinceDateIsGrandfathered`). Not testable here
-    // without adding an injection point to `Entitlements.swift`, which is
-    // out of scope for this change.
+    // No test here for the purchase-date grandfather signal through the live
+    // `Entitlements` flow: the fake's `AppTransactionFacts` could carry a
+    // purchase date before `StoreProducts.freeSinceDate` (2026-11-04), but
+    // `AccessResolverTests` already covers that signal against the real
+    // default (`purchaseDateBeforeDefaultFreeSinceDateIsGrandfathered`) and
+    // against an explicit `freeSinceDate:`.
+
+    // MARK: - Review fixes: paywall hold, purchase floor, serialized refresh, restore
+
+    private var build17: AppTransactionFacts {
+        AppTransactionFacts(environment: .production, originalAppVersion: "17", originalPurchaseDate: nil, isVerified: true)
+    }
+
+    /// A verified production app transaction that is NOT grandfathered
+    /// (build "18", bought after `freeSinceDate`): with no entitlement it
+    /// resolves `.locked`, and unlike `appTx == nil` it never falls back to
+    /// the cached value.
+    private var notGrandfathered: AppTransactionFacts {
+        AppTransactionFacts(
+            environment: .production,
+            originalAppVersion: "18",
+            originalPurchaseDate: ISO8601DateFormatter().date(from: "2026-12-01T00:00:00Z"),
+            isVerified: true
+        )
+    }
+
+    @Test("A refresh while already unlocked does not close a paywall opened from Settings")
+    func refreshKeepsSettingsPaywallForUnlockedUser() async {
+        defer { tearDown() }
+        let fake = FakeStoreFactsSource()
+        fake.appTransactionFacts = build17
+        let entitlements = Entitlements(source: fake)
+        await entitlements.refresh()
+        #expect(entitlements.access == .grandfathered)
+
+        entitlements.presentPaywall(from: .settings)
+        await entitlements.refresh()   // what every scene `.active` does
+        #expect(entitlements.paywallRequest == .settings)
+        entitlements.clearPaywall()
+    }
+
+    @Test("The move from locked to unlocked still closes the paywall")
+    func unlockClosesPaywall() async {
+        defer { tearDown() }
+        let fake = FakeStoreFactsSource()
+        fake.appTransactionFacts = notGrandfathered
+        let entitlements = Entitlements(source: fake)
+        await entitlements.refresh()
+        #expect(entitlements.access == .locked)
+        entitlements.require(.keep) {}
+        #expect(entitlements.paywallRequest == .keep)
+
+        fake.appTransactionFacts = build17
+        await entitlements.refresh()
+        #expect(entitlements.access == .grandfathered)
+        #expect(entitlements.paywallRequest == nil)
+    }
+
+    // The floor tests hide the entitlement list BEFORE the purchase, so
+    // StoreKit "lags" for the whole test, and use a non-grandfathered app
+    // transaction, so a refresh that finds no entitlement resolves
+    // `.locked` instead of keeping the cached unlock.
+
+    private func boughtWithLag(_ productID: String, _ entitlements: Entitlements, _ fake: FakeStoreFactsSource) async throws -> Entitlements.PurchaseOutcome? {
+        guard let product = entitlements.products.first(where: { $0.id == productID }) else {
+            Issue.record("\(productID) did not load")
+            return nil
+        }
+        _ = try await session.buyProduct(identifier: productID)
+        guard let verification = await verificationResult(for: productID) else {
+            Issue.record("No VerificationResult<Transaction> found for \(productID)")
+            return nil
+        }
+        return await entitlements.handlePurchase(product, .success(.success(verification)))
+    }
+
+    @Test("A verified lifetime purchase stays unlocked through later refreshes while the entitlement list lags")
+    func lifetimePurchaseFloorSurvivesLag() async throws {
+        defer { tearDown() }
+        let fake = FakeStoreFactsSource()
+        fake.appTransactionFacts = notGrandfathered
+        fake.hideEntitlements = true
+        let entitlements = Entitlements(source: fake)
+        await entitlements.refresh()
+        #expect(entitlements.access == .locked)
+
+        let outcome = try await boughtWithLag(StoreProducts.lifetime, entitlements, fake)
+        #expect(outcome.map(label) == "success")
+        #expect(entitlements.access == .lifetime)
+        await entitlements.refresh()   // the `.active` refresh after the purchase sheet closes
+        #expect(entitlements.access == .lifetime)
+    }
+
+    @Test("A verified monthly purchase stays unlocked through later refreshes while the entitlement list lags")
+    func monthlyPurchaseFloorSurvivesLag() async throws {
+        defer { tearDown() }
+        let fake = FakeStoreFactsSource()
+        fake.appTransactionFacts = notGrandfathered
+        fake.hideEntitlements = true
+        let entitlements = Entitlements(source: fake)
+        await entitlements.refresh()
+
+        let outcome = try await boughtWithLag(StoreProducts.monthly, entitlements, fake)
+        #expect(outcome.map(label) == "success")
+        guard case .monthly = entitlements.access else {
+            Issue.record("Expected .monthly, got \(entitlements.access)")
+            return
+        }
+        await entitlements.refresh()
+        guard case .monthly = entitlements.access else {
+            Issue.record("Expected .monthly after a second refresh, got \(entitlements.access)")
+            return
+        }
+    }
+
+    @Test("A monthly subscriber who buys lifetime ends at lifetime, also while the list lags")
+    func monthlyThenLifetimeEndsLifetime() async throws {
+        defer { tearDown() }
+        let fake = FakeStoreFactsSource()
+        fake.appTransactionFacts = notGrandfathered
+        fake.hideEntitlements = true
+        let entitlements = Entitlements(source: fake)
+        await entitlements.refresh()
+        _ = try await boughtWithLag(StoreProducts.monthly, entitlements, fake)
+        guard case .monthly = entitlements.access else {
+            Issue.record("Expected .monthly, got \(entitlements.access)")
+            return
+        }
+
+        let outcome = try await boughtWithLag(StoreProducts.lifetime, entitlements, fake)
+        // The monthly plan is still set to renew, so the prompt may come.
+        #expect(outcome.map(label) == "success" || outcome.map(label) == "successCancelTrialPrompt")
+        #expect(entitlements.access == .lifetime)
+        await entitlements.refresh()
+        #expect(entitlements.access == .lifetime)
+        entitlements.clearPaywall()
+    }
+
+    @Test("The floor ends once StoreKit's own facts cover the purchase")
+    func floorIsDroppedWhenFactsCatchUp() async throws {
+        defer { tearDown() }
+        let fake = FakeStoreFactsSource()
+        fake.appTransactionFacts = notGrandfathered
+        fake.hideEntitlements = true
+        let entitlements = Entitlements(source: fake)
+        await entitlements.refresh()
+        _ = try await boughtWithLag(StoreProducts.lifetime, entitlements, fake)
+        #expect(entitlements.access == .lifetime)
+
+        fake.hideEntitlements = false   // StoreKit catches up
+        await entitlements.refresh()
+        #expect(entitlements.access == .lifetime)
+
+        fake.hideEntitlements = true    // the list loses it again; the floor must be gone
+        await entitlements.refresh()
+        #expect(entitlements.access == .locked)
+    }
+
+    @Test("A refresh with no facts at all does not end the floor by echoing the cache")
+    func noFactsRefreshDoesNotDropFloor() async throws {
+        defer { tearDown() }
+        let fake = FakeStoreFactsSource()
+        fake.appTransactionFacts = notGrandfathered
+        fake.hideEntitlements = true
+        let entitlements = Entitlements(source: fake)
+        await entitlements.refresh()
+        _ = try await boughtWithLag(StoreProducts.lifetime, entitlements, fake)
+        #expect(entitlements.access == .lifetime)
+
+        fake.appTransactionFacts = nil   // offline: no app transaction, empty list; the resolver returns the cache
+        await entitlements.refresh()
+        #expect(entitlements.access == .lifetime)
+
+        fake.appTransactionFacts = notGrandfathered   // back online, the list still lags
+        await entitlements.refresh()
+        #expect(entitlements.access == .lifetime)
+    }
+
+    @Test("A listed monthly plan does not cover a lifetime purchase the list has not shown yet")
+    func listedMonthlyDoesNotCoverLifetimeFloor() async throws {
+        defer { tearDown() }
+        let fake = FakeStoreFactsSource()
+        fake.appTransactionFacts = notGrandfathered
+        let entitlements = Entitlements(source: fake)
+        await entitlements.refresh()
+
+        _ = try await session.buyProduct(identifier: StoreProducts.monthly)
+        for _ in 0..<50 {   // wait until the monthly entitlement is really listed
+            if await fake.currentEntitlements().contains(where: { $0.productID == StoreProducts.monthly }) { break }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        await entitlements.refresh()
+        guard case .monthly = entitlements.access else {
+            Issue.record("Expected .monthly before the lifetime purchase, got \(entitlements.access)")
+            return
+        }
+
+        fake.hiddenProductIDs = [StoreProducts.lifetime]   // monthly listed, lifetime lagging
+        _ = try await boughtWithLag(StoreProducts.lifetime, entitlements, fake)
+        #expect(entitlements.access == .lifetime)
+        await entitlements.refresh()   // the resolver alone says `.monthly`; the floor keeps `.lifetime`
+        #expect(entitlements.access == .lifetime)
+        entitlements.clearPaywall()
+    }
+
+    @Test("A refund of the proven purchase ends the floor, so access locks again")
+    func revocationEndsFloor() async throws {
+        defer { tearDown() }
+        let fake = FakeStoreFactsSource()
+        fake.appTransactionFacts = notGrandfathered
+        fake.hideEntitlements = true
+        let entitlements = Entitlements(source: fake)
+        await entitlements.refresh()
+        _ = try await boughtWithLag(StoreProducts.lifetime, entitlements, fake)
+        #expect(entitlements.access == .lifetime)
+
+        let lifetimeTransaction = try transaction(for: StoreProducts.lifetime)
+        try session.refundTransaction(identifier: lifetimeTransaction.identifier)
+        await refreshUntil(entitlements) { entitlements.access == .locked }
+        #expect(entitlements.access == .locked)
+    }
+
+    @Test("An older in-flight refresh cannot apply stale facts after a newer one")
+    func refreshesAreSerialized() async throws {
+        defer { tearDown() }
+        let fake = FakeStoreFactsSource()
+        fake.appTransactionFacts = notGrandfathered
+        let entitlements = Entitlements(source: fake)
+        await entitlements.refresh()
+        #expect(entitlements.access == .locked)
+
+        fake.holdFirstAppTransaction = true
+        let older = Task { await entitlements.refresh() }   // reads the not-grandfathered facts, then waits
+        for _ in 0..<100 where !fake.isHolding { try await Task.sleep(nanoseconds: 20_000_000) }
+        #expect(fake.isHolding)
+
+        fake.appTransactionFacts = build17
+        let newer = Task { await entitlements.refresh() }
+        try await Task.sleep(nanoseconds: 100_000_000)
+        fake.releaseHeld()
+        await older.value
+        await newer.value
+        #expect(entitlements.access == .grandfathered)
+    }
+
+    @Test("A refund of a lifetime purchase is not counted as a purchase success")
+    func revokedTransactionIsNotCountedAsPurchase() async throws {
+        defer { tearDown() }
+        let fake = FakeStoreFactsSource()
+        let entitlements = Entitlements(source: fake)
+        await entitlements.refresh()
+        let key = "purchase.lifetime.success"
+
+        _ = try await session.buyProduct(identifier: StoreProducts.lifetime)
+        await waitUntil { entitlements.access == .lifetime && (Usage.shared.current.counts[key] ?? 0) >= 1 }
+        let afterBuy = Usage.shared.current.counts[key] ?? 0
+        #expect(afterBuy >= 1)   // control: the listener does count the live purchase
+
+        let lifetimeTransaction = try transaction(for: StoreProducts.lifetime)
+        try session.refundTransaction(identifier: lifetimeTransaction.identifier)
+        // Hand the revoked transaction to `handle(_:)` ourselves, once it
+        // reads as revoked: the count is then decided by the time the
+        // call returns, with no timing to guess. (The listener may also
+        // deliver it; it must not count either.)
+        var revoked: VerificationResult<Transaction>?
+        for _ in 0..<50 {
+            if let latest = await Transaction.latest(for: StoreProducts.lifetime),
+               case .verified(let t) = latest, t.revocationDate != nil {
+                revoked = latest
+                break
+            }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        guard let revoked else {
+            Issue.record("The refunded transaction never read as revoked")
+            return
+        }
+        await entitlements.handle(revoked)
+        #expect((Usage.shared.current.counts[key] ?? 0) == afterBuy)
+    }
+
+    @Test("canMakePayments is re-read on refresh")
+    func canMakePaymentsIsReReadOnRefresh() async {
+        defer { tearDown() }
+        let fake = FakeStoreFactsSource()
+        fake.canMakePaymentsOverride = false
+        let entitlements = Entitlements(source: fake)
+        #expect(entitlements.canMakePayments == false)
+        fake.canMakePaymentsOverride = true
+        await entitlements.refresh()
+        #expect(entitlements.canMakePayments)
+    }
+
+    @Test("A restore that finds a purchase keeps the paywall up for its alert")
+    func restoreKeepsPaywallUpUntilCleared() async {
+        defer { tearDown() }
+        let fake = FakeStoreFactsSource()
+        fake.appTransactionFacts = notGrandfathered   // verified, so `restore()` never calls the real `AppTransaction.refresh()`
+        let entitlements = Entitlements(source: fake)
+        await entitlements.refresh()
+        entitlements.require(.keep) {}
+        #expect(entitlements.paywallRequest == .keep)
+
+        fake.appTransactionFacts = build17
+        let outcome = await entitlements.restore()
+        #expect(outcome == .restored)
+        #expect(entitlements.paywallRequest == .keep)   // the "Welcome back" alert needs the cover
+        entitlements.clearPaywall()
+        #expect(entitlements.paywallRequest == nil)
+    }
+
+    @Test("An unlock that lands while the restore sheet is up does not drop the cover")
+    func unlockDuringSyncKeepsPaywallUp() async throws {
+        defer { tearDown() }
+        let fake = FakeStoreFactsSource()
+        fake.appTransactionFacts = notGrandfathered
+        let entitlements = Entitlements(source: fake)
+        await entitlements.refresh()
+        entitlements.require(.keep) {}
+
+        fake.holdSync = true
+        let restoring = Task { await entitlements.restore() }
+        for _ in 0..<100 where !fake.isHoldingSync { try await Task.sleep(nanoseconds: 20_000_000) }
+        #expect(fake.isHoldingSync)
+
+        // What the scene going `.active` after Apple's sheet does.
+        fake.appTransactionFacts = build17
+        await entitlements.refresh()
+        #expect(entitlements.access == .grandfathered)
+        #expect(entitlements.paywallRequest == .keep)
+
+        fake.releaseSync()
+        let outcome = await restoring.value
+        #expect(outcome == .restored)
+        #expect(entitlements.paywallRequest == .keep)
+        entitlements.clearPaywall()
+    }
+
+    @Test("A restore the user cancels shows nothing, is not counted as nothing found, and releases the hold")
+    func cancelledRestoreIsNotNothingFound() async {
+        defer { tearDown() }
+        let fake = FakeStoreFactsSource()
+        fake.appTransactionFacts = notGrandfathered
+        fake.syncError = StoreKitError.userCancelled
+        let entitlements = Entitlements(source: fake)
+        await entitlements.refresh()
+        entitlements.require(.keep) {}
+        let key = "restore.nothingFound"
+        let before = Usage.shared.current.counts[key] ?? 0
+
+        let outcome = await entitlements.restore()
+        #expect(outcome == .cancelled)
+        #expect((Usage.shared.current.counts[key] ?? 0) == before)
+
+        // The hold is released: a later unlock drops the cover.
+        fake.appTransactionFacts = build17
+        await entitlements.refresh()
+        #expect(entitlements.paywallRequest == nil)
+    }
+
+    @Test("A restore that finds nothing leaves the locked paywall up and releases the hold")
+    func restoreNothingFoundLeavesPaywall() async {
+        defer { tearDown() }
+        let fake = FakeStoreFactsSource()
+        fake.appTransactionFacts = notGrandfathered
+        let entitlements = Entitlements(source: fake)
+        await entitlements.refresh()
+        entitlements.require(.keep) {}
+
+        let outcome = await entitlements.restore()
+        #expect(outcome == .nothingFound)
+        #expect(entitlements.paywallRequest == .keep)
+
+        fake.appTransactionFacts = build17   // a later unlock must still drop the cover
+        await entitlements.refresh()
+        #expect(entitlements.paywallRequest == nil)
+    }
 
     // MARK: - 8: host build sanity
 
     @Test("The host app's own build is not in the paid-builds list")
     func paidBuildsExcludesHostVersion() {
+        defer { tearDown() }   // the suite init set `AccessOverride.shared.value = .real`; put it back
         let hostVersion = Bundle.main.infoDictionary?["CFBundleVersion"] as? String
         #expect(hostVersion != nil)
         if let hostVersion {
@@ -442,10 +809,52 @@ private final class FakeStoreFactsSource: StoreFactsSource {
 
     var canMakePayments: Bool { canMakePaymentsOverride }
 
-    func appTransaction() async -> AppTransactionFacts? { appTransactionFacts }
+    /// What `sync()` throws, if set. The real `AppStore.sync()` waits for
+    /// a sign-in that never comes under a hosted test, so it is never
+    /// called here.
+    var syncError: Error?
+    /// Makes the next `sync()` wait for `releaseSync()`, like Apple's sheet.
+    var holdSync = false
+    private var heldSync: CheckedContinuation<Void, Never>?
+    var isHoldingSync: Bool { heldSync != nil }
+    func releaseSync() {
+        heldSync?.resume()
+        heldSync = nil
+    }
+    func sync() async throws {
+        if holdSync {
+            holdSync = false
+            await withCheckedContinuation { heldSync = $0 }
+        }
+        if let syncError { throw syncError }
+    }
+
+    /// Simulates StoreKit's entitlement list lagging behind a purchase.
+    var hideEntitlements = false
+    /// Hides only these products from the entitlement list.
+    var hiddenProductIDs: Set<String> = []
+    /// Makes the next `appTransaction()` read its facts, then wait for
+    /// `releaseHeld()`, so a test can run a newer refresh in between.
+    var holdFirstAppTransaction = false
+    private var heldContinuation: CheckedContinuation<Void, Never>?
+    var isHolding: Bool { heldContinuation != nil }
+    func releaseHeld() {
+        heldContinuation?.resume()
+        heldContinuation = nil
+    }
+
+    func appTransaction() async -> AppTransactionFacts? {
+        let snapshot = appTransactionFacts
+        if holdFirstAppTransaction {
+            holdFirstAppTransaction = false
+            await withCheckedContinuation { heldContinuation = $0 }
+        }
+        return snapshot
+    }
 
     func currentEntitlements() async -> [EntitlementFact] {
-        await live.currentEntitlements()
+        if hideEntitlements { return [] }
+        return await live.currentEntitlements().filter { !hiddenProductIDs.contains($0.productID) }
     }
 
     func subscriptionStatuses(for product: Product) async -> [Product.SubscriptionInfo.Status] {

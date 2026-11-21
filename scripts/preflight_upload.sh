@@ -50,13 +50,24 @@ mkdir -p "$LOGDIR"
 # holds only the build number, so a later version numbered 17 would
 # unlock every new free install for life. The unit test guards this
 # too; this check runs even when the tests are skipped by hand.
-BUILD_NUMBER=$(sed -n 's/.*CURRENT_PROJECT_VERSION = \([0-9]*\);.*/\1/p' "$PROJ/Cloudfull.xcodeproj/project.pbxproj" | sort -u)
-for PAID in 17; do
-  if [[ "$BUILD_NUMBER" == *"$PAID"* ]]; then
-    echo "## PREFLIGHT FAILURE: CURRENT_PROJECT_VERSION is $BUILD_NUMBER, which was a paid 1.0 build; a free build may never carry it (see StoreProducts.paidBuilds)"
+BUILD_NUMBER=$(sed -n 's/.*CURRENT_PROJECT_VERSION = \([^;]*\);.*/\1/p' "$PROJ/Cloudfull.xcodeproj/project.pbxproj" | sort -u)
+if [[ -z "$BUILD_NUMBER" ]]; then
+  echo "## PREFLIGHT FAILURE: no integer CURRENT_PROJECT_VERSION found in project.pbxproj, so the paid-build check cannot run"
+  exit 1
+fi
+# One value per line. Each is compared whole, so 117 or 170 never match 17.
+while IFS= read -r BUILD; do
+  if [[ ! "$BUILD" =~ ^[0-9]+$ ]]; then
+    echo "## PREFLIGHT FAILURE: CURRENT_PROJECT_VERSION value '$BUILD' is not an integer"
     exit 1
   fi
-done
+  for PAID in 17; do
+    if [[ "$BUILD" == "$PAID" ]]; then
+      echo "## PREFLIGHT FAILURE: CURRENT_PROJECT_VERSION is $BUILD, which was a paid 1.0 build; a free build may never carry it (see StoreProducts.paidBuilds)"
+      exit 1
+    fi
+  done
+done <<< "$BUILD_NUMBER"
 echo "## build number $BUILD_NUMBER is not a paid 1.0 build"
 
 echo "################ UNIT TESTS (CloudfullTests) ################"

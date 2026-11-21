@@ -91,14 +91,50 @@ struct AccessResolverTests {
         #expect(resolved == .locked)
     }
 
-    @Test("A subscribed monthly fact with a past expirationDate is not live")
-    func monthlySubscribedWithPastExpirationIsLocked() {
+    // Changed 2026-11 (review fix 3): this test used to expect `.locked`. The
+    // decided rule is that membership in `currentEntitlements` is enough, with
+    // no check of `expirationDate` against the device clock, so a subscriber
+    // at a renewal boundary is not locked out.
+    @Test("A subscribed monthly fact with a past expirationDate is still entitled (membership, not the clock)")
+    func monthlySubscribedWithPastExpirationStaysMonthly() {
         let pastExpiry = Date().addingTimeInterval(-86_400)
         let resolved = AccessResolver.resolve(
             isOfficial: true,
             appTx: nil,
             entitlements: [EntitlementFact(productID: StoreProducts.monthly, expirationDate: pastExpiry, revocationDate: nil, isIntroOffer: false, renewalState: .subscribed, gracePeriodExpiresAt: nil, willAutoRenew: true)],
             cached: nil,
+            now: Date()
+        )
+        guard case .monthly = resolved else {
+            Issue.record("Expected .monthly, got \(resolved)")
+            return
+        }
+    }
+
+    @Test("A listed monthly fact with no renewal state and a past expirationDate is still entitled")
+    func monthlyWithNilRenewalStateAndPastExpirationStaysMonthly() {
+        // The status fetch failed, or the renewal transaction has not been
+        // delivered yet: membership alone decides.
+        let resolved = AccessResolver.resolve(
+            isOfficial: true,
+            appTx: nil,
+            entitlements: [EntitlementFact(productID: StoreProducts.monthly, expirationDate: Date().addingTimeInterval(-3_600), revocationDate: nil, isIntroOffer: false, renewalState: nil, gracePeriodExpiresAt: nil, willAutoRenew: nil)],
+            cached: nil,
+            now: Date()
+        )
+        guard case .monthly = resolved else {
+            Issue.record("Expected .monthly, got \(resolved)")
+            return
+        }
+    }
+
+    @Test("A revoked monthly fact is not entitled, whatever its renewal state", arguments: [RenewalState?.none, .subscribed, .inGracePeriod])
+    func revokedMonthlyIsLocked(renewalState: RenewalState?) {
+        let resolved = AccessResolver.resolve(
+            isOfficial: true,
+            appTx: nil,
+            entitlements: [EntitlementFact(productID: StoreProducts.monthly, expirationDate: nil, revocationDate: Date(), isIntroOffer: false, renewalState: renewalState, gracePeriodExpiresAt: nil, willAutoRenew: nil)],
+            cached: .locked,
             now: Date()
         )
         #expect(resolved == .locked)
@@ -221,11 +257,10 @@ struct AccessResolverTests {
 
     // MARK: - Grandfathering by purchase date
     //
-    // `StoreProducts.freeSinceDate` itself is `.distantPast` until release
-    // day (PR 7 sets the real date), so this signal is OFF by default — see
-    // `purchaseDateSignalIsOffByDefaultBeforeReleaseDay` below. These tests
-    // exercise the signal itself by passing an explicit `freeSinceDate:`,
-    // the way `resolve(...)` will be called once that constant is set.
+    // `StoreProducts.freeSinceDate` is 2026-11-04 (the 1.1 TestFlight upload
+    // day), so the signal is ON by default — see the two boundary tests
+    // below. The first pair exercises the signal with an explicit
+    // `freeSinceDate:`.
 
     @Test("A production purchase dated before an explicit freeSinceDate is grandfathered even off the paid-builds list")
     func purchaseDateBeforeFreeSinceDateIsGrandfathered() {
@@ -259,14 +294,29 @@ struct AccessResolverTests {
         #expect(resolved == .locked)
     }
 
-    @Test("With the default freeSinceDate (distantPast, pre-release), the purchase-date signal is off")
-    func purchaseDateSignalIsOffByDefaultBeforeReleaseDay() {
+    @Test("With the default freeSinceDate (2026-11-04), a production purchase dated 2026-11-03 is grandfathered even off the paid-builds list")
+    func purchaseDateBeforeDefaultFreeSinceDateIsGrandfathered() {
         // No `freeSinceDate:` argument: this uses the real default,
-        // `StoreProducts.freeSinceDate`, which is `.distantPast` until
-        // release day. A purchase dated "now" must not grandfather.
+        // `StoreProducts.freeSinceDate`. Build "16" is not in `paidBuilds`,
+        // so only the purchase-date signal can grandfather it.
+        let purchaseDate = ISO8601DateFormatter().date(from: "2026-11-03T12:00:00Z")!
+        #expect(!StoreProducts.paidBuilds.contains("16"))
         let resolved = AccessResolver.resolve(
             isOfficial: true,
-            appTx: AppTransactionFacts(environment: .production, originalAppVersion: "1", originalPurchaseDate: Date(), isVerified: true),
+            appTx: AppTransactionFacts(environment: .production, originalAppVersion: "16", originalPurchaseDate: purchaseDate, isVerified: true),
+            entitlements: [],
+            cached: nil,
+            now: Date()
+        )
+        #expect(resolved == .grandfathered)
+    }
+
+    @Test("With the default freeSinceDate (2026-11-04), a production purchase on or after that day, off the paid-builds list, is not grandfathered", arguments: ["2026-11-04T00:00:00Z", "2026-11-04T12:00:00Z", "2026-12-01T00:00:00Z"])
+    func purchaseDateOnOrAfterDefaultFreeSinceDateIsNotGrandfathered(iso: String) {
+        let purchaseDate = ISO8601DateFormatter().date(from: iso)!
+        let resolved = AccessResolver.resolve(
+            isOfficial: true,
+            appTx: AppTransactionFacts(environment: .production, originalAppVersion: "18", originalPurchaseDate: purchaseDate, isVerified: true),
             entitlements: [],
             cached: nil,
             now: Date()

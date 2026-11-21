@@ -37,7 +37,8 @@ enum StoreProducts {
     /// Set to the day of the 1.1 TestFlight upload (2026-11-04): every
     /// original purchase before it was a $6.99 download, since the price
     /// cannot become Free before this build exists. A later date would
-    /// only risk missing a paid buyer; an earlier one changes nothing.
+    /// grandfather free downloads made after the price change, so it gives
+    /// away MORE free unlocks; an earlier one would miss paid buyers.
     /// (A far-future value would grandfather every install; `.distantPast`
     /// turns the signal off.)
     static let freeSinceDate: Date = ISO8601DateFormatter().date(from: "2026-11-04T00:00:00Z") ?? .distantPast

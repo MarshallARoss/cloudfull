@@ -124,22 +124,22 @@ enum AccessResolver {
         }
 
         // Membership in `entitlements` is the signal for an active
-        // subscription, not a fresh comparison of `expirationDate` against
+        // subscription, not a comparison of `expirationDate` against
         // `now`. Apple keeps a subscription in `currentEntitlements` while
         // its state is `.subscribed` or `.inGracePeriod`, and during grace
         // the transaction's own `expirationDate` already reads as past.
-        // Three checks on top of membership. (1) Not revoked. (2) When the
+        // The device clock is not trusted either: at a renewal boundary
+        // the renewal transaction can arrive after the old one has
+        // expired, and a paying subscriber must not lock in that gap.
+        // Two checks on top of membership. (1) Not revoked. (2) When the
         // renewal state is known, only `.subscribed` and `.inGracePeriod`
         // count: StoreKit can still list a subscription for a moment
-        // after it expired or entered billing retry without grace. (3) A
-        // past `expirationDate` ends access unless the state is
-        // `.inGracePeriod`, the one state where Apple keeps the user
-        // entitled past that date.
+        // after it expired or entered billing retry without grace. A nil
+        // renewal state (status not fetched) counts as membership alone.
         if let monthlyFact = entitlements.first(where: { fact in
             guard fact.productID == StoreProducts.monthly, fact.revocationDate == nil else { return false }
             switch fact.renewalState {
-            case .inGracePeriod: return true
-            case nil, .subscribed: return fact.expirationDate.map { $0 > now } ?? true
+            case .inGracePeriod, .subscribed, nil: return true
             default: return false
             }
         }) {

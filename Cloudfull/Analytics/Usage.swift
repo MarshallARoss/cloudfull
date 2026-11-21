@@ -478,7 +478,13 @@ final class Usage {
         // `entitlement` is the latest value; `entitlementAtOpen` is the
         // first one this session, so a session that starts locked and
         // buys still counts as a locked session in the funnel.
-        if current.facts["entitlementAtOpen"] == nil { set("entitlementAtOpen", kind.rawValue) }
+        // A brand-new install records `unknown` until its first refresh
+        // resolves; that first real value replaces it. A first-session
+        // buyer therefore lands in `none` (locked at open), as the line
+        // above says, not in `unknown`. A session whose first refresh
+        // never resolves (offline) keeps `unknown` until one does.
+        let atOpen = current.facts["entitlementAtOpen"]
+        if atOpen == nil || (atOpen == AccessKind.unknown.rawValue && kind != .unknown) { set("entitlementAtOpen", kind.rawValue) }
         set("entitlement", kind.rawValue)
         if let trialDaysLeft { set("trial.daysLeft", String(trialDaysLeft)) }
         // How old the monthly plan is on this session, and whether it will

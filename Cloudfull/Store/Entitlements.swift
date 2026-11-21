@@ -19,6 +19,9 @@ protocol StoreFactsSource {
     func subscriptionStatuses(for product: Product) async -> [Product.SubscriptionInfo.Status]
     func products() async throws -> [Product]
     var canMakePayments: Bool { get }
+    /// `AppStore.sync()`: asks Apple for the user's purchases, and may show
+    /// a sign-in sheet. Only `restore()` calls it.
+    func sync() async throws
     func isEligibleForIntroOffer(_ product: Product) async -> Bool
 }
 
@@ -55,6 +58,9 @@ final class Entitlements: ObservableObject {
     enum RestoreOutcome {
         case restored
         case nothingFound
+        /// The user backed out of the App Store sign-in. Not a result, so
+        /// the caller shows nothing.
+        case cancelled
         case failed
     }
 
@@ -100,6 +106,17 @@ final class Entitlements: ObservableObject {
     private let now: () -> Date
     private let logger = Logger(subsystem: "com.cloudfull.app", category: "Entitlements")
     private var updatesTask: Task<Void, Never>?
+    /// The run `refresh()` is serializing, and whether another call came in
+    /// while it ran.
+    private var refreshTask: Task<Void, Never>?
+    private var refreshAgain = false
+    /// The purchase verified in this process and the `Access` it proves.
+    /// A floor under every refresh until StoreKit's own facts catch up
+    /// with the purchase (the entitlement list, or a stale `.expired`
+    /// status, can lag a moment). This record is memory only and is never
+    /// saved. The `Access` it applies is cached like any other, so a
+    /// relaunch starts from that cached value and then trusts StoreKit.
+    private var provenPurchase: (transactionID: UInt64, access: Access)?
     /// The app transaction facts from the most recent `refresh()`. Cached
     /// alongside `access`, and reused by `AccessResolver`'s
     /// never-downgrade rule when a later refresh comes back thin.
@@ -172,7 +189,32 @@ final class Entitlements: ObservableObject {
     /// Safe to call from anywhere, any number of times; it never shows a
     /// sign-in sheet. Only `restore()`, a user action, calls
     /// `AppTransaction.refresh()`, which can.
+    ///
+    /// Runs one at a time. A call that arrives while another is in flight
+    /// waits for it, then triggers one more run, so an older run can never
+    /// apply stale facts after a newer one, and the caller returns only
+    /// after a run that started after its call.
     func refresh() async {
+        if let running = refreshTask {
+            refreshAgain = true
+            await running.value
+            return
+        }
+        let task = Task { [self] in
+            repeat {
+                refreshAgain = false
+                await performRefresh()
+            } while refreshAgain
+            refreshTask = nil   // no suspension since the loop check, so no call can slip in between
+        }
+        refreshTask = task
+        await task.value
+    }
+
+    private func performRefresh() async {
+        // Re-read each run: the user can turn Screen Time purchase limits
+        // off while the paywall is up, and Try Again must see it.
+        if canMakePayments != source.canMakePayments { canMakePayments = source.canMakePayments }
         guard StoreProducts.isOfficialBuild else {
             // A fork never shows the paywall and never talks to the store.
             apply(.fork, cache: false)
@@ -227,13 +269,34 @@ final class Entitlements: ObservableObject {
         let monthlyFact = entitlements.first { $0.productID == StoreProducts.monthly }
         monthlyOriginalPurchaseDate = monthlyFact?.originalPurchaseDate
         monthlyWillAutoRenew = monthlyFact?.willAutoRenew
-        let resolved = AccessResolver.resolve(
+        var resolved = AccessResolver.resolve(
             isOfficial: StoreProducts.isOfficialBuild,
             appTx: appTx,
             entitlements: entitlements,
             cached: access,
             now: now()
         )
+        // The floor from a purchase verified in this process. Whether
+        // StoreKit has caught up is judged from the facts alone, resolved
+        // again with no cache: `resolved` can just echo `access`, which
+        // `apply(proven)` already set and saved, and an echo is not
+        // coverage. No facts at all (`.unknown`) is not coverage either.
+        // Once the fresh facts cover the proof, drop it.
+        if let proven = provenPurchase {
+            let fresh = AccessResolver.resolve(
+                isOfficial: StoreProducts.isOfficialBuild,
+                appTx: appTx,
+                entitlements: entitlements,
+                cached: nil,
+                now: now()
+            )
+            let covered: Bool
+            switch proven.access {
+            case .lifetime: covered = fresh == .lifetime
+            default: covered = fresh.isUnlocked && fresh != .unknown
+            }
+            if covered { provenPurchase = nil } else { resolved = proven.access }
+        }
         lastAppTx = appTx
         apply(resolved)
 
@@ -251,10 +314,17 @@ final class Entitlements: ObservableObject {
     /// it.
     private func apply(_ newAccess: Access, cache: Bool = true) {
         let changedKind = access.analyticsKind != newAccess.analyticsKind
+        // `.unknown` is "no facts yet", not a settled unlock.
+        let wasSettledUnlock = access.isUnlocked && access != .unknown
         if access != newAccess { access = newAccess }   // `@Published` fires on every assignment; skip the no-ops
+        // Only the move from locked to unlocked drops the cover. Every
+        // `.active` scene runs a refresh, so an unlocked user who opened
+        // the paywall from Settings (to buy lifetime) would otherwise lose
+        // it on returning from the Terms link or Apple's purchase sheet.
         // The hold keeps the cover up for the cancel-your-trial prompt
-        // after a lifetime purchase; `clearPaywall()` ends it.
-        if newAccess.isUnlocked, !holdsPaywallForPrompt { paywallRequest = nil }
+        // after a lifetime purchase, or for the restore alert;
+        // `clearPaywall()` ends it.
+        if newAccess.isUnlocked, newAccess != .unknown, !wasSettledUnlock, !holdsPaywallForPrompt { paywallRequest = nil }
         if changedKind {
             Usage.shared.accessState(newAccess.analyticsKind, trialDaysLeft: trialDaysLeft, subscriptionAgeDays: subscriptionAgeDays, autoRenew: autoRenew)
         }
@@ -397,10 +467,16 @@ final class Entitlements: ObservableObject {
             // A purchase that never went through `handlePurchase` in this
             // process: an Ask to Buy approval, a purchase on another
             // device, an offer code, or one a force-quit cut short. A
-            // renewal is not a purchase. (`product.purchase()` results are
+            // renewal is not a purchase, and neither is a refund or
+            // revocation. (`product.purchase()` results are
             // not delivered here, so this never double counts.)
-            if transaction.reason == .purchase, let kind = Usage.purchaseProduct(for: transaction.productID) {
+            if transaction.reason == .purchase, transaction.revocationDate == nil, let kind = Usage.purchaseProduct(for: transaction.productID) {
                 Usage.shared.purchase(kind, .success)
+            }
+            // A refund of the purchase this process proved ends the floor,
+            // so the next refresh can lock again.
+            if transaction.revocationDate != nil, provenPurchase?.transactionID == transaction.id {
+                provenPurchase = nil
             }
             await transaction.finish()
             await refresh()
@@ -482,6 +558,17 @@ final class Entitlements: ObservableObject {
                     promptToCancelMonthly = await hasAutoRenewingMonthlySubscription()
                 }
                 holdsPaywallForPrompt = promptToCancelMonthly
+                // StoreKit's entitlement list can lag a moment behind a
+                // purchase. The verified transaction is itself proof of the
+                // unlock, so it is applied now, before any refresh (which
+                // may queue behind a slow older one), and kept as a floor
+                // under later refreshes until StoreKit agrees. After the
+                // hold above, so nothing can drop the cover first.
+                if transaction.revocationDate == nil {
+                    let proven = Self.accessProven(by: transaction, kind: kind)
+                    provenPurchase = (transaction.id, proven)
+                    apply(proven)
+                }
                 await refresh()
                 Usage.shared.purchase(kind, .success, from: purchaseSource)
                 if promptToCancelMonthly {
@@ -505,6 +592,17 @@ final class Entitlements: ObservableObject {
         }
     }
 
+    /// The `Access` a verified, unrevoked purchase transaction proves, for
+    /// when the refreshed entitlement list has not caught up with it yet.
+    private static func accessProven(by transaction: Transaction, kind: Usage.PurchaseProduct) -> Access {
+        switch kind {
+        case .lifetime:
+            return .lifetime
+        case .monthly:
+            return .monthly(expiresAt: transaction.expirationDate, isTrial: transaction.offer?.type == .introductory, willAutoRenew: true, inGracePeriod: false)
+        }
+    }
+
     /// After a lifetime purchase, checks whether the monthly subscription
     /// (bought earlier, independent of this purchase) is still set to
     /// renew, so the caller can prompt to cancel it.
@@ -524,13 +622,23 @@ final class Entitlements: ObservableObject {
         Usage.shared.restore(.tapped)
         isRestoring = true
         defer { isRestoring = false }
+        // A restore from the paywall unlocks access, and the unlock would
+        // drop the cover before the "Welcome back" alert is seen. Hold it
+        // up from the start: Apple's sheet makes the scene inactive and
+        // then active, and that refresh can unlock before `sync()`
+        // returns. The alert's OK button calls `clearPaywall()`; every
+        // path that shows no alert releases the hold.
+        holdsPaywallForPrompt = paywallRequest != nil
         do {
-            try await AppStore.sync()
+            try await source.sync()
         } catch StoreKitError.userCancelled {
-            Usage.shared.restore(.nothingFound)
-            return .nothingFound
+            // The user backed out of the sign-in: nothing was looked up, so
+            // nothing is counted and no "not found" message is shown.
+            holdsPaywallForPrompt = false
+            return .cancelled
         } catch {
             logger.error("AppStore.sync() failed: \(error.localizedDescription, privacy: .public)")
+            holdsPaywallForPrompt = false
             Usage.shared.restore(.failed)
             return .failed
         }
@@ -546,6 +654,7 @@ final class Entitlements: ObservableObject {
             outcome = .restored
         default:
             outcome = .nothingFound
+            holdsPaywallForPrompt = false   // nothing to celebrate, the paywall stays as it is
         }
         Usage.shared.restore(outcome == .restored ? .restored : .nothingFound)
         return outcome
@@ -615,6 +724,8 @@ final class Entitlements: ObservableObject {
 /// of its own. `Entitlements` owns all of that.
 struct LiveStoreFactsSource: StoreFactsSource {
     var canMakePayments: Bool { AppStore.canMakePayments }
+
+    func sync() async throws { try await AppStore.sync() }
 
     /// `AppTransaction.shared` never shows a sign-in sheet; only
     /// `AppTransaction.refresh()` can.
