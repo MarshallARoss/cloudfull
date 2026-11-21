@@ -71,6 +71,7 @@ os.environ.setdefault("CLOUDFULL_TEAM_ID", "OFFLINE-FROM-JSON")
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import usage_report  # noqa: E402  (must come after the TEAM_ID guard above)
+import sales_report  # noqa: E402  (money banner -- App Store Connect, independent of the CloudKit usage pull above)
 
 def esc(s):
     return html_mod.escape(str(s))
@@ -338,6 +339,90 @@ def compute_core(S):
 
 
 ACTION_CATS = ("delete", "shrink", "keep", "share", "album")
+
+
+# ---------------------------------------------------------------------------
+# Money -- App Store Connect sales, completely independent of the CloudKit
+# usage pull above. A failure here (missing credentials, a network error,
+# Apple's API being down) never blocks or corrupts the usage page: it just
+# means this one banner is left off, with a one-line reason on stdout.
+# ---------------------------------------------------------------------------
+
+def build_money(args):
+    """Pulls every day's Daily Sales Summary report from launch through
+    yesterday, the same way scripts/sales_report.py does, and renders the
+    lifetime total plus a per-day downloads chart for the top of the page.
+    Returns (html, warning); html is "" and warning is a short, key-free
+    reason when ASC credentials are missing or the pull failed."""
+    key_id = os.environ.get("ASC_KEY_ID")
+    issuer_id = os.environ.get("ASC_ISSUER_ID")
+    vendor_number = os.environ.get("ASC_VENDOR_NUMBER")
+    if not (key_id and issuer_id and vendor_number):
+        return "", "money banner skipped: ASC_KEY_ID / ASC_ISSUER_ID / ASC_VENDOR_NUMBER not set"
+    lo = datetime.date.fromisoformat(args.launch)
+    hi = datetime.date.today() - datetime.timedelta(days=1)
+    if hi < lo:
+        return "", None
+
+    cache, d = {}, lo
+    try:
+        while d <= hi:
+            raw = sales_report._fetch_report_day(key_id, issuer_id, vendor_number, d.isoformat())
+            if raw is not None:
+                cache[d] = sales_report._day_stats(sales_report._rows_for_sku(sales_report._parse_tsv(raw), sales_report.DEFAULT_SKU))
+            elif sales_report._is_pending_day(d):
+                cache[d] = None
+            else:
+                cache[d] = sales_report._empty_day_stats()
+            d += datetime.timedelta(days=1)
+    except RuntimeError as e:
+        return "", f"money banner skipped: {e}"
+
+    days = list(cache.keys())
+    totals, pending = sales_report._aggregate(cache, days)
+    downloads_n = sales_report._num(totals["downloads"])
+    redownloads_n = sales_report._num(totals["redownloads"])
+    proceeds = "  ".join(
+        (f"${v:,.2f}" if c == "USD" else f"{v:,.2f} {c}") for c, v in sorted(totals["proceeds"].items())
+    ) or "$0.00"
+
+    bits = [f"{downloads_n} paid download{'s' if downloads_n != 1 else ''}"]
+    if redownloads_n:
+        bits.append(f"{redownloads_n} re-download{'s' if redownloads_n != 1 else ''}")
+    pending_note = f" Apple has not posted {esc(pending[-1].isoformat())} yet." if pending else ""
+    note = f"{' · '.join(bits)} · {lo.isoformat()} through {hi.isoformat()}.{pending_note}"
+
+    # Per-day downloads chart. A pending day (Apple hasn't posted it) gets
+    # its own bar style instead of being drawn as zero, so "no report yet"
+    # is never visually confused with "zero downloads, final answer".
+    day_vals = [(day, cache[day]) for day in days]
+    max_n = max((sales_report._num(st["downloads"]) for _, st in day_vals if st is not None), default=0) or 1
+    bars = []
+    for day, st in day_vals:
+        if st is None:
+            bars.append(f'<div class="dbar pending" style="height:6%"><div class="dbar-n">?</div></div>')
+            continue
+        n = sales_report._num(st["downloads"])
+        h = max(4, round(100 * n / max_n))
+        bars.append(f'<div class="dbar" style="height:{h}%"><div class="dbar-n">{n}</div></div>')
+    labels = "".join(f'<span>{day.day}</span>' for day, _ in day_vals)
+    chart = f"""
+    <div class="panel">
+      <h3>Downloads per day <small style="font-weight:400;color:var(--ink-3)">{esc(lo.strftime("%b %Y"))}{" – " + esc(hi.strftime("%b %Y")) if hi.strftime("%b %Y") != lo.strftime("%b %Y") else ""}, day of month shown below each bar; "?" means Apple has not posted that day yet</small></h3>
+      <div class="daychart">{''.join(bars)}</div>
+      <div class="daychart-labels">{labels}</div>
+    </div>"""
+
+    html = f"""
+  <section>
+    <div class="tile money">
+      <div class="q">Lifetime proceeds, since launch</div>
+      <div class="big">{esc(proceeds)}</div>
+      <div class="note">{esc(note)}</div>
+    </div>
+    {chart}
+  </section>"""
+    return html, None
 
 
 # ---------------------------------------------------------------------------
@@ -1303,19 +1388,34 @@ PAGE_CSS = """
   details { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 18px 20px; display: grid; gap: 14px; }
   details > summary { cursor: pointer; font-family: "Sora", "IBM Plex Sans", sans-serif; font-size: 14px; font-weight: 600; color: var(--ink); }
 
+  .tile.money { border-color: var(--good); }
+
+  .daychart { display: flex; align-items: flex-end; gap: 3px; height: 120px; padding-top: 20px; }
+  .dbar { flex: 1; min-width: 4px; background: var(--videos); border-radius: 3px 3px 0 0; position: relative; }
+  .dbar.pending { background: repeating-linear-gradient(45deg, var(--line), var(--line) 3px, transparent 3px, transparent 6px); }
+  .dbar-n { position: absolute; top: -18px; left: 0; right: 0; text-align: center; font-size: 10px; color: var(--ink-2); font-family: "IBM Plex Mono", monospace; }
+  .daychart-labels { display: flex; gap: 3px; margin-top: 4px; }
+  .daychart-labels span { flex: 1; min-width: 4px; text-align: center; font-size: 10px; color: var(--ink-3); }
+
   @media (max-width: 640px) {
     .tiles, .split, .funnel, .flow { grid-template-columns: 1fr; }
     .row { grid-template-columns: 84px 1fr 56px; }
     h1 { font-size: 26px; }
+    .daychart, .daychart-labels { gap: 2px; }
+    .dbar-n { font-size: 8px; }
   }
 """
 
 
-def build_page(args, S, M, tiles_html, q1_html, q2_html, reminder_html, health_html, location_html, customers_html, static_html, raw_fields_html):
+def build_page(args, S, M, money_html, n_lifetime, tiles_html, q1_html, q2_html, reminder_html, health_html, location_html, customers_html, static_html, raw_fields_html):
     channel_label = CHANNEL_LABEL[args.channel]
     intro = CHANNEL_INTRO[args.channel]
     pulled = datetime.datetime.now(datetime.timezone.utc).strftime("%-d %b %Y %H:%M UTC")
     n_phones, n_sessions = M["n_phones"], len(S)
+    lifetime_chip = (
+        f'<span>{n_lifetime} customer{"s" if n_lifetime != 1 else ""} ever</span>'
+        if n_lifetime is not None else ""
+    )
 
     header = f"""
   <header>
@@ -1324,8 +1424,9 @@ def build_page(args, S, M, tiles_html, q1_html, q2_html, reminder_html, health_h
     <div class="meta">
       <span>{esc(channel_label)}</span>
       <span>{esc(month_name(args.month))}</span>
-      <span>{n_phones} phone{'s' if n_phones != 1 else ''}</span>
-      <span>{n_sessions} session{'s' if n_sessions != 1 else ''}</span>
+      <span>{n_phones} phone{'s' if n_phones != 1 else ''} this month</span>
+      <span>{n_sessions} session{'s' if n_sessions != 1 else ''} this month</span>
+      {lifetime_chip}
       <span>Pulled {esc(pulled)}</span>
     </div>
     <p>{esc(intro)}</p>
@@ -1342,7 +1443,7 @@ def build_page(args, S, M, tiles_html, q1_html, q2_html, reminder_html, health_h
 <style>{PAGE_CSS}</style>
 </head>
 <body>
-<div class="wrap">{header}{tiles_html}{q1_html}{q2_html}{reminder_html}{health_html}{location_html}{customers_html}{static_html}{raw_fields_html}
+<div class="wrap">{header}{money_html}{tiles_html}{q1_html}{q2_html}{reminder_html}{health_html}{location_html}{customers_html}{static_html}{raw_fields_html}
 </div>
 </body>
 </html>
@@ -1354,6 +1455,15 @@ def main():
     raw = load_sessions(args)
     S = filter_sessions(raw, args)
     M = compute_core(S)
+
+    n_lifetime = None
+    if args.channel == "appStore":
+        lifetime_survivors, _ = determine_surviving_installs(raw, args.launch)
+        n_lifetime = len(lifetime_survivors)
+
+    money_html, money_warning = build_money(args)
+    if money_warning:
+        print(money_warning)
 
     tiles_html, tiles_check = build_tiles(M, S)
     q1_html, q1_check = build_q1(M, S)
@@ -1368,7 +1478,7 @@ def main():
     run_cross_checks(args, S, M, q1_check)
     check_customers(M, S, customers_check, q1_check, tiles_check, q2_check)
 
-    page = build_page(args, S, M, tiles_html, q1_html, q2_html, reminder_html, health_html, location_html, customers_html, static_html, raw_fields_html)
+    page = build_page(args, S, M, money_html, n_lifetime, tiles_html, q1_html, q2_html, reminder_html, health_html, location_html, customers_html, static_html, raw_fields_html)
     with open(args.out, "w", encoding="utf-8") as f:
         f.write(page)
 

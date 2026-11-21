@@ -93,6 +93,18 @@
     color: var(--fg);
     border: 1px solid var(--border);
   }
+  .links {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+  .links a {
+    display: block;
+    text-align: center;
+    padding: 12px 10px;
+  }
+  .links a:last-child:nth-child(odd) {
+    grid-column: 1 / -1;
+  }
   .appstore {
     display: inline-block;
     margin-top: 20px;
@@ -130,9 +142,11 @@
   </ul>
 
   <div class="links">
-    <a class="primary" href="support/">Support</a>
+    <a class="secondary" href="iphone-storage-full/">More iCloud tips</a>
     <a class="secondary" href="duo/">iPhone Duo</a>
     <a class="secondary" href="privacy/">Privacy Policy</a>
+    <a class="secondary" href="terms/">Terms of Use</a>
+    <a class="primary" href="support/">Support</a>
   </div>
 
   <footer>
