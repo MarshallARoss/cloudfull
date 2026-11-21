@@ -17,6 +17,28 @@ import Foundation
 @Suite("AccessResolver")
 struct AccessResolverTests {
 
+    // MARK: - Product ID mapping
+
+    @Test("Usage.purchaseProduct maps unlock IDs by plan prefix")
+    @MainActor func purchaseProductMapping() {
+        #expect(Usage.purchaseProduct(for: "com.cloudfull.app.unlock.monthly.299") == .monthly)
+        #expect(Usage.purchaseProduct(for: "com.cloudfull.app.unlock.lifetime.999") == .lifetime)
+        #expect(Usage.purchaseProduct(for: "com.cloudfull.app.unlock.monthly.399") == .monthly)
+        #expect(Usage.purchaseProduct(for: "com.cloudfull.app.tip.10") == nil)
+        #expect(Usage.purchaseProduct(for: "com.cloudfull.app.unlock.monthly") == nil)
+    }
+
+    @Test("StoreProducts.tier returns the numeric price tier of an unlock product ID")
+    func productTier() {
+        #expect(StoreProducts.tier(of: "com.cloudfull.app.unlock.monthly.299") == "299")
+        #expect(StoreProducts.tier(of: "com.cloudfull.app.unlock.lifetime.999") == "999")
+        #expect(StoreProducts.tier(of: "com.cloudfull.app.unlock.monthly.399") == "399")
+        #expect(StoreProducts.tier(of: "com.cloudfull.app.unlock.monthly") == nil)
+        #expect(StoreProducts.tier(of: "com.cloudfull.app.unlock.monthly.") == nil)
+        #expect(StoreProducts.tier(of: "com.cloudfull.app.unlock.monthly.abc") == nil)
+        #expect(StoreProducts.tier(of: "com.cloudfull.app.tip.10") == nil)
+    }
+
     // MARK: - Fork
 
     @Test("A non-official build is always a fork, regardless of other facts")

@@ -135,6 +135,14 @@ final class Entitlements: ObservableObject {
     /// or `nil` when it could not be read (offline, products not loaded),
     /// so a canceller is never reported as "will renew" by assumption.
     private var monthlyWillAutoRenew: Bool?
+    /// For the `entitlementTier` fact: the product IDs behind the live
+    /// monthly and lifetime entitlements, read from the same facts the
+    /// resolver reads. `nil` when there is none (or in a DEBUG override).
+    private var monthlyProductID: String?
+    private var lifetimeProductID: String?
+    /// The product ID of the purchase `provenPurchase` proves, used for the
+    /// tier while StoreKit's entitlement list still lags behind it.
+    private var provenProductID: String?
 
     /// Also erased by `-cloudfull-reset-deck-state` (`CloudfullApp.init`).
     static let cacheKey = "store.access.v1"
@@ -230,6 +238,9 @@ final class Entitlements: ObservableObject {
             if token == "real" {
                 runRealResolverInXcode = true
             } else if let overridden = Self.debugAccess(for: token, now: now()) {
+                monthlyProductID = nil
+                lifetimeProductID = nil
+                provenProductID = nil
                 apply(overridden, cache: false)
                 await loadProductsIfNeeded()
                 await refreshSubscriptionDerivedState()
@@ -259,6 +270,9 @@ final class Entitlements: ObservableObject {
         if StoreProducts.isOfficialBuild, !runRealResolverInXcode,
            appTx?.environment == .xcode || appTx?.environment == .sandbox {
             lastAppTx = appTx
+            monthlyProductID = nil
+            lifetimeProductID = nil
+            provenProductID = nil
             apply(.debugUnlocked, cache: false)
             await refreshSubscriptionDerivedState()
             return
@@ -269,6 +283,8 @@ final class Entitlements: ObservableObject {
         let monthlyFact = entitlements.first { $0.productID == StoreProducts.monthly }
         monthlyOriginalPurchaseDate = monthlyFact?.originalPurchaseDate
         monthlyWillAutoRenew = monthlyFact?.willAutoRenew
+        monthlyProductID = entitlements.first { $0.productID.hasPrefix(StoreProducts.monthlyPrefix) && $0.revocationDate == nil }?.productID
+        lifetimeProductID = entitlements.first { $0.productID.hasPrefix(StoreProducts.lifetimePrefix) && $0.revocationDate == nil }?.productID
         var resolved = AccessResolver.resolve(
             isOfficial: StoreProducts.isOfficialBuild,
             appTx: appTx,
@@ -305,7 +321,7 @@ final class Entitlements: ObservableObject {
         // (a cancel in iOS Settings, a day passing), and a cold launch
         // records the session before this first refresh is done. So they
         // are re-recorded after every refresh; `set` is idempotent.
-        Usage.shared.accessState(access.analyticsKind, trialDaysLeft: trialDaysLeft, subscriptionAgeDays: subscriptionAgeDays, autoRenew: autoRenew)
+        Usage.shared.accessState(access.analyticsKind, trialDaysLeft: trialDaysLeft, subscriptionAgeDays: subscriptionAgeDays, autoRenew: autoRenew, tier: entitlementTier)
     }
 
     /// `cache: false` for a DEBUG override or `.debugUnlocked`: a fixed
@@ -326,7 +342,7 @@ final class Entitlements: ObservableObject {
         // `clearPaywall()` ends it.
         if newAccess.isUnlocked, newAccess != .unknown, !wasSettledUnlock, !holdsPaywallForPrompt { paywallRequest = nil }
         if changedKind {
-            Usage.shared.accessState(newAccess.analyticsKind, trialDaysLeft: trialDaysLeft, subscriptionAgeDays: subscriptionAgeDays, autoRenew: autoRenew)
+            Usage.shared.accessState(newAccess.analyticsKind, trialDaysLeft: trialDaysLeft, subscriptionAgeDays: subscriptionAgeDays, autoRenew: autoRenew, tier: entitlementTier)
         }
         if cache { saveCache() }
     }
@@ -471,7 +487,7 @@ final class Entitlements: ObservableObject {
             // revocation. (`product.purchase()` results are
             // not delivered here, so this never double counts.)
             if transaction.reason == .purchase, transaction.revocationDate == nil, let kind = Usage.purchaseProduct(for: transaction.productID) {
-                Usage.shared.purchase(kind, .success)
+                Usage.shared.purchase(kind, .success, tier: StoreProducts.tier(of: transaction.productID))
             }
             // A refund of the purchase this process proved ends the floor,
             // so the next refresh can lock again.
@@ -507,7 +523,7 @@ final class Entitlements: ObservableObject {
     func purchaseStarted(_ product: Product) {
         guard let kind = Usage.purchaseProduct(for: product.id) else { return }
         purchaseSource = paywallRequest
-        Usage.shared.purchase(kind, .started)
+        Usage.shared.purchase(kind, .started, tier: StoreProducts.tier(of: product.id))
         holdsPaywallForPrompt = kind == .lifetime && hasLiveSubscription
     }
 
@@ -526,14 +542,14 @@ final class Entitlements: ObservableObject {
         switch result {
         case .failure(let error):
             logger.error("Purchase of \(product.id, privacy: .public) threw: \(error.localizedDescription, privacy: .public)")
-            Usage.shared.purchase(kind, .failed)
+            Usage.shared.purchase(kind, .failed, tier: StoreProducts.tier(of: product.id))
             holdsPaywallForPrompt = false
             return .failed
         case .success(let purchaseResult):
             switch purchaseResult {
             case .success(let verification):
                 guard case .verified(let transaction) = verification else {
-                    Usage.shared.purchase(kind, .unverified)
+                    Usage.shared.purchase(kind, .unverified, tier: StoreProducts.tier(of: product.id))
                     holdsPaywallForPrompt = false
                     return .unverified
                 }
@@ -567,25 +583,26 @@ final class Entitlements: ObservableObject {
                 if transaction.revocationDate == nil {
                     let proven = Self.accessProven(by: transaction, kind: kind)
                     provenPurchase = (transaction.id, proven)
+                    provenProductID = transaction.productID
                     apply(proven)
                 }
                 await refresh()
-                Usage.shared.purchase(kind, .success, from: purchaseSource)
+                Usage.shared.purchase(kind, .success, from: purchaseSource, tier: StoreProducts.tier(of: product.id))
                 if promptToCancelMonthly {
                     return .successCancelTrialPrompt
                 }
                 if access.isUnlocked { paywallRequest = nil }   // the hold set at start may have kept it up
                 return .success
             case .userCancelled:
-                Usage.shared.purchase(kind, .cancelled)
+                Usage.shared.purchase(kind, .cancelled, tier: StoreProducts.tier(of: product.id))
                 holdsPaywallForPrompt = false
                 return .userCancelled
             case .pending:
-                Usage.shared.purchase(kind, .pending)
+                Usage.shared.purchase(kind, .pending, tier: StoreProducts.tier(of: product.id))
                 holdsPaywallForPrompt = false
                 return .pending
             @unknown default:
-                Usage.shared.purchase(kind, .failed)
+                Usage.shared.purchase(kind, .failed, tier: StoreProducts.tier(of: product.id))
                 holdsPaywallForPrompt = false
                 return .failed
             }
@@ -682,6 +699,24 @@ final class Entitlements: ObservableObject {
     var autoRenew: Bool? {
         guard case .monthly = access else { return nil }
         return monthlyWillAutoRenew
+    }
+
+    /// The price tier of the product that gives access now (`299`), or
+    /// `nil` for no plan, legacy, unknown, fork, debug, or an unknown tier.
+    var entitlementTier: String? {
+        switch access {
+        case .monthly:
+            return StoreProducts.tier(of: monthlyProductID ?? provenID(for: .monthly) ?? "")
+        case .lifetime:
+            return StoreProducts.tier(of: lifetimeProductID ?? provenID(for: .lifetime) ?? "")
+        default:
+            return nil
+        }
+    }
+
+    private func provenID(for kind: Usage.PurchaseProduct) -> String? {
+        guard provenPurchase != nil, let id = provenProductID, Usage.purchaseProduct(for: id) == kind else { return nil }
+        return id
     }
 
     /// Days left in a free trial, or `nil` when `access` is not an active

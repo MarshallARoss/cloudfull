@@ -58,7 +58,7 @@
           "locale": "en_US"
         }
       ],
-      "productID": "com.cloudfull.app.unlock.lifetime",
+      "productID": "com.cloudfull.app.unlock.lifetime.999",
       "referenceName": "Lifetime unlock",
       "type": "NonConsumable"
     }
@@ -138,7 +138,7 @@
               "locale": "en_US"
             }
           ],
-          "productID": "com.cloudfull.app.unlock.monthly",
+          "productID": "com.cloudfull.app.unlock.monthly.299",
           "recurringSubscriptionPeriod": "P1M",
           "referenceName": "Monthly unlock",
           "subscriptionGroupID": "21700001",

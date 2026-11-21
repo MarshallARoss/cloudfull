@@ -106,7 +106,8 @@ struct PermissionGateView: View {
                     Entitlements.shared.access.analyticsKind,
                     trialDaysLeft: Entitlements.shared.trialDaysLeft,
                     subscriptionAgeDays: Entitlements.shared.subscriptionAgeDays,
-                    autoRenew: Entitlements.shared.autoRenew
+                    autoRenew: Entitlements.shared.autoRenew,
+                    tier: Entitlements.shared.entitlementTier
                 )
                 Self.hasOpenedThisProcess = true
                 Usage.shared.uploadPending()   // retries an upload that the last background period stopped

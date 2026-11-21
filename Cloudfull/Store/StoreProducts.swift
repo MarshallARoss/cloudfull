@@ -12,12 +12,39 @@ import Foundation
 /// needs about them. Holds no StoreKit type, so `Access.swift` can resolve
 /// access with no StoreKit import.
 enum StoreProducts {
+    // Product IDs follow `com.cloudfull.app.unlock.<plan>.<US price in
+    // cents>`. A product never changes its price. A new price is a new
+    // product with a new ID, for example `com.cloudfull.app.unlock.monthly.399`.
+
+    /// Every monthly product ID starts with this prefix.
+    static let monthlyPrefix = "com.cloudfull.app.unlock.monthly."
+    /// Every lifetime product ID starts with this prefix.
+    static let lifetimePrefix = "com.cloudfull.app.unlock.lifetime."
+
     /// Auto-renewable, one month, in the subscription group "Cloudfull
     /// Unlock", with a 7-day free introductory offer.
-    static let monthly = "com.cloudfull.app.unlock.monthly"
+    static let monthly = "com.cloudfull.app.unlock.monthly.299"
     /// Non-consumable. Unlocks the app once, for good.
-    static let lifetime = "com.cloudfull.app.unlock.lifetime"
+    static let lifetime = "com.cloudfull.app.unlock.lifetime.999"
     static let unlockIDs: Set<String> = [monthly, lifetime]
+
+    /// The price tier of an unlock product: the last dot-separated part of
+    /// its ID, for example `com.cloudfull.app.unlock.monthly.299` → `299`.
+    /// `nil` for anything else, including the old tier-less
+    /// `com.cloudfull.app.unlock.monthly`, a tip ID, or an empty or
+    /// non-numeric tail.
+    static func tier(of productID: String) -> String? {
+        let tail: Substring
+        if productID.hasPrefix(monthlyPrefix) {
+            tail = productID.dropFirst(monthlyPrefix.count)
+        } else if productID.hasPrefix(lifetimePrefix) {
+            tail = productID.dropFirst(lifetimePrefix.count)
+        } else {
+            return nil
+        }
+        guard !tail.isEmpty, tail.allSatisfy({ $0 >= "0" && $0 <= "9" }) else { return nil }
+        return String(tail)
+    }
 
     // No hard-coded subscription group id here. The local
     // `Cloudfull.storekit` file used by Xcode's test configuration is not

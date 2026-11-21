@@ -112,8 +112,9 @@ final class Usage {
     /// Why the tip jar has no products to show.
     enum TipUnavailableReason: String { case loadFailed, empty }
 
-    /// A purchasable unlock plan. Never the product's price or id, only
-    /// which of the two it was.
+    /// A purchasable unlock plan. Only which of the two it was; its price
+    /// tier (the last part of the product id, `299`) travels separately.
+    /// Never the localized price, currency, or full product id.
     enum PurchaseProduct: String { case monthly, lifetime }
     /// How a purchase attempt ended.
     enum PurchaseOutcome: String { case started, success, cancelled, pending, failed, unverified }
@@ -429,8 +430,10 @@ final class Usage {
     func tipOutcome(_ tier: TipTier, _ outcome: TipOutcome) { bump("tip.outcome.\(tier.rawValue).\(outcome.rawValue)") }
     func tipProductsUnavailable(_ reason: TipUnavailableReason) { bump("tip.unavailable.\(reason.rawValue)") }
 
-    // Paywall and purchase. Never a product's price, currency, id,
-    // transaction id, or offer code — only the fixed plan and outcome.
+    // Paywall and purchase. The plan, its price tier (the last part of the
+    // product id, such as `299`), and the outcome. Never the localized
+    // price, currency, amount paid, full product id, transaction id, or
+    // offer code.
     /// A paywall was raised, by what required it. `Entitlements.require`
     /// and `presentPaywall` both call this before showing it.
     func paywallShown(_ source: Entitlements.PaywallSource) {
@@ -451,15 +454,19 @@ final class Usage {
     }
     /// A tap on one of the paywall's own outbound links.
     func paywallLink(_ name: PaywallLink) { bump("paywall.link.\(name.rawValue)") }
-    /// Maps a product id's suffix to its plan, e.g.
-    /// `com.cloudfull.app.unlock.monthly` → `.monthly`.
+    /// Maps a product id's plan prefix to its plan, e.g.
+    /// `com.cloudfull.app.unlock.monthly.299` → `.monthly`.
     static func purchaseProduct(for productID: String) -> PurchaseProduct? {
-        if productID.hasSuffix(".monthly") { return .monthly }
-        if productID.hasSuffix(".lifetime") { return .lifetime }
+        if productID.hasPrefix(StoreProducts.monthlyPrefix) { return .monthly }
+        if productID.hasPrefix(StoreProducts.lifetimePrefix) { return .lifetime }
         return nil
     }
-    func purchase(_ product: PurchaseProduct, _ outcome: PurchaseOutcome, from source: Entitlements.PaywallSource? = nil) {
+    func purchase(_ product: PurchaseProduct, _ outcome: PurchaseOutcome, from source: Entitlements.PaywallSource? = nil, tier: String? = nil) {
         bump("purchase.\(product.rawValue).\(outcome.rawValue)")
+        // The same outcome, split by the product's price tier, so a price
+        // test can be filtered by plan and tier. The line above stays the
+        // unchanged total.
+        if let tier { bump("purchase.\(product.rawValue).\(tier).\(outcome.rawValue)") }
         if outcome == .success {
             firstEver("purchase")
             // Which locked action the buyer had tapped when the paywall
@@ -474,7 +481,7 @@ final class Usage {
     func manageSubscriptionOpened() { bump("manageSubscriptionOpened") }
     /// `Entitlements.access`'s bucket, recorded whenever it changes, plus
     /// at every session's own `appOpened`.
-    func accessState(_ kind: AccessKind, trialDaysLeft: Int?, subscriptionAgeDays: Int? = nil, autoRenew: Bool? = nil) {
+    func accessState(_ kind: AccessKind, trialDaysLeft: Int?, subscriptionAgeDays: Int? = nil, autoRenew: Bool? = nil, tier: String? = nil) {
         // `entitlement` is the latest value; `entitlementAtOpen` is the
         // first one this session, so a session that starts locked and
         // buys still counts as a locked session in the funnel.
@@ -495,6 +502,10 @@ final class Usage {
         if let subscriptionAgeDays { set("subscription.ageDays", String(subscriptionAgeDays)) } else { unset("subscription.ageDays") }
         if let autoRenew { set("subscription.autoRenew", autoRenew ? "true" : "false") } else { unset("subscription.autoRenew") }
         if trialDaysLeft == nil { unset("trial.daysLeft") }
+        // The price tier of the product that gives access now (`299`).
+        // `nil` clears it, so a lapse, or a move to lifetime, never keeps a
+        // stale tier.
+        if let tier { set("entitlementTier", tier) } else { unset("entitlementTier") }
     }
 
     /// `pose` is passed in, not read from `poseNow`: the same turn that

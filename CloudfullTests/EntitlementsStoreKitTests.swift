@@ -165,6 +165,8 @@ struct EntitlementsStoreKitTests {
         #expect(!isTrial)   // no introductory offer in Cloudfull.storekit
         #expect(entitlements.access.isUnlocked)
         #expect(entitlements.hasLiveSubscription)
+        #expect(entitlements.entitlementTier == "299")
+        #expect(Usage.shared.current.facts["entitlementTier"] == "299")
     }
 
     // No StoreKit-level "expire the monthly plan" test. `SKTestSession.expireSubscription`
@@ -649,6 +651,7 @@ struct EntitlementsStoreKitTests {
         await waitUntil { entitlements.access == .lifetime && (Usage.shared.current.counts[key] ?? 0) >= 1 }
         let afterBuy = Usage.shared.current.counts[key] ?? 0
         #expect(afterBuy >= 1)   // control: the listener does count the live purchase
+        #expect((Usage.shared.current.counts["purchase.lifetime.999.success"] ?? 0) >= 1)   // and its tier twin
 
         let lifetimeTransaction = try transaction(for: StoreProducts.lifetime)
         try session.refundTransaction(identifier: lifetimeTransaction.identifier)
