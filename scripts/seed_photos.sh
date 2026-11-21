@@ -31,7 +31,7 @@ set -euo pipefail
 # does not reliably inherit the interactive shell's full PATH.
 export PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin"
 
-UDID=E2DAB7E8-649E-4F1A-BBA9-676236EB075A
+UDID=42D5A716-ECE0-4E28-8F4A-148A9A38A6CE   # iPhone 18 Pro, iOS 27.0 (the 17 Pro runtime was lost 2026-10-09)
 DB="$HOME/Library/Developer/CoreSimulator/Devices/$UDID/data/Media/PhotoData/Photos.sqlite"
 FONT=/System/Library/Fonts/Helvetica.ttc
 FF=/opt/homebrew/bin/ffmpeg

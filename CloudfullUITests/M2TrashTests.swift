@@ -98,16 +98,14 @@ final class M2TrashTests: FeedUITestCase {
         // dialog, not the app.
         app.buttons["trash_empty"].tap()
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
-        let alert = springboard.alerts.firstMatch
-        XCTAssertTrue(alert.waitForExistence(timeout: 10), "No system delete confirmation appeared")
+        let alert = waitForSystemDeleteAlert()
+        XCTAssertTrue(alert.exists, "No system delete confirmation appeared")
         XCTAssertEqual(
             springboard.alerts.count, 1,
             "Expected exactly one system confirm dialog, found \(springboard.alerts.count)"
         )
 
-        let deleteButton = alert.buttons.matching(NSPredicate(format: "label CONTAINS 'Delete'")).firstMatch
-        XCTAssertTrue(deleteButton.exists, "No destructive 'Delete' button found in the confirm dialog")
-        deleteButton.tap()
+        confirmSystemDelete(on: alert)
 
         // Exactly one dialog for the whole 17-item batch. The app must
         // show one system confirmation total, not one per asset, so

@@ -4489,9 +4489,11 @@ private struct FeedPageContent: View {
     /// rail.
     private var albumButton: some View {
         Button {
-            Haptics.tap()
-            albumBounceToken += 1
-            shareCoordinator.albumPickerTarget = .init(id: entry.assetID)
+            Entitlements.shared.require(.album) {
+                Haptics.tap()
+                albumBounceToken += 1
+                shareCoordinator.albumPickerTarget = .init(id: entry.assetID)
+            }
         } label: {
             // Outline glyph, matching the photo row: a single square with
             // a plus. `rectangle.stack.badge.plus` hangs a filled badge
@@ -4536,9 +4538,11 @@ private struct FeedPageContent: View {
     /// under their thumb.
     private func shrinkButton(_ rail: RailState) -> some View {
         Button {
-            Haptics.tap()
-            shrinkBounceToken += 1
-            onRequestShrink(entry.assetID)
+            Entitlements.shared.require(.shrink) {
+                Haptics.tap()
+                shrinkBounceToken += 1
+                onRequestShrink(entry.assetID)
+            }
         } label: {
             RailItem(
                 systemName: "arrow.down.right.and.arrow.up.left",
@@ -4563,7 +4567,9 @@ private struct FeedPageContent: View {
     /// callout instead.
     private var shareButton: some View {
         Button {
-            shareCoordinator.beginShare(assetID: entry.assetID)
+            Entitlements.shared.require(.share) {
+                shareCoordinator.beginShare(assetID: entry.assetID)
+            }
         } label: {
             if let download = shareCoordinator.download, download.assetID == entry.assetID {
                 // The iCloud download shows as a cloud glyph with a
@@ -4700,27 +4706,29 @@ private struct FeedPageContent: View {
 
     private func toggleLike() {
         let assetID = entry.assetID
-        if viewModel.isLiked(assetID) {
-            let applied = viewModel.unlike(assetID: assetID)
-            if applied {
-                Usage.shared.action(.unkeep, source: .rail, mode: .videos)
-                KeepsAlbum.shared.remove(assetID)
+        Entitlements.shared.require(viewModel.isLiked(assetID) ? .unkeep : .keep) {
+            if viewModel.isLiked(assetID) {
+                let applied = viewModel.unlike(assetID: assetID)
+                if applied {
+                    Usage.shared.action(.unkeep, source: .rail, mode: .videos)
+                    KeepsAlbum.shared.remove(assetID)
+                }
+            } else if !trashService.pendingEmptyIDs.contains(assetID) {
+                let applied = viewModel.like(assetID: assetID)
+                if applied {
+                    Usage.shared.action(.keep, source: .rail, mode: .videos)
+                    KeepsAlbum.shared.add(assetID)
+                }
+                Haptics.tap()
+                likeBounceToken += 1
             }
-        } else if !trashService.pendingEmptyIDs.contains(assetID) {
-            let applied = viewModel.like(assetID: assetID)
-            if applied {
-                Usage.shared.action(.keep, source: .rail, mode: .videos)
-                KeepsAlbum.shared.add(assetID)
-            }
-            Haptics.tap()
-            likeBounceToken += 1
+            // else: this asset is mid-delete inside `emptyBin()` right now,
+            // so `TrashService.restore(assetID:)` would refuse it. PhotoKit
+            // may already have removed the asset from the library by the
+            // time that call would run. Skip the like entirely, rather than
+            // write a `LikedEntry` that the restore behind it silently
+            // failed to back up.
         }
-        // else: this asset is mid-delete inside `emptyBin()` right now, so
-        // `TrashService.restore(assetID:)` would refuse it. PhotoKit may
-        // already have removed the asset from the library by the time that
-        // call would run. Skip the like entirely, rather than write a
-        // `LikedEntry` that the restore behind it silently failed to back
-        // up.
     }
 
     /// A double tap on the video. Keep-only, never unkeep: an accidental
@@ -4731,17 +4739,23 @@ private struct FeedPageContent: View {
     private func keepFromDoubleTap() {
         let assetID = entry.assetID
         guard !trashService.pendingEmptyIDs.contains(assetID) else { return }
-        if !viewModel.isLiked(assetID) {
+        // An already-kept video changes nothing, so it is not gated: the
+        // heart bounces as an acknowledgement, the same as the photo
+        // feed's double tap.
+        guard !viewModel.isLiked(assetID) else {
+            Usage.shared.keepTapNoop(mode: .videos)   // a double tap on an already-kept video
+            likeBounceToken += 1
+            return
+        }
+        Entitlements.shared.require(.keep) {
             let applied = viewModel.like(assetID: assetID)
             if applied {
                 Usage.shared.action(.keep, source: .doubleTap, mode: .videos)
                 KeepsAlbum.shared.add(assetID)
             }
             Haptics.tap()
-        } else {
-            Usage.shared.keepTapNoop(mode: .videos)   // a double tap on an already-kept video
+            likeBounceToken += 1
         }
-        likeBounceToken += 1
     }
 
     /// A second tap on an already-queued page restores it, instead of
@@ -4763,16 +4777,18 @@ private struct FeedPageContent: View {
         if trashService.isQueued(assetID) {
             // A second trash tap on the page undoes the queue. It logs
             // `unqueuedInFeed`, which is separate from a bin Restore or
-            // a Keep.
+            // a Keep. Ungated: a lapsed subscriber may still un-queue.
             if trashService.restore(assetID: assetID) { Usage.shared.unqueuedInFeed(mode: .videos) }
             return
         }
-        let queued = trashService.queue(assetID: assetID)
-        if queued { Usage.shared.action(.delete, source: .rail, mode: .videos) }
-        if queued { Usage.shared.deleted(mode: .videos, width: meta.pixelWidth, height: meta.pixelHeight, durationMs: meta.durationMs) }
-        if queued { DailyReminder.shared.noteFirstDelete() }
-        if queued { Haptics.tap() }
-        onAdvanceRequested()
+        Entitlements.shared.require(.delete) {
+            let queued = trashService.queue(assetID: assetID)
+            if queued { Usage.shared.action(.delete, source: .rail, mode: .videos) }
+            if queued { Usage.shared.deleted(mode: .videos, width: meta.pixelWidth, height: meta.pixelHeight, durationMs: meta.durationMs) }
+            if queued { DailyReminder.shared.noteFirstDelete() }
+            if queued { Haptics.tap() }
+            onAdvanceRequested()
+        }
     }
 }
 
