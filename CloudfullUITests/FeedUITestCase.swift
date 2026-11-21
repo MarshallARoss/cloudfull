@@ -31,7 +31,15 @@ class FeedUITestCase: XCTestCase {
     // MARK: - Launch
 
     func launch(resettingState: Bool) {
-        app.launchArguments = resettingState ? ["-cloudfull-reset-deck-state"] : []
+        launch(resettingState: resettingState, extraArguments: [])
+    }
+
+    /// Same as `launch(resettingState:)`, with extra DEBUG launch
+    /// arguments appended after the reset flag (if any) — for example
+    /// `-cloudfull-access=<token>`, which fixes `Entitlements.access` for
+    /// that one launch. See `M12PaywallTests`.
+    func launch(resettingState: Bool, extraArguments: [String]) {
+        app.launchArguments = (resettingState ? ["-cloudfull-reset-deck-state"] : []) + extraArguments
         app.launch()
         grantPhotoAccessIfAsked()
     }

@@ -34,6 +34,16 @@
             skipped = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
+               BlueprintIdentifier = "A8930D6426EBC13F7626BB66"
+               BuildableName = "CloudfullTests.xctest"
+               BlueprintName = "CloudfullTests"
+               ReferencedContainer = "container:Cloudfull.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
+         <TestableReference
+            skipped = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
                BlueprintIdentifier = "4F94E0CC7CE941889C998FD1"
                BuildableName = "CloudfullUITests.xctest"
                BlueprintName = "CloudfullUITests"
@@ -41,6 +51,9 @@
             </BuildableReference>
          </TestableReference>
       </Testables>
+      <StoreKitConfigurationFileReference
+         identifier = "../../Cloudfull.storekit">
+      </StoreKitConfigurationFileReference>
    </TestAction>
    <LaunchAction
       buildConfiguration = "Debug"

@@ -22,7 +22,7 @@ set -euo pipefail
 # PATH.
 export PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin"
 
-UDID=E2DAB7E8-649E-4F1A-BBA9-676236EB075A
+UDID=A0EFC6FE-B596-451E-A14C-753B52155B12   # iPhone 18 Pro, iOS 27.0 (the 17 Pro runtime was lost 2026-10-09)
 
 # Find the repo from this script's location. Every path below is relative
 # to the repo.

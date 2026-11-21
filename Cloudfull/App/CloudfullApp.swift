@@ -112,6 +112,12 @@ struct CloudfullApp: App {
     /// `LiveReadiness.fetching`. This is DEBUG-only, like every other
     /// launch argument in this file.
     static let slowLiveArgument = "-cloudfull-slow-live"
+
+    /// Launch argument that overrides `Entitlements.access` for this
+    /// launch only: `-cloudfull-access=<real|unknown|none|trial|monthly|
+    /// lifetime|grandfathered>`. Never persisted, and never compiled into
+    /// a release build. See `Entitlements.refresh()`.
+    static let accessArgument = "-cloudfull-access="
     #endif
 
     init() {
@@ -144,6 +150,11 @@ struct CloudfullApp: App {
             // flag's contract across the relaunch: with the reset flag,
             // the process shows only the feed, also after a relaunch.
             UserDefaults.standard.set(true, forKey: OnboardingGate.storageKey)
+            // A reset run must also start from the real (non-overridden)
+            // access state, not whatever a previous Settings pick left
+            // behind.
+            UserDefaults.standard.removeObject(forKey: AccessOverride.storageKey)
+            UserDefaults.standard.removeObject(forKey: Entitlements.cacheKey)
         }
         // Rotate the keys here, before any view exists. The rotated rows
         // are then in place before `DeckViewModel.start()` deals the
@@ -183,6 +194,10 @@ struct CloudfullApp: App {
         // deletes stale files.
         LivePhotoBundle.cleanupStaleBundles()
         configureAudioSessionCategory()
+        // Not DEBUG-gated: every build, including Release, needs its
+        // entitlement state resolved and its single `Transaction.updates`
+        // listener running from the start of the process.
+        _ = Entitlements.shared
     }
 
     var body: some Scene {

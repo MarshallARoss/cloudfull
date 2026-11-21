@@ -715,7 +715,17 @@ final class M11Tests: FeedUITestCase {
 
         XCTAssertTrue(element("settings_root").waitForExistence(timeout: 5), "settings_root does not exist")
         // Checks the muted-videos, iCloud status, and reset-onboarding rows.
+        // Since 1.1 the Subscription section sits above Assistance, so the
+        // reset-onboarding row starts below the fold on this screen size;
+        // an off-screen row in a scroll view does not exist to XCUITest,
+        // so each row is swiped into view first, the same as the version
+        // footer below.
         for id in ["settings_open_muted", "settings_icloud_status", "settings_reset_onboarding"] {
+            var swipesLeft = 8
+            while !element(id).waitForExistence(timeout: 1) && swipesLeft > 0 {
+                element("settings_root").swipeUp()
+                swipesLeft -= 1
+            }
             XCTAssertTrue(element(id).waitForExistence(timeout: 5), "\(id) does not exist in Settings")
         }
         // `settings_version` sits near the bottom of the screen, under
