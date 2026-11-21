@@ -123,7 +123,7 @@ fi
 # files. Set it explicitly.
 export PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin"
 
-UDID=A0EFC6FE-B596-451E-A14C-753B52155B12   # iPhone 18 Pro, iOS 27.0 (the 17 Pro runtime was lost 2026-10-09)
+UDID=42D5A716-ECE0-4E28-8F4A-148A9A38A6CE   # iPhone 18 Pro, iOS 27.0 (the 17 Pro runtime was lost 2026-10-09)
 DEST="platform=iOS Simulator,id=$UDID"
 DD="$PROJ/build"
 BUNDLE_ID=com.cloudfull.app

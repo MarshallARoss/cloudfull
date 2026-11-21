@@ -39,7 +39,7 @@ fi
 # startup files. Set it explicitly.
 export PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin"
 
-UDID=A0EFC6FE-B596-451E-A14C-753B52155B12
+UDID=42D5A716-ECE0-4E28-8F4A-148A9A38A6CE
 DEST="platform=iOS Simulator,id=$UDID"
 DD="$PROJ/build"
 LOGDIR="$PROJ/build/preflight-logs"

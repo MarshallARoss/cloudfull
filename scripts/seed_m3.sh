@@ -22,7 +22,7 @@ set -euo pipefail
 # PATH.
 export PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin"
 
-UDID=A0EFC6FE-B596-451E-A14C-753B52155B12   # iPhone 18 Pro, iOS 27.0 (the 17 Pro runtime was lost 2026-10-09)
+UDID=42D5A716-ECE0-4E28-8F4A-148A9A38A6CE   # iPhone 18 Pro, iOS 27.0 (the 17 Pro runtime was lost 2026-10-09)
 
 # Find the repo from this script's location. Every path below is relative
 # to the repo.
@@ -236,11 +236,28 @@ if (( need > 0 )); then
   echo "# topping up pool: $have live, need $need more" >&2
   stamp=$(date +%s)
   batch=()
+  # The "F<n>" label is only for a person who watches the simulator. Each
+  # filler already has its own color, so the clips stay distinct without
+  # it. Homebrew's ffmpeg 9 build has no `drawtext` filter (it dropped
+  # libfreetype; the full build is the keg-only `ffmpeg-full`), so draw
+  # the label only when the installed ffmpeg can. The whole filter list
+  # is read into a variable first: `grep -q` on a pipe would close it
+  # early and trip `pipefail`.
+  has_drawtext=0
+  if [[ "$("$FF" -hide_banner -filters 2>/dev/null)" == *" drawtext "* ]]; then
+    has_drawtext=1
+  else
+    echo "# ffmpeg has no drawtext filter: filler clips carry no F<n> label" >&2
+  fi
   for i in $(seq 1 $need); do
     outfile="$FILLER/fill_${stamp}_${i}.mp4"
+    label=()
+    if (( has_drawtext )); then
+      label=(-filter:v "drawtext=fontfile=${FONT}:text='F${i}':fontcolor=white:fontsize=300:x=(w-text_w)/2:y=(h-text_h)/2")
+    fi
     "$FF" -y -f lavfi -i "color=c=0x$(printf '%06x' $(( (i * 2654435761) % 16777215 ))):s=1080x1920:d=3:r=30" \
       -f lavfi -i "anullsrc=r=44100:cl=stereo" \
-      -filter:v "drawtext=fontfile=${FONT}:text='F${i}':fontcolor=white:fontsize=300:x=(w-text_w)/2:y=(h-text_h)/2" \
+      "${label[@]}" \
       -shortest -c:v libx264 -pix_fmt yuv420p -c:a aac -b:a 96k "$outfile" -loglevel error
     batch+=("$outfile")
   done
