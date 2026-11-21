@@ -977,12 +977,9 @@ final class M5Tests: FeedUITestCase {
         app.buttons["bin_open"].tap()
         XCTAssertTrue(app.descendants(matching: .any)["trash_empty"].waitForExistence(timeout: 10), "trash_empty did not reappear after re-opening the bin")
         app.buttons["trash_empty"].tap()
-        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
-        let alert = springboard.alerts.firstMatch
-        XCTAssertTrue(alert.waitForExistence(timeout: 10), "No system delete confirmation appeared for Empty Bin")
-        let deleteButton = alert.buttons.matching(NSPredicate(format: "label CONTAINS 'Delete'")).firstMatch
-        XCTAssertTrue(deleteButton.exists, "No destructive 'Delete' button found in the confirm dialog")
-        deleteButton.tap()
+        let alert = waitForSystemDeleteAlert()
+        XCTAssertTrue(alert.exists, "No system delete confirmation appeared for Empty Bin")
+        confirmSystemDelete(on: alert)
 
         // The bin does not auto-dismiss after Empty. It stays open with the
         // freed message and the reclaimed pill until Done or a swipe closes

@@ -377,4 +377,77 @@ class FeedUITestCase: XCTestCase {
         guard !assetID.isEmpty else { return nil }
         return Page(slot: slot, assetID: assetID)
     }
+
+    // MARK: - System delete confirmation
+
+    /// Seconds to wait for the PhotoKit delete confirmation. iOS throttles
+    /// repeated consent alerts for the same app, so the alert can take
+    /// 95 to 105 seconds to render. See `PurgeAlbumsHelper`.
+    static let systemDeleteAlertTimeout: TimeInterval = 130
+
+    /// Waits for the system delete confirmation that SpringBoard owns.
+    /// Returns the alert. The caller asserts `.exists` with its own message.
+    func waitForSystemDeleteAlert(
+        timeout: TimeInterval = FeedUITestCase.systemDeleteAlertTimeout
+    ) -> XCUIElement {
+        let alert = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+            .alerts.firstMatch
+        _ = alert.waitForExistence(timeout: timeout)
+        return alert
+    }
+
+    /// Taps Delete in the system delete confirmation and waits for it to
+    /// close. On a slow host a tap can have no effect, so this taps again
+    /// every 8 seconds. Before each re-tap it checks that the alert text is
+    /// unchanged. A batch delete shows exactly one confirmation, so a
+    /// different dialog must fail the test and not get an answer.
+    /// It returns at the first moment the alert is gone. An empty or
+    /// vanished alert during the check counts as closed.
+    func confirmSystemDelete(
+        on alert: XCUIElement,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        func signature() -> String {
+            alert.staticTexts.allElementsBoundByIndex
+                .map(\.label).joined(separator: " ")
+        }
+        let recorded = signature()
+        let deleteButton = alert.buttons
+            .matching(NSPredicate(format: "label CONTAINS 'Delete'")).firstMatch
+        XCTAssertTrue(
+            deleteButton.waitForExistence(timeout: 10),
+            "No destructive 'Delete' button found in the confirm dialog",
+            file: file, line: line
+        )
+
+        let deadline = Date().addingTimeInterval(90)
+        var lastTap: Date?
+        var taps = 0
+        while Date() < deadline {
+            if !alert.exists { return }
+            if deleteButton.exists, deleteButton.isHittable,
+               lastTap.map({ Date().timeIntervalSince($0) >= 8 }) ?? true {
+                if taps > 0 {
+                    let now = signature()
+                    if !alert.exists || now.isEmpty { return }
+                    if now != recorded {
+                        XCTFail(
+                            "A different system dialog replaced the first confirmation — batch delete should show exactly one confirmation",
+                            file: file, line: line
+                        )
+                        return
+                    }
+                }
+                deleteButton.tap()
+                taps += 1
+                lastTap = Date()
+            }
+            if alert.waitForNonExistence(timeout: 0.5) { return }
+        }
+        XCTFail(
+            "The system delete confirmation stayed on screen after \(taps) taps on Delete",
+            file: file, line: line
+        )
+    }
 }
