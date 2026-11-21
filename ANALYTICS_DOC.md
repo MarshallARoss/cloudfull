@@ -264,12 +264,14 @@ on a change of shape/mode or at the end of a session.
 | `paywall.link.<name>` | A link row on the paywall itself was tapped (`name` = `terms`, `privacy`, `support` (the mail link), `supportPage` (the website support page), `restore`, `close`). | Exact integer, running total. |
 | `postsSeenBeforeFirstPaywall` | Posts seen in the feed before the first paywall raise of the session. | Exact integer, written once per session, at the first paywall. |
 | `postsSeenAfterPaywallDismiss.<mode>` | Posts seen after the paywall was dismissed, for the rest of the session, by feed. | Exact integer, running total. |
-| `purchase.<product>.<outcome>` | How a purchase attempt of an unlock plan ended (`product` = `monthly`, `lifetime`; `outcome` = `started`, `success`, `cancelled`, `pending`, `failed`, `unverified`). Never the product's price, currency, or id. | Exact integer, running total. |
+| `purchase.<product>.<outcome>` | How a purchase attempt of an unlock plan ended (`product` = `monthly`, `lifetime`; `outcome` = `started`, `success`, `cancelled`, `pending`, `failed`, `unverified`). Never the product's price, currency, or full id. | Exact integer, running total. |
+| `purchase.<product>.<tier>.<outcome>` | The same outcome, split by the product's price tier (`tier` = the last part of the product id, `299` for `com.cloudfull.app.unlock.monthly.299`, `999` for `com.cloudfull.app.unlock.lifetime.999`; later price tests add tiers such as `399`). Written next to `purchase.<product>.<outcome>`, which stays the total. Not written when the tier is unknown. Never the localized price, currency, or amount paid. | Exact integer, running total. |
 | `purchase.<product>.from.<source>` | A completed in-app purchase, by what raised the paywall it came from (`source` = the locked action `keep`, `unkeep`, `delete`, `share`, `album`, `shrink`, `emptyBin`, or the Settings rows `settings`). Purchases that arrive through Apple outside the app (Ask to Buy approval, another device, an offer code) count in `purchase.<product>.success` but have no source, so the `from.*` sum can be lower. | Exact integer, running total. |
 | `purchase.viaOfferCode` | A purchase was completed by redeeming an App Store offer code. Never the code itself. | Exact integer, running total. |
 | `restore.<outcome>` | How a tap on "Restore Purchases" ended (`outcome` = `tapped`, `restored`, `nothingFound`, `failed`). | Exact integer, running total. |
 | `manageSubscriptionOpened` | The system "Manage Subscription" sheet was opened. | Exact integer, running total. |
 | `entitlement` | The access state the app resolved to for this session (`unknown`, `fork`, `debug`, `legacy`, `trial`, `monthly`, `lifetime`, `none`). | One of a fixed set of names. |
+| `entitlementTier` | The price tier of the product that gives access now (`299`, `999`; the last part of the product id). Written only while `entitlement` is `trial`, `monthly`, or `lifetime`, and only when the tier is known. Cleared (absent) for `none`, `legacy`, `unknown`, `fork`, and `debug`. Never the localized price or currency. | A number as text, such as `299`. |
 | `entitlementAtOpen` | The first access state of the session, written once. A session that starts locked and then buys keeps `none` here while `entitlement` moves on, so the locked-session funnel still counts it. | One of the same fixed set of names. |
 | `subscription.ageDays` | Days since the monthly plan was first bought, on a session with an active monthly plan. Apple keeps the first purchase date across a lapse and a resubscribe, so this is days since the first-ever subscription, not unbroken tenure. | Exact integer. |
 | `subscription.autoRenew` | Whether the monthly plan will renew (`true`/`false`). `false` with a rising `subscription.ageDays` is a canceller running out the clock. | `true` or `false`. |
@@ -291,7 +293,7 @@ verified against the code, not assumed:
 - Anything the user types.
 - A tip jar product's price or currency. Only its fixed tier (`1`, `10`, or `100`) is sent.
 - The destination URL of a tapped link. Only the fixed name of the link row is sent.
-- A purchase's price, currency, product id, transaction id, or offer code. Only the plan (`monthly`/`lifetime`) and the outcome are sent.
+- A purchase's localized price, currency, amount paid, full product id, transaction id, or offer code. Only the plan (`monthly`/`lifetime`), its price tier (`299`, `999`; the last part of the product id), and the outcome are sent.
 
 The only identifiers Cloudfull sends about media are exact pixel dimensions
 (such as `1920x1080`) and, for a deleted video, its duration in
