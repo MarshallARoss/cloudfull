@@ -802,14 +802,27 @@ final class DeckViewModel: ObservableObject {
         }
     }
 
-    func playerItem(for assetID: String, onProgress: (@Sendable (Double) -> Void)? = nil) async -> AVPlayerItem? {
-        // A warm slot may already hold this asset's resolved item, or
+    /// `didTimeOut`, if given, is left untouched by a cache hit — only
+    /// a real, not-yet-warmed fallback request can time out. See
+    /// `PhotoLibraryService.playerItem(for:onProgress:didTimeOut:)`.
+    func playerItem(
+        for assetID: String, pageID: String,
+        onProgress: (@Sendable (Double) -> Void)? = nil,
+        didTimeOut: TimeoutFlag? = nil
+    ) async -> AVPlayerItem? {
+        // A warm slot may already hold this page's resolved item, or
         // still be resolving it. Either way, this is the only consumer,
         // so joining is correct: a second request would download the
         // item twice. `take` removes what it returns, so one resolved
-        // item can never reach two players.
-        if let warmed = await PlayerItemCache.shared.take(assetID) { return warmed }
-        return await library.playerItem(for: assetID, onProgress: onProgress)
+        // item can never reach two players — keyed by page id, not
+        // asset id, so two pages dealt the same asset never share one.
+        if let warmed = await PlayerItemCache.shared.take(pageID) { return warmed }
+        #if DEBUG
+        // Only the real fallback below counts as a request. A join
+        // above costs nothing new, so it must not bump this.
+        ItemRequestCounters.bump(pageID)
+        #endif
+        return await library.playerItem(for: assetID, onProgress: onProgress, didTimeOut: didTimeOut)
     }
 
     // MARK: - Like / trash exclusion
@@ -932,6 +945,17 @@ final class DeckViewModel: ObservableObject {
                 }
             }
             index -= 1
+        }
+
+        // Every other site that edits `deck` refreshes the window right
+        // after (`:374, 503, 586, 622, 665, 770, 1121, 1285` as of this
+        // writing). Without this, a like on a video that repeats at +1
+        // leaves `preloadableSlots` naming the slot this call just
+        // removed, and misses the slot that slides into +1's place —
+        // that neighbour never starts loading until the user actually
+        // swipes to it.
+        if !slots.isEmpty {
+            refreshPreloadableSlots()
         }
 
         // Sorted mode still removes the id from the live deck above, but
@@ -1729,13 +1753,14 @@ final class DeckViewModel: ObservableObject {
         refreshWarmWindow()
     }
 
-    /// Poster prefetch for the whole warm window, and item resolution for
-    /// the slots the render window does not already cover. Both calls are
-    /// fire-and-forget: nothing here suspends, so nothing here can hold
-    /// the main actor.
+    /// Poster prefetch and item resolution for the whole warm window.
+    /// Both calls are fire-and-forget: nothing here suspends, so
+    /// nothing here can hold the main actor.
     ///
     /// The warm window reaches two slots ahead. No player mounts for a
-    /// warm-only slot, so players stay limited to ±1.
+    /// warm-only slot, so players stay limited to ±1 — `PlayerItemCache`
+    /// resolving a slot's item ahead of time is not the same as a page
+    /// attaching it.
     private func refreshWarmWindow() {
         wdMark("warmWindow")
         // This runs off the pager's position change, so it can fire
@@ -1755,7 +1780,7 @@ final class DeckViewModel: ObservableObject {
         }
         guard !deck.isEmpty else {
             PosterCache.shared.setWindow([])
-            PlayerItemCache.shared.setWindow([], starting: [], allowNetwork: false)
+            PlayerItemCache.shared.setWindow(retain: [], starting: [], networkGatedStarting: [], allowNetwork: false)
             return
         }
         let lower = max(0, currentIndex - 1)
@@ -1763,16 +1788,20 @@ final class DeckViewModel: ObservableObject {
         guard lower <= upper else { return }
         let warm = deck[lower...upper]
         PosterCache.shared.setWindow(warm.map(\.assetID))
-        // Only the slots `load()` will not resolve for itself. Resolving
-        // an id twice would download it twice.
-        let warmOnly = warm.filter { !preloadableSlots.contains($0.position) }.map(\.assetID)
-        // `assetIDs` is the retain set: the whole warm window. An id
-        // that just entered the render window is not cancelled or
-        // evicted out from under `load()`'s own `take()`. `starting` is
-        // only the slots `load()` will not resolve for itself.
+        // The render window — the current page and its immediate ±1
+        // neighbours — always starts, cellular or not: it is what the
+        // page on screen, and the one swipe away from it, actually
+        // need. Only the one slot further out (+2) is gated on
+        // `allowNetwork`, inside `setWindow` itself.
+        let renderWindow = warm.filter { preloadableSlots.contains($0.position) }
+        let beyondRenderWindow = warm.filter { !preloadableSlots.contains($0.position) }
+        // `retain` is the whole warm window. An id that just entered the
+        // render window is not cancelled or evicted out from under
+        // `load()`'s own `take()`.
         PlayerItemCache.shared.setWindow(
-            warm.map(\.assetID),
-            starting: warmOnly,
+            retain: warm.map { WarmSlot(pageID: $0.id, assetID: $0.assetID) },
+            starting: renderWindow.map { WarmSlot(pageID: $0.id, assetID: $0.assetID) },
+            networkGatedStarting: beyondRenderWindow.map { WarmSlot(pageID: $0.id, assetID: $0.assetID) },
             allowNetwork: !library.isNetworkExpensiveOrConstrained
         )
     }
