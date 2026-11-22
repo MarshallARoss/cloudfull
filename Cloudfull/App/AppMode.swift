@@ -85,6 +85,7 @@ final class AppModeStore: ObservableObject {
 struct RootView: View {
     @ObservedObject private var modeStore = AppModeStore.shared
     @ObservedObject private var reminder = DailyReminder.shared
+    @ObservedObject private var consent = AdConsentStore.shared
     private let deck: DeckViewModel
     private let trash: TrashService
     private let shrink: ShrinkService
@@ -112,6 +113,14 @@ struct RootView: View {
                     Task { await reminder.answerAsk(yes: yes) }
                 }
             }
+            // The one-time ad-measurement question. It shows only on EEA, UK
+            // and Switzerland storefronts, and never over the reminder card.
+            // OWNER DECISION: the moment. `AdConsentStore.considerShowingCard`
+            // waits for a calm screen (onboarding done, no paywall, no
+            // reminder card), then 1.2 s more.
+            if consent.isCardVisible && !reminder.isAskVisible {
+                AdConsentCard { yes in consent.answerFromCard(yes: yes) }
+            }
             #if DEBUG
             modeProbe
             // The stall readout must be visible in Photos mode too, not
@@ -121,6 +130,18 @@ struct RootView: View {
             // why it could not stay inside the 1×1 `GateProbes` stack.
             MainStallReadoutView()
             #endif
+        }
+        // Each source of "calm" is watched, so the card is offered whichever
+        // condition becomes true last. `considerShowingCard` re-checks.
+        .task { await consent.considerShowingCard() }
+        .onReceive(OnboardingGateState.shared.$hasCompleted) { _ in
+            Task { await consent.considerShowingCard() }
+        }
+        .onReceive(Entitlements.shared.$paywallRequest) { _ in
+            Task { await consent.considerShowingCard() }
+        }
+        .onReceive(reminder.$isAskVisible) { _ in
+            Task { await consent.considerShowingCard() }
         }
     }
 

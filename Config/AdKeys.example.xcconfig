@@ -1,0 +1,16 @@
+// Copy this file to Config/AdKeys.xcconfig (git-ignored) and fill in the values.
+// Never commit real values. An empty value keeps that SDK off.
+
+// Meta: App ID, from developers.facebook.com > the Cloudfull app > App settings > Basic.
+META_APP_ID =
+// Meta: Client token, from the same page (App settings > Advanced > Client token).
+META_CLIENT_TOKEN =
+
+// TikTok: numeric Apple App Store id of the app (digits only), from App Store Connect > App Information.
+TIKTOK_APPLE_APP_ID =
+// TikTok: TikTok App ID (digits; several ids may be joined by commas), from TikTok Events Manager > App Events > the app.
+TIKTOK_APP_ID =
+// TikTok: access token, from TikTok Events Manager > the app > Settings (Access Token).
+TIKTOK_ACCESS_TOKEN =
+
+// Firebase needs no variable here. Put GoogleService-Info.plist (git-ignored) in Cloudfull/.

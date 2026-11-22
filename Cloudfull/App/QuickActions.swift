@@ -82,6 +82,7 @@ final class CloudfullAppDelegate: NSObject, UIApplicationDelegate {
         // cold-starts the app is delivered to nobody.
         UNUserNotificationCenter.current().delegate = self
         Task { @MainActor in await DailyReminder.shared.refreshAuthorization() }
+        AdEvents.shared.scheduleLaunch()
         return true
     }
 

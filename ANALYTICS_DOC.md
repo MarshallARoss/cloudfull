@@ -60,6 +60,13 @@ to the key.
 | `notificationKind` | Which notification type opened the session. | Fixed value, `daily`. |
 | `runsOn` | What kind of hardware the app runs on. | One of `iPhone`, `iPadCompat` (an iPad running the iPhone app in compatibility mode), `mac`, `other`. |
 | `installChannel` | Where this copy of the app came from. | One of `appStore`, `testFlight`, `debug` (a Debug build run from Xcode), `unknown`. |
+| `appleAds.attribution` | Whether Apple's AdServices says an Apple Ads tap or view brought this install. Asked once per install, and written into every later session like `installChannel`. Absent until Apple answers. | `true` or `false`. |
+| `appleAds.campaignId` | The Apple Ads campaign that brought this install. Only when `appleAds.attribution` is `true`. | Apple's campaign number, as text. |
+| `appleAds.adGroupId` | The Apple Ads ad group. Only when `appleAds.attribution` is `true`. | Apple's ad group number, as text. |
+| `appleAds.keywordId` | The Apple Ads keyword. Absent with Search Match and with Apple Ads Basic. | Apple's keyword number, as text. |
+| `appleAds.claimType` | How the ad reached the person: a tap or a view. | Apple's word, such as `Click` or `Impression`. |
+| `appleAds.conversionType` | The kind of conversion Apple counted. | Apple's word, such as `Download`, `Redownload` or `PreOrder`. |
+| `appleAds.supplyPlacement` | Where the ad showed. | Apple's word, such as `APPSTORE_SEARCH_RESULTS`. |
 | `leftHandedSetting` | Whether the Left-handed controls setting is on. Read only when `foldable` is `0`; the Duo hides this setting. | Boolean, `0` or `1`. |
 | `foldable` | Whether this phone is an iPhone Duo. | Boolean, `0` or `1`. |
 
@@ -196,6 +203,9 @@ on a change of shape/mode or at the end of a session.
 | `onThisDateEndPage.<mode>.reached` | The "On This Date" end-of-feed page was reached. | Exact integer, running total. |
 | `onThisDateEndPage.<mode>.<tap>` | A button tapped on that end page (`tap` = `keepScrolling`, `toPhotos`, `toVideos`). | Exact integer, running total. |
 | `dailyReminderAsk.<at>.<answer>` | The daily reminder opt-in prompt was answered (`at` = `firstDelete` or `endPage`; `answer` = `yes` or `notNow`). | Exact integer, running total. |
+| `adConsent.shown` | The one-time ad measurement question was shown. Only on EEA, UK and Switzerland storefronts. | Exact integer, running total. |
+| `adConsent.card.yes` / `adConsent.card.no` | The question was answered on its card. | Exact integer, running total. |
+| `adConsent.settings.yes` / `adConsent.settings.no` | The answer was changed in Settings. | Exact integer, running total. |
 | `notificationPermission.allowed` / `notificationPermission.denied` | The system notification-permission prompt was answered. | Exact integer, running total. |
 | `notificationTap.<kind>` | A notification was tapped, by kind (`kind` = `daily`). | Exact integer, running total. |
 | `openedNearDailyReminder` | The app was opened within an hour of the set daily reminder time. | Exact integer, running total. |
@@ -281,7 +291,12 @@ on a change of shape/mode or at the end of a session.
 
 ## Never sent
 
-The analytics code does not read or send any of the following. This is
+This section describes `Usage`, the record this file documents. The ad
+networks (Meta, Google, TikTok) receive their own purchase events from
+`AdEvents.swift`, outside `Usage`. Those events include the price and the
+currency of an unlock purchase.
+
+The usage record does not read or send any of the following. This is
 verified against the code, not assumed:
 
 - Photos or videos themselves.

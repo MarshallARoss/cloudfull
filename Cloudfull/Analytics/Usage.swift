@@ -27,9 +27,12 @@ import UIKit
 ///
 /// A record never holds an asset id, a file name, a photo's date, a place,
 /// an album name, or anything typed by the user. It holds only counts,
-/// exact numbers, and choices, with no bucketing. The app calls no
-/// tracking API (App Store guideline 5.1.2). Every value is first-party
-/// data, joined with nothing outside the app.
+/// exact numbers, and choices, with no bucketing. `Usage` itself calls no
+/// tracking API (App Store guideline 5.1.2). The ad networks' SDKs live
+/// only in `AdEvents.swift`, and nothing in this file hands them a value.
+/// Every value here is first-party data, joined with nothing outside the
+/// app. The one answer from outside is Apple Ads' own attribution record
+/// (`AppleAdsAttribution`), which holds no user or device identifier.
 ///
 /// Upload goes to the container named by `containerID`, which matches
 /// `Cloudfull.entitlements`. The simulator and XCTest-hosted test runs
@@ -46,6 +49,7 @@ final class Usage {
     enum KeepFollowup: String { case swipe, stay, back }
     enum ModeSwitchVia: String { case chin, quickAction, notification, endPage }
     enum ReminderAskAt: String { case firstDelete, endPage }
+    enum AdConsentFrom: String { case card, settings }
     enum ReminderAnswer: String { case yes, notNow }
     enum EndPageTap: String { case keepScrolling, toPhotos, toVideos }
     enum ShareTarget: String {
@@ -375,6 +379,20 @@ final class Usage {
     func onThisDateEndReached(mode: Mode) { bump("onThisDateEndPage.\(mode.rawValue).reached") }
     func onThisDateEnd(mode: Mode, tap: EndPageTap) { bump("onThisDateEndPage.\(mode.rawValue).\(tap.rawValue)") }
     func reminderAsk(answer: ReminderAnswer, at: ReminderAskAt) { bump("dailyReminderAsk.\(at.rawValue).\(answer.rawValue)") }
+
+    // Ad measurement. The consent question only appears on EEA / UK / Switzerland storefronts.
+    func adConsentShown() { bump("adConsent.shown") }
+    func adConsentAnswered(yes: Bool, from: AdConsentFrom) { bump("adConsent.\(from.rawValue).\(yes ? "yes" : "no")") }
+
+    /// Apple Ads attribution, written beside `installChannel`: sets every key in
+    /// `facts.usageFacts` and removes the `appleAds.*` keys it lacks.
+    func appleAdsFacts(_ facts: AppleAdsFacts) {
+        let values = facts.usageFacts
+        for key in ["appleAds.attribution", "appleAds.campaignId", "appleAds.adGroupId", "appleAds.keywordId",
+                    "appleAds.claimType", "appleAds.conversionType", "appleAds.supplyPlacement"] {
+            if let value = values[key] { set(key, value) } else { unset(key) }
+        }
+    }
     func notificationPermissionAnswered(granted: Bool) { bump(granted ? "notificationPermission.allowed" : "notificationPermission.denied") }
     enum NotificationKind: String { case daily }
     /// One flag plus a kind, so a future notification type becomes a new
@@ -744,6 +762,7 @@ final class Usage {
     func appOpened(cold: Bool, defaultTab: String, openMuted: Bool, liveDefaultOn: Bool, reminderOn: Bool, reminderHour: Int?) {
         beginSession(cold: cold)
         noteInstallChannel()
+        if let stored = AppleAdsFacts.stored(in: defaults) { appleAdsFacts(stored) }
         set("defaultTabSetting", defaultTab)
         set("openMutedSetting", openMuted ? "1" : "0")
         set("liveDefaultSetting", liveDefaultOn ? "1" : "0")

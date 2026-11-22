@@ -38,6 +38,9 @@ struct SettingsView: View {
     @AppStorage(AppModeStore.openModeKey) private var openMode = AppMode.videos.rawValue
     /// The daily "On this date" reminder.
     @ObservedObject private var reminder = DailyReminder.shared
+    /// Backs `adConsentSection`, which shows only on EEA, UK and
+    /// Switzerland storefronts.
+    @ObservedObject private var adConsent = AdConsentStore.shared
     /// The same shared flag `PermissionGateView`'s `.fullScreenCover`
     /// observes. Setting it to false shows the one-time onboarding cover
     /// again at once. See `OnboardingGateState`'s comment for why two
@@ -154,6 +157,9 @@ struct SettingsView: View {
                         preferencesSection(duoLayout: duoLayout)
                         storageSection
                         accessSection
+                        if adConsent.asksForConsent {
+                            adConsentSection
+                        }
                         assistanceSection
                         otherProjectsSection
                         tipJarSection   // last (owner, 2026-11-04)
@@ -302,6 +308,25 @@ struct SettingsView: View {
             }
         } header: {
             Text("Reminder")
+        }
+    }
+
+    // One row to change the one-time ad-measurement answer. It shows only
+    // when the card could have been asked (EEA, UK, Switzerland).
+    private var adConsentSection: some View {
+        Section {
+            // OWNER COPY: placeholder
+            Toggle("Tell ad networks when I buy", isOn: Binding(
+                get: { adConsent.answer == .yes },
+                set: { adConsent.answerFromSettings(yes: $0) }
+            ))
+            .accessibilityIdentifier("settings_ad_consent")
+        } header: {
+            // OWNER COPY: placeholder
+            Text("Ads")
+        } footer: {
+            // OWNER COPY: placeholder
+            Text("If you came from an ad, this lets the ad network count your purchase.")
         }
     }
 

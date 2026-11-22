@@ -670,6 +670,42 @@ def build_reminder(M, S):
 
 
 # ---------------------------------------------------------------------------
+# Apple Ads -- which campaign and keyword brought the people who paid.
+# Same definitions as usage_report.apple_ads_tables(). App Store only.
+# ---------------------------------------------------------------------------
+
+def build_apple_ads(args, S):
+    if args.channel != "appStore":
+        return ""
+    A = usage_report.apple_ads_tables(S)
+
+    def table(title, data):
+        if not data:
+            return f"<p>No Apple Ads installs with a {esc(title)} yet.</p>"
+        rows = "".join(
+            f"<tr><td>{esc(key)}</td><td>{row['installs']}</td><td>{row['buyers']}</td><td>{row['monthly']}</td><td>{row['lifetime']}</td></tr>"
+            for key, row in sorted(data.items(), key=lambda kv: (-kv[1]["buyers"], -kv[1]["installs"], kv[0])))
+        return (f'<div class="tablewrap"><table><thead><tr><th>{esc(title)}</th><th>Installs</th><th>Buyers</th>'
+                f'<th>Monthly</th><th>Lifetime</th></tr></thead><tbody>{rows}</tbody></table></div>')
+
+    return f"""
+  <section>
+    <h2>Apple Ads · who paid, by campaign and keyword</h2>
+    <div class="panel">
+      <p><b>{A['attributed']}</b> of {A['installs']} installs with a session: Apple returned attribution ({A['buyersAttributed']} paid;
+      {A['redownloads']} are reinstalls and {A['views']} are views, not taps).
+      Apple returned no attribution: {A['notAttributed']} ({A['buyersNotAttributed']} paid).
+      Apple has not answered yet: {A['unanswered']} ({A['buyersUnanswered']} paid).
+      Older build that never asks Apple: {A['notAsked']} ({A['buyersNotAsked']} paid).</p>
+      {table("campaignId", A["byCampaign"])}
+      {table("keywordId", A["byKeyword"])}
+      <p>A buyer is an install that bought the monthly plan or the lifetime unlock this month. Apple's record holds no user or device identifier.
+      Keyword ids need Apple Ads Advanced with exact keywords.</p>
+    </div>
+  </section>"""
+
+
+# ---------------------------------------------------------------------------
 # Health
 # ---------------------------------------------------------------------------
 
@@ -1407,7 +1443,7 @@ PAGE_CSS = """
 """
 
 
-def build_page(args, S, M, money_html, n_lifetime, tiles_html, q1_html, q2_html, reminder_html, health_html, location_html, customers_html, static_html, raw_fields_html):
+def build_page(args, S, M, money_html, n_lifetime, tiles_html, q1_html, q2_html, reminder_html, apple_ads_html, health_html, location_html, customers_html, static_html, raw_fields_html):
     channel_label = CHANNEL_LABEL[args.channel]
     intro = CHANNEL_INTRO[args.channel]
     pulled = datetime.datetime.now(datetime.timezone.utc).strftime("%-d %b %Y %H:%M UTC")
@@ -1443,7 +1479,7 @@ def build_page(args, S, M, money_html, n_lifetime, tiles_html, q1_html, q2_html,
 <style>{PAGE_CSS}</style>
 </head>
 <body>
-<div class="wrap">{header}{money_html}{tiles_html}{q1_html}{q2_html}{reminder_html}{health_html}{location_html}{customers_html}{static_html}{raw_fields_html}
+<div class="wrap">{header}{money_html}{tiles_html}{q1_html}{q2_html}{reminder_html}{apple_ads_html}{health_html}{location_html}{customers_html}{static_html}{raw_fields_html}
 </div>
 </body>
 </html>
@@ -1469,6 +1505,7 @@ def main():
     q1_html, q1_check = build_q1(M, S)
     q2_html, q2_check = build_q2(M, S)
     reminder_html = build_reminder(M, S)
+    apple_ads_html = build_apple_ads(args, S)
     health_html = build_health(M, S)
     location_html, _loc_check = build_location(M, S)
     customers_html, customers_check = build_customers(M, S)
@@ -1478,7 +1515,7 @@ def main():
     run_cross_checks(args, S, M, q1_check)
     check_customers(M, S, customers_check, q1_check, tiles_check, q2_check)
 
-    page = build_page(args, S, M, money_html, n_lifetime, tiles_html, q1_html, q2_html, reminder_html, health_html, location_html, customers_html, static_html, raw_fields_html)
+    page = build_page(args, S, M, money_html, n_lifetime, tiles_html, q1_html, q2_html, reminder_html, apple_ads_html, health_html, location_html, customers_html, static_html, raw_fields_html)
     with open(args.out, "w", encoding="utf-8") as f:
         f.write(page)
 

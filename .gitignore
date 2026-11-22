@@ -55,3 +55,7 @@ usage-pull*.json
 
 # Marketing strategy context (local only; the repo is public)
 .agents/
+
+# Ad SDK keys (local only; the repo is public). Template: Config/AdKeys.example.xcconfig
+Config/AdKeys.xcconfig
+GoogleService-Info.plist
