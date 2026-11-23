@@ -677,6 +677,9 @@ def main():
         print(f"  installs with plan data: {nInst}   scrolled: {scrolled} ({pct(scrolled, nInst)})   saw the paywall: {sawPaywall} ({pct(sawPaywall, nInst)})")
         print(f"  bought monthly: {boughtMonthly} installs ({successByProduct['monthly']} purchase events)   bought lifetime: {boughtLifetime} installs ({successByProduct['lifetime']} purchase events)   early buyers (legacy): {earlyBuyers}")
 
+        startedPurchase = sum(1 for rs in byInstall.values() if any(k.startswith("purchase.") and k.endswith(".started") and v > 0 for r in rs for k, v in r["counts"].items()))
+        print(f"  started a purchase: {startedPurchase} installs ({pct(startedPurchase, sawPaywall)} of those who saw the paywall)")
+
         # 2. Scroll-only installs: every session none/unknown, never a purchase success.
         def scrollOnly(rs): return all(r["facts"].get("entitlement") in ("none", "unknown") for r in rs) and not hasPurchaseSuccess(rs)
         soGroups = [rs for rs in byInstall.values() if scrollOnly(rs)]
