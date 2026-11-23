@@ -340,10 +340,6 @@ def print_apple_ads(S, C):
         print(f"    {title:44}{'installs':>9}{'buyers':>8}{'monthly':>9}{'lifetime':>9}")
         for key, row in sorted(table.items(), key=lambda kv: (-kv[1]["buyers"], -kv[1]["installs"], kv[0])):
             print(f"    {key:44}{row['installs']:>9}{row['buyers']:>8}{row['monthly']:>9}{row['lifetime']:>9}")
-    print(f"  ad consent card: shown {C.get('adConsent.shown',0)}   card yes {C.get('adConsent.card.yes',0)} no {C.get('adConsent.card.no',0)}   "
-          f"Settings yes {C.get('adConsent.settings.yes',0)} no {C.get('adConsent.settings.no',0)}")
-    # These facts are stored for lookups and not tabled. Naming them keeps the "facts not read by this script" line quiet.
-    _ = ("appleAds.adGroupId", "appleAds.claimType", "appleAds.conversionType", "appleAds.supplyPlacement")
     print()
 
 def main():
@@ -789,6 +785,9 @@ def main():
     src = open(__file__).read()
     for lit in _re.findall(r"""C\.get\(f?['"]([^'"]+)['"]""", src): named.add(_re.sub(r"\{[^}]*\}", "*", lit))
     import fnmatch as _fn
+    # Facts stored for lookups and not tabled. Their names appear in this file, so the
+    # "facts not read" check below counts them as read.
+    stored_only_facts = ("appleAds.adGroupId", "appleAds.claimType", "appleAds.conversionType", "appleAds.supplyPlacement")
     # Key families the script matches with `startswith`, instead of naming each key.
     scanned = ["setting.", "filterOn.", "filterOff.", "sortChanged.", "shareTarget", "shareTargetRaw.", "shareKind.", "shrink.originalKept.", "notificationTap.", "deleted.videos.res.", "deleted.photos.res.", "video.served.", "daysToFirst.", "settingsLink.", "tip.tapped.", "tip.outcome.", "tip.unavailable.", "bin.restore.",
                "secondsInPose.", "poseChange.", "afterDeleteByButton.", "video.rotatedToFullscreenIn.", "laptopPager.", "duoGrid.", "foldPlayback.", "foldResumeSeconds."]
@@ -797,6 +796,7 @@ def main():
     # Lists the facts whose names do not appear in this file. A name
     # anywhere in the file counts as read.
     mentioned = set(_re.findall(r"""['"]([A-Za-z][A-Za-z0-9._]*)['"]""", src))
+    mentioned.update(stored_only_facts)
     unreadFacts = sorted(k for k in F if k not in mentioned
                          and not any(k.startswith(p) for p in ("daysToFirst.", "firstLoadMs.", "sort.", "filters.", "types.")))
     if unreadFacts: print("  facts not read by this script: " + "  ".join(unreadFacts))

@@ -22,6 +22,11 @@
 	<!-- Firebase (Google Analytics). Meta is the one writer of the SKAdNetwork conversion value. -->
 	<key>GOOGLE_ANALYTICS_REGISTRATION_WITH_AD_NETWORK_ENABLED</key>
 	<false/>
+	<!-- No consent question in the app. Google denies these two for people it places in the EU User Consent Policy region (ADS_SDK_FACTS 1.2.4). -->
+	<key>GOOGLE_ANALYTICS_DEFAULT_ALLOW_AD_USER_DATA</key>
+	<string>eu_consent_policy</string>
+	<key>GOOGLE_ANALYTICS_DEFAULT_ALLOW_AD_PERSONALIZATION_SIGNALS</key>
+	<string>eu_consent_policy</string>
 	<!-- TikTok Business SDK. The SDK has no Info.plist keys; these are our own keys that carry its values. -->
 	<key>CloudfullTikTokAppleAppID</key>
 	<string>$(TIKTOK_APPLE_APP_ID)</string>

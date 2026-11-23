@@ -13,7 +13,7 @@ import SwiftUI
 /// radius, and a 320 pt maximum width. It sits over a dim that blocks
 /// taps on the feed beneath. `FeedView` uses the same dim for its
 /// "Updating feed…" state.
-struct FeedCard<Content: View>: View {
+private struct FeedCard<Content: View>: View {
     let identifier: String
     @ViewBuilder let content: Content
 

@@ -49,7 +49,6 @@ final class Usage {
     enum KeepFollowup: String { case swipe, stay, back }
     enum ModeSwitchVia: String { case chin, quickAction, notification, endPage }
     enum ReminderAskAt: String { case firstDelete, endPage }
-    enum AdConsentFrom: String { case card, settings }
     enum ReminderAnswer: String { case yes, notNow }
     enum EndPageTap: String { case keepScrolling, toPhotos, toVideos }
     enum ShareTarget: String {
@@ -379,10 +378,6 @@ final class Usage {
     func onThisDateEndReached(mode: Mode) { bump("onThisDateEndPage.\(mode.rawValue).reached") }
     func onThisDateEnd(mode: Mode, tap: EndPageTap) { bump("onThisDateEndPage.\(mode.rawValue).\(tap.rawValue)") }
     func reminderAsk(answer: ReminderAnswer, at: ReminderAskAt) { bump("dailyReminderAsk.\(at.rawValue).\(answer.rawValue)") }
-
-    // Ad measurement. The consent question only appears on EEA / UK / Switzerland storefronts.
-    func adConsentShown() { bump("adConsent.shown") }
-    func adConsentAnswered(yes: Bool, from: AdConsentFrom) { bump("adConsent.\(from.rawValue).\(yes ? "yes" : "no")") }
 
     /// Apple Ads attribution, written beside `installChannel`: sets every key in
     /// `facts.usageFacts` and removes the `appleAds.*` keys it lacks.

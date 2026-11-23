@@ -93,8 +93,9 @@ struct AdGateInput: Equatable, Sendable {
     var debugOverride: Bool         // AdEvents.debugOverrideRequested (always false in Release)
     var hasAnyKeys: Bool            // AdKeys.hasAny
     var appTransaction: AppTransactionFacts?   // from LiveStoreFactsSource().appTransaction()
-    var region: AdConsentRegion
-    var consent: AdConsentAnswer
+    /// `AdRegion.sdksMayStart(...)`: the storefront and the device region are both outside the
+    /// off-list. False when the storefront is unknown.
+    var regionAllowsSDKs: Bool
 }
 
 struct AdGateResult: Equatable, Sendable {
@@ -118,33 +119,16 @@ enum AdGate {
     /// Pure.
     /// production = (isReleaseBuild || debugOverride) && isOfficialBuild && !isSimulator
     ///   && !isRunningTests && (debugOverride || (appTransaction verified && environment == .production))
-    /// consentOK = region == .notRequired || (region == .required && consent == .yes)
-    /// An unknown region fails closed: no SDKs.
+    /// sdksMayStart = production && hasAnyKeys && regionAllowsSDKs
+    /// appleAdsMayRun = production
     static func evaluate(_ input: AdGateInput) -> AdGateResult {
         let production = passesStaticChecks(input)
             && (input.debugOverride
                 || (input.appTransaction?.isVerified == true && input.appTransaction?.environment == .production))
-        let consentOK = input.region == .notRequired
-            || (input.region == .required && input.consent == .yes)
         return AdGateResult(
-            sdksMayStart: production && input.hasAnyKeys && consentOK,
+            sdksMayStart: production && input.hasAnyKeys && input.regionAllowsSDKs,
             appleAdsMayRun: production
         )
-    }
-
-    /// Pure. The consent choice (the Settings row, and the card for a user who has not answered)
-    /// exists wherever a yes would start an SDK. It stays whatever the stored answer is, so a
-    /// user can withdraw a yes or change a no after a relaunch (GDPR Art. 7(3)).
-    static func shouldOfferChoice(_ input: AdGateInput) -> Bool {
-        let production = passesStaticChecks(input)
-            && (input.debugOverride
-                || (input.appTransaction?.isVerified == true && input.appTransaction?.environment == .production))
-        return production && input.hasAnyKeys && input.region == .required
-    }
-
-    /// Pure. The one-time card is worth showing only when nothing is answered yet.
-    static func shouldAsk(_ input: AdGateInput) -> Bool {
-        shouldOfferChoice(input) && input.consent == .notAsked
     }
 }
 
@@ -153,11 +137,8 @@ enum AdGate {
 /// One ad network. Main actor: every SDK here wants the main thread for setup.
 @MainActor
 protocol AdSink: AnyObject {
-    /// Idempotent; may be called again after `stop()`. The Firebase sink calls
-    /// `Analytics.setConsent` (all four types granted) here, before its first event.
+    /// Called once per launch, and only when the gate allows it.
     func start(keys: AdKeys)
-    /// Stops new events. Firebase sink: `Analytics.setConsent` all denied. No SDK is unloaded.
-    func stop()
     func send(_ event: AdEvent)
 }
 
@@ -275,7 +256,7 @@ final class AdEvents {
     #if DEBUG
     /// Debug builds only. Waives "Release" and the AppTransaction check so a phone build can be
     /// tested with real keys. It never waives the official bundle id, the simulator, XCTest,
-    /// keys or consent. Compiled out of Release.
+    /// keys or the region rule. Compiled out of Release.
     static let debugArgument = "-cloudfull-ads-debug"
     #endif
     static var debugOverrideRequested: Bool {
@@ -285,6 +266,9 @@ final class AdEvents {
         return false
         #endif
     }
+
+    /// Keys TikTok's `+load` code writes in every launch (NSObject+TikTokAdditions.m).
+    static let tiktokReferrerKeys = ["source_url", "refer"]
 
     /// UserDefaults String: this install's `appAccountToken` (a UUID). The paywall passes it to
     /// every purchase. It goes to Apple only, never to an ad network.
@@ -306,10 +290,7 @@ final class AdEvents {
     private var launchDecided = false
     private let makeSinks: @MainActor (AdKeys) -> [any AdSink]
     private var sinks: [any AdSink] = []
-    private var sinksMade = false
     private var launchTask: Task<Void, Never>?
-    private var lastInput: AdGateInput?
-    private var lastKeys: AdKeys?
 
     init(defaults: UserDefaults, now: @escaping () -> Date, makeSinks: @escaping @MainActor (AdKeys) -> [any AdSink]) {
         self.defaults = defaults
@@ -317,7 +298,7 @@ final class AdEvents {
         self.makeSinks = makeSinks
     }
 
-    /// True between a start and a stop. Every send and every defaults write needs it.
+    /// True once the SDKs have started. Every send and every defaults write needs it.
     private(set) var isSending = false
 
     // MARK: Launch
@@ -341,41 +322,46 @@ final class AdEvents {
             DispatchQueue.main.async { c.resume() }
         }
 
-        // 2. Static checks. The test host, the simulator, forks and plain Debug stop here.
-        let keys = AdKeys.from(.main)
-        var input = AdGateInput(
-            isReleaseBuild: Self.isReleaseBuild,
-            isOfficialBuild: StoreProducts.isOfficialBuild,
-            isSimulator: Self.isSimulator,
-            isRunningTests: ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil,
-            debugOverride: Self.debugOverrideRequested,
-            hasAnyKeys: keys.hasAny,
-            appTransaction: nil,
-            region: .unknown,
-            consent: .notAsked
+        await launch(
+            input: AdGateInput(
+                isReleaseBuild: Self.isReleaseBuild,
+                isOfficialBuild: StoreProducts.isOfficialBuild,
+                isSimulator: Self.isSimulator,
+                isRunningTests: ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil,
+                debugOverride: Self.debugOverrideRequested,
+                hasAnyKeys: false,
+                appTransaction: nil,
+                regionAllowsSDKs: false
+            ),
+            keys: AdKeys.from(.main),
+            appTransaction: { await LiveStoreFactsSource().appTransaction() },
+            regionAllowsSDKs: { await AdRegion.sdksMayStartNow() },
+            startAppleAds: { Task { await AppleAdsAttribution.shared.runIfNeeded() } }
         )
+    }
+
+    /// Steps 2 to 6 of the launch. Internal so a test drives it with fake providers; `runLaunch`
+    /// only waits for the first frame and passes the live ones.
+    func launch(input staticInput: AdGateInput,
+                keys: AdKeys,
+                appTransaction: () async -> AppTransactionFacts?,
+                regionAllowsSDKs: () async -> Bool,
+                startAppleAds: () -> Void) async {
+        // 2. Static checks. The test host, the simulator, forks and plain Debug stop here.
+        var input = staticInput
+        input.hasAnyKeys = keys.hasAny
         guard AdGate.passesStaticChecks(input) else { return }
 
         // 3. AppTransaction. Async. It never shows a sign-in sheet.
-        input.appTransaction = await LiveStoreFactsSource().appTransaction()
+        input.appTransaction = await appTransaction()
 
-        // 4. Apple Ads. Nothing leaves to another company, so it needs no consent.
-        if AdGate.evaluate(input).appleAdsMayRun {
-            Task { await AppleAdsAttribution.shared.runIfNeeded() }
-        }
+        // 4. Apple Ads. Nothing goes to another company, so the region does not matter.
+        if AdGate.evaluate(input).appleAdsMayRun { startAppleAds() }
 
-        // 5. Consent state.
-        input.region = await AdConsentStore.shared.loadRegion()
-        input.consent = AdConsentStore.shared.answer
-        recordLaunch(input, keys: keys)
+        // 5. Region, read once. The three ad SDKs stay off in Europe, the UK and Switzerland.
+        input.regionAllowsSDKs = await regionAllowsSDKs()
 
-        // 6. Offer the choice only where a yes would start an SDK. The card itself still shows
-        //    only for an unanswered user (AdConsentStore.cardMayShow).
-        if AdGate.shouldOfferChoice(input) {
-            AdConsentStore.shared.enableQuestion()
-        }
-
-        // 7. SDK start.
+        // 6. SDK start.
         apply(AdGate.evaluate(input), keys: keys)
     }
 
@@ -395,19 +381,17 @@ final class AdEvents {
         #endif
     }
 
-    /// Applies a gate result: start (makeSinks(keys) once, then start(keys:) each) or stop.
-    /// Internal so tests drive it without the launch task.
+    /// Applies a gate result: start every sink, or do nothing. Internal so tests drive it without
+    /// the launch task. The app calls it once per launch.
     func apply(_ result: AdGateResult, keys: AdKeys) {
         if result.sdksMayStart {
-            if !sinksMade {
-                sinks = makeSinks(keys)
-                sinksMade = true
-            }
+            sinks = makeSinks(keys)
             for sink in sinks { sink.start(keys: keys) }
             isSending = true
-        } else if isSending {
-            for sink in sinks { sink.stop() }
-            isSending = false
+        } else {
+            // TikTok's +load code writes the launch referrer to standard UserDefaults in every
+            // region, and a later allowed launch could send it. Clear it when the SDKs stay off.
+            for key in Self.tiktokReferrerKeys { defaults.removeObject(forKey: key) }
         }
         launchDecided = true
         // A purchase that arrived before this decision (Ask to Buy approved while the app was
@@ -416,24 +400,6 @@ final class AdEvents {
         let held = pendingFacts
         pendingFacts = []
         if isSending { for fact in held { purchased(fact) } }
-    }
-
-    /// Remembers the launch input so a later answer can be re-evaluated against it.
-    func recordLaunch(_ input: AdGateInput, keys: AdKeys) {
-        lastInput = input
-        lastKeys = keys
-    }
-
-    /// Where `consentDidChange` reads the answer. A test replaces it; the app never does.
-    var consentAnswer: @MainActor () -> AdConsentAnswer = { AdConsentStore.shared.answer }
-
-    /// Called by AdConsentStore. Re-evaluates the last launch input with the new answer.
-    /// No launch input yet: does nothing (the launch reads the answer itself).
-    func consentDidChange() {
-        guard var input = lastInput, let keys = lastKeys else { return }
-        input.consent = consentAnswer()
-        lastInput = input
-        apply(AdGate.evaluate(input), keys: keys)
     }
 
     // MARK: Events
@@ -541,36 +507,18 @@ enum AdEventMap {
 /// it sends the install ping and must run on each foreground (ADS_SDK_FACTS 1.1.3).
 @MainActor
 private final class MetaAdSink: AdSink {
-    private var isStarted = false
     private var isActive = false
-    private var activeObserver: NSObjectProtocol?
 
     func start(keys: AdKeys) {
         guard keys.hasMeta else { return }
-        isActive = true
-        if !isStarted {
-            // The `application(_:didFinishLaunchingWithOptions:)` form with nil; a second call is a no-op.
-            ApplicationDelegate.shared.application(UIApplication.shared, didFinishLaunchingWithOptions: nil)
-            isStarted = true
-        }
+        // The `application(_:didFinishLaunchingWithOptions:)` form with nil.
+        ApplicationDelegate.shared.application(UIApplication.shared, didFinishLaunchingWithOptions: nil)
         AppEvents.shared.activateApp()
-        if activeObserver == nil {
-            activeObserver = NotificationCenter.default.addObserver(
-                forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main
-            ) { [weak self] _ in
-                MainActor.assumeIsolated {
-                    guard let self, self.isActive else { return }
-                    AppEvents.shared.activateApp()
-                }
-            }
-        }
-    }
-
-    func stop() {
-        isActive = false
-        if let activeObserver {
-            NotificationCenter.default.removeObserver(activeObserver)
-            self.activeObserver = nil
+        isActive = true
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main
+        ) { _ in
+            MainActor.assumeIsolated { AppEvents.shared.activateApp() }
         }
     }
 
@@ -620,24 +568,16 @@ private final class MetaAdSink: AdSink {
 struct FirebaseHooks {
     var isConfigured: () -> Bool
     var configure: () -> Void
-    /// All four consent types granted (true) or denied (false). Google's EEA / UK / CH rule.
-    var setConsent: (_ granted: Bool) -> Void
-    var setCollectionEnabled: (Bool) -> Void
 
     @MainActor static let live = FirebaseHooks(
         isConfigured: { FirebaseApp.app() != nil },
-        configure: { FirebaseApp.configure() },
-        setConsent: { granted in
-            let status: ConsentStatus = granted ? .granted : .denied
-            Analytics.setConsent([.analyticsStorage: status, .adStorage: status,
-                                  .adUserData: status, .adPersonalization: status])
-        },
-        setCollectionEnabled: { Analytics.setAnalyticsCollectionEnabled($0) }
+        configure: { FirebaseApp.configure() }
     )
 }
 
 /// Google. `FirebaseApp.configure()` raises (a crash) with no plist or a second call, so it is
-/// guarded twice. Consent goes through here (ADS_SDK_FACTS 1.2.4).
+/// guarded twice. In the regions where Google applies its EU User Consent Policy, Google denies
+/// ad user data and ad personalization by itself (Info.plist `eu_consent_policy`).
 @MainActor
 final class FirebaseAdSink: AdSink {
     private let hooks: FirebaseHooks
@@ -650,17 +590,7 @@ final class FirebaseAdSink: AdSink {
     func start(keys: AdKeys) {
         guard keys.hasFirebaseConfig else { return }
         if !hooks.isConfigured() { hooks.configure() }
-        // Before the first event of this run.
-        hooks.setConsent(true)
-        hooks.setCollectionEnabled(true)
         isActive = true
-    }
-
-    func stop() {
-        guard isActive else { return }
-        isActive = false
-        hooks.setConsent(false)
-        hooks.setCollectionEnabled(false)
     }
 
     func send(_ event: AdEvent) {
@@ -694,7 +624,6 @@ final class FirebaseAdSink: AdSink {
 struct TikTokHooks {
     /// Starts the SDK. False when `TikTokConfig` could not be made.
     var initialize: (_ keys: AdKeys, _ debug: Bool) -> Bool
-    var setTrackingEnabled: (Bool) -> Void
     var track: (_ name: String, _ properties: [String: Any]) -> Void
 
     @MainActor static let live = TikTokHooks(
@@ -711,7 +640,6 @@ struct TikTokHooks {
             TikTokBusiness.initializeSdk(config) { _, _ in }
             return true
         },
-        setTrackingEnabled: { TikTokBusiness.setTrackingEnabled($0) },
         track: { name, properties in
             TikTokBusiness.trackTTEvent(TikTokBaseEvent(eventName: name, properties: properties, eventId: UUID().uuidString))
         }
@@ -725,12 +653,7 @@ struct TikTokHooks {
 @MainActor
 final class TikTokAdSink: AdSink {
     private let hooks: TikTokHooks
-    private var isInitialized = false
     private var isActive = false
-    /// After a stop, TikTok's SDK keeps its own events cached "until tracking is enabled again"
-    /// (TikTokBusiness.h), and a later enable would send them. So a no in this run is final for
-    /// this run: the sink does not turn tracking back on until the next launch.
-    private var isWithdrawn = false
 
     init(hooks: TikTokHooks = .live) {
         self.hooks = hooks
@@ -738,19 +661,8 @@ final class TikTokAdSink: AdSink {
 
     func start(keys: AdKeys) {
         guard keys.hasTikTok else { return }
-        guard !isWithdrawn else { return }
-        if !isInitialized {
-            guard hooks.initialize(keys, AdEvents.debugOverrideRequested) else { return }
-            isInitialized = true
-        }
+        guard hooks.initialize(keys, AdEvents.debugOverrideRequested) else { return }
         isActive = true
-    }
-
-    func stop() {
-        guard isActive else { return }
-        isActive = false
-        isWithdrawn = true
-        hooks.setTrackingEnabled(false)
     }
 
     func send(_ event: AdEvent) {

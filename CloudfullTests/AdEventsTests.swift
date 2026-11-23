@@ -16,10 +16,8 @@ import StoreKit
 @MainActor
 final class FakeAdSink: AdSink {
     var started: [AdKeys] = []
-    var stops = 0
     var events: [AdEvent] = []
     func start(keys: AdKeys) { started.append(keys) }
-    func stop() { stops += 1 }
     func send(_ event: AdEvent) { events.append(event) }
 }
 
@@ -32,9 +30,7 @@ final class FirebaseHookLog {
     var hooks: FirebaseHooks {
         FirebaseHooks(
             isConfigured: { [self] in configured },
-            configure: { [self] in calls.append("configure"); configured = true },
-            setConsent: { [self] granted in calls.append("consent:\(granted)") },
-            setCollectionEnabled: { [self] on in calls.append("collection:\(on)") }
+            configure: { [self] in calls.append("configure"); configured = true }
         )
     }
 }
@@ -82,13 +78,13 @@ struct AdEventsTests {
             debugOverride: false, hasAnyKeys: true,
             appTransaction: AppTransactionFacts(environment: .production, originalAppVersion: "1.1",
                                                 originalPurchaseDate: nil, isVerified: true),
-            region: .notRequired, consent: .notAsked
+            regionAllowsSDKs: true
         )
     }
 
     // MARK: - Gate table
 
-    @Test("A production build with keys on a non-EEA storefront starts the SDKs")
+    @Test("A production build with keys in an allowed region starts the SDKs")
     func gateOpens() {
         let result = AdGate.evaluate(goodInput())
         #expect(result == AdGateResult(sdksMayStart: true, appleAdsMayRun: true))
@@ -146,31 +142,15 @@ struct AdEventsTests {
         #expect(AdGate.evaluate(input) == AdGateResult(sdksMayStart: false, appleAdsMayRun: true))
     }
 
-    @Test("Region by consent: only notRequired, or required with a yes, opens the SDKs")
+    @Test("Region: the SDKs start only where the region allows them; Apple Ads runs in every region")
     func gateRegionTable() {
-        let cases: [(AdConsentRegion, AdConsentAnswer, Bool)] = [
-            (.notRequired, .notAsked, true), (.notRequired, .yes, true), (.notRequired, .no, true),
-            (.required, .notAsked, false), (.required, .yes, true), (.required, .no, false),
-            (.unknown, .notAsked, false), (.unknown, .yes, false), (.unknown, .no, false),
-        ]
-        for (region, consent, mayStart) in cases {
+        for allowed in [true, false] {
             var input = goodInput()
-            input.region = region
-            input.consent = consent
+            input.regionAllowsSDKs = allowed
             let result = AdGate.evaluate(input)
-            #expect(result.sdksMayStart == mayStart, "region \(region) consent \(consent)")
-            // Apple Ads never waits for the consent answer.
+            #expect(result.sdksMayStart == allowed)
             #expect(result.appleAdsMayRun)
         }
-    }
-
-    @Test("An unknown storefront never opens the SDKs, even with a yes stored")
-    func gateUnknownStorefront() {
-        var input = goodInput()
-        input.region = .unknown
-        input.consent = .yes
-        #expect(AdGate.evaluate(input).sdksMayStart == false)
-        #expect(AdGate.shouldAsk(input) == false)
     }
 
     @Test("Debug override waives Release and AppTransaction, never the bundle id, simulator, tests or keys")
@@ -186,58 +166,12 @@ struct AdEventsTests {
         var sim = input; sim.isSimulator = true
         var tests = input; tests.isRunningTests = true
         var noKeys = input; noKeys.hasAnyKeys = false
-        var eeaNoYes = input; eeaNoYes.region = .required
+        var offRegion = input; offRegion.regionAllowsSDKs = false
         #expect(AdGate.evaluate(fork).sdksMayStart == false)
         #expect(AdGate.evaluate(sim).sdksMayStart == false)
         #expect(AdGate.evaluate(tests).sdksMayStart == false)
         #expect(AdGate.evaluate(noKeys).sdksMayStart == false)
-        #expect(AdGate.evaluate(eeaNoYes).sdksMayStart == false)
-    }
-
-    @Test("shouldAsk: only in production, with keys, on a required region, with nothing answered")
-    func shouldAskTable() {
-        var input = goodInput()
-        input.region = .required
-        #expect(AdGate.shouldAsk(input))
-
-        var answered = input; answered.consent = .yes
-        var declined = input; declined.consent = .no
-        var notRequired = input; notRequired.region = .notRequired
-        var noKeys = input; noKeys.hasAnyKeys = false
-        var simulator = input; simulator.isSimulator = true
-        var sandbox = input
-        sandbox.appTransaction = AppTransactionFacts(environment: .sandbox, originalAppVersion: "1.1",
-                                                     originalPurchaseDate: nil, isVerified: true)
-        #expect(AdGate.shouldAsk(answered) == false)
-        #expect(AdGate.shouldAsk(declined) == false)
-        #expect(AdGate.shouldAsk(notRequired) == false)
-        #expect(AdGate.shouldAsk(noKeys) == false)
-        #expect(AdGate.shouldAsk(simulator) == false)
-        #expect(AdGate.shouldAsk(sandbox) == false)
-    }
-
-    @Test("shouldOfferChoice: the Settings row stays after a stored yes or no, and only there")
-    func offerChoiceTable() {
-        var input = goodInput()
-        input.region = .required
-        for consent in AdConsentAnswer.allCases {
-            input.consent = consent
-            #expect(AdGate.shouldOfferChoice(input), "consent \(consent)")
-        }
-        // The one-time card is for an unanswered user only.
-        input.consent = .yes
-        #expect(AdGate.shouldAsk(input) == false)
-        input.consent = .no
-        #expect(AdGate.shouldAsk(input) == false)
-
-        var notRequired = input; notRequired.region = .notRequired
-        var unknown = input; unknown.region = .unknown
-        var noKeys = input; noKeys.hasAnyKeys = false
-        var simulator = input; simulator.isSimulator = true
-        #expect(AdGate.shouldOfferChoice(notRequired) == false)
-        #expect(AdGate.shouldOfferChoice(unknown) == false)
-        #expect(AdGate.shouldOfferChoice(noKeys) == false)
-        #expect(AdGate.shouldOfferChoice(simulator) == false)
+        #expect(AdGate.evaluate(offRegion).sdksMayStart == false)
     }
 
     @Test("The test host itself passes no static check, so the real launch task stops early")
@@ -248,7 +182,7 @@ struct AdEventsTests {
             isSimulator: AdEvents.isSimulator,
             isRunningTests: ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil,
             debugOverride: AdEvents.debugOverrideRequested, hasAnyKeys: false,
-            appTransaction: nil, region: .unknown, consent: .notAsked
+            appTransaction: nil, regionAllowsSDKs: false
         )
         #expect(input.isRunningTests, "the unit tests run inside the app host with XCTest configured")
         #expect(AdGate.passesStaticChecks(input) == false)
@@ -470,7 +404,7 @@ struct AdEventsTests {
         #expect(defaults.stringArray(forKey: AdEvents.sentTransactionIDsKey) == ["21"])
     }
 
-    @Test("A held purchase is forgotten when the gate is closed; a later yes does not send it")
+    @Test("A held purchase is forgotten when the gate is closed; a later start does not send it")
     func earlyPurchaseDroppedOnClosedGate() {
         let (defaults, name) = makeSuite()
         defer { defaults.removePersistentDomain(forName: name) }
@@ -538,17 +472,15 @@ struct AdEventsTests {
         var hooks: TikTokHooks {
             TikTokHooks(
                 initialize: { [self] _, _ in calls.append("initialize"); return true },
-                setTrackingEnabled: { [self] on in calls.append("tracking:\(on)") },
                 track: { [self] name, props in tracked.append((name, props)) }
             )
         }
     }
 
-    @Test("TikTok: value goes as a string with the currency; a start initializes once")
+    @Test("TikTok: value goes as a string with the currency")
     func tiktokSinkSends() {
         let log = TikTokHookLog()
         let sink = TikTokAdSink(hooks: log.hooks)
-        sink.start(keys: allKeys)
         sink.start(keys: allKeys)
         #expect(log.calls == ["initialize"])
         sink.send(.lifetimePurchased(AdPurchase(kind: .lifetime, price: Decimal(string: "9.99"), currencyCode: "USD", storeKitTransaction: nil)))
@@ -559,19 +491,6 @@ struct AdEventsTests {
         #expect(log.tracked[1].1.isEmpty)
     }
 
-    @Test("TikTok: after a no, tracking is not turned on again in the same run, and nothing is sent")
-    func tiktokNoIsFinalForTheRun() {
-        let log = TikTokHookLog()
-        let sink = TikTokAdSink(hooks: log.hooks)
-        sink.start(keys: allKeys)
-        sink.stop()
-        #expect(log.calls == ["initialize", "tracking:false"])
-        sink.start(keys: allKeys)                       // a yes in Settings in the same run
-        sink.send(.paywallShown)
-        #expect(log.calls == ["initialize", "tracking:false"])   // never "tracking:true"
-        #expect(log.tracked.isEmpty)
-    }
-
     @Test("TikTok: no keys, nothing happens")
     func tiktokNeedsKeys() {
         let log = TikTokHookLog()
@@ -580,7 +499,6 @@ struct AdEventsTests {
         keys.tiktokAppleAppID = nil
         sink.start(keys: keys)
         sink.send(.paywallShown)
-        sink.stop()
         #expect(log.calls.isEmpty)
         #expect(log.tracked.isEmpty)
     }
@@ -621,7 +539,7 @@ struct AdEventsTests {
         #expect(defaults.stringArray(forKey: AdEvents.sentTransactionIDsKey) == nil)
     }
 
-    @Test("A closed gate starts nothing and stops nothing")
+    @Test("A closed gate starts nothing")
     func closedGate() {
         let (defaults, name) = makeSuite()
         defer { defaults.removePersistentDomain(forName: name) }
@@ -629,149 +547,101 @@ struct AdEventsTests {
         let events = makeEvents(defaults, sink: sink)
         events.apply(AdGateResult(sdksMayStart: false, appleAdsMayRun: true), keys: allKeys)
         #expect(sink.started.isEmpty)
-        #expect(sink.stops == 0)
         #expect(events.isSending == false)
+        events.paywallShown()
+        events.purchased(fact(id: 2))
+        #expect(sink.events.isEmpty)
+        #expect(defaults.stringArray(forKey: AdEvents.sentTransactionIDsKey) == nil)
     }
 
-    @Test("A later no stops new events and writes nothing; a purchase made while stopped is never sent later")
-    func laterNoStops() {
+    @Test("An open gate starts every sink once and sends events")
+    func openGateStarts() {
         let (defaults, name) = makeSuite()
         defer { defaults.removePersistentDomain(forName: name) }
         let sink = FakeAdSink()
         let events = sendingEvents(defaults, sink: sink)
         #expect(sink.started == [allKeys])
-        events.purchased(fact(id: 1))
-        #expect(sink.events.count == 1)
-
-        events.apply(AdGateResult(sdksMayStart: false, appleAdsMayRun: true), keys: allKeys)
-        #expect(sink.stops == 1)
-        #expect(events.isSending == false)
-
+        #expect(events.isSending)
         events.paywallShown()
-        events.purchased(fact(id: 2))
-        #expect(sink.events.count == 1)
-        #expect(defaults.stringArray(forKey: AdEvents.sentTransactionIDsKey) == ["1"])
-
-        // A second stop does not stop twice.
-        events.apply(AdGateResult(sdksMayStart: false, appleAdsMayRun: true), keys: allKeys)
-        #expect(sink.stops == 1)
-
-        // Id 2 was never recorded, and a later yes does not queue it: only new events go out.
-        events.apply(AdGateResult(sdksMayStart: true, appleAdsMayRun: true), keys: allKeys)
-        #expect(sink.started.count == 2)
-        #expect(sink.events.count == 1)
-        events.paywallShown()
-        #expect(sink.events.count == 2)
+        #expect(sink.events == [.paywallShown])
     }
 
-    @Test("makeSinks runs once, however many starts follow")
-    func sinksMadeOnce() {
-        let (defaults, name) = makeSuite()
-        defer { defaults.removePersistentDomain(forName: name) }
-        let sink = FakeAdSink()
-        var made = 0
-        let events = AdEvents(defaults: defaults, now: { fixedNow }, makeSinks: { _ in made += 1; return [sink] })
-        let open = AdGateResult(sdksMayStart: true, appleAdsMayRun: true)
-        events.apply(open, keys: allKeys)
-        events.apply(open, keys: allKeys)
-        #expect(made == 1)
+    @Test("Google: the Firebase sink configures only when the app is not yet configured")
+    func firebaseStartsOnce() {
+        let log = FirebaseHookLog()
+        let firebase = FirebaseAdSink(hooks: log.hooks)
+        firebase.start(keys: allKeys)
+        #expect(log.calls == ["configure"])
+        // An app that is already configured is not configured again (a second configure() would crash).
+        let again = FirebaseAdSink(hooks: log.hooks)
+        again.start(keys: allKeys)
+        #expect(log.calls == ["configure"])
     }
 
-    @Test("consentDidChange does nothing before the launch has produced an input")
-    func consentBeforeLaunch() {
-        let (defaults, name) = makeSuite()
-        defer { defaults.removePersistentDomain(forName: name) }
-        let sink = FakeAdSink()
+    // MARK: - Launch wiring (steps 2 to 6)
+
+    /// Runs `launch` with fake providers and reports what happened.
+    private func runLaunch(region: Bool?, input: AdGateInput? = nil, defaults: UserDefaults,
+                           sink: FakeAdSink) async -> (events: AdEvents, appleAdsStarted: Bool, regionAsked: Bool) {
         let events = makeEvents(defaults, sink: sink)
-        events.consentDidChange()
+        var appleAds = false
+        var asked = false
+        var base = input ?? goodInput()
+        let transaction = base.appTransaction
+        base.appTransaction = nil
+        base.regionAllowsSDKs = false
+        await events.launch(input: base, keys: allKeys,
+                            appTransaction: { transaction },
+                            regionAllowsSDKs: { asked = true; return region ?? false },
+                            startAppleAds: { appleAds = true })
+        return (events, appleAds, asked)
+    }
+
+    @Test("Launch: an allowed region starts the sinks")
+    func launchAllowedRegion() async {
+        let (defaults, _) = makeSuite()
+        let sink = FakeAdSink()
+        let run = await runLaunch(region: true, defaults: defaults, sink: sink)
+        #expect(sink.started == [allKeys])
+        #expect(run.events.isSending)
+        #expect(run.appleAdsStarted)
+    }
+
+    @Test("Launch: an off region starts no sink, Apple Ads still runs")
+    func launchOffRegion() async {
+        let (defaults, _) = makeSuite()
+        let sink = FakeAdSink()
+        let run = await runLaunch(region: false, defaults: defaults, sink: sink)
         #expect(sink.started.isEmpty)
-        #expect(events.isSending == false)
+        #expect(!run.events.isSending)
+        #expect(run.appleAdsStarted)
     }
 
-    @Test("A later answer in Settings reaches the facade: no stops new events, yes starts them again")
-    func consentDidChangeAppliesAnswer() {
-        let (defaults, name) = makeSuite()
-        defer { defaults.removePersistentDomain(forName: name) }
+    @Test("Launch: a failed static check asks for no AppTransaction, no region, starts nothing")
+    func launchStaticFailure() async {
+        let (defaults, _) = makeSuite()
         let sink = FakeAdSink()
-        let events = makeEvents(defaults, sink: sink)
-        var answer = AdConsentAnswer.yes
-        events.consentAnswer = { answer }
         var input = goodInput()
-        input.region = .required
-        input.consent = .yes
-        events.recordLaunch(input, keys: allKeys)
-        events.consentDidChange()
-        #expect(events.isSending)
-        events.paywallShown()
-        #expect(sink.events.count == 1)
-
-        answer = .no
-        events.consentDidChange()
-        #expect(events.isSending == false)
-        #expect(sink.stops == 1)
-        events.paywallShown()
-        #expect(sink.events.count == 1)
-
-        answer = .yes
-        events.consentDidChange()
-        #expect(events.isSending)
+        input.isSimulator = true
+        let run = await runLaunch(region: true, input: input, defaults: defaults, sink: sink)
+        #expect(sink.started.isEmpty)
+        #expect(!run.appleAdsStarted)
+        #expect(!run.regionAsked)
     }
 
-    // MARK: - EEA consent and Google
+    @Test("Launch: an off region clears the TikTok referrer keys, an allowed region keeps them")
+    func launchTikTokReferrerKeys() async {
+        let (off, _) = makeSuite()
+        off.set("https://example.com", forKey: "source_url")
+        off.set("quick action", forKey: "refer")
+        _ = await runLaunch(region: false, defaults: off, sink: FakeAdSink())
+        #expect(off.object(forKey: "source_url") == nil)
+        #expect(off.object(forKey: "refer") == nil)
 
-    @Test("EEA with a yes: the gate opens, the sinks start, and Google receives the consent before any event")
-    func eeaYesStartsAndGrantsGoogle() {
-        var input = goodInput()
-        input.region = .required
-        input.consent = .yes
-        let result = AdGate.evaluate(input)
-        #expect(result.sdksMayStart)
-
-        let log = FirebaseHookLog()
-        let firebase = FirebaseAdSink(hooks: log.hooks)
-        let (defaults, name) = makeSuite()
-        defer { defaults.removePersistentDomain(forName: name) }
-        let events = AdEvents(defaults: defaults, now: { fixedNow }, makeSinks: { _ in [firebase] })
-        events.apply(result, keys: allKeys)
-
-        #expect(events.isSending)
-        #expect(log.calls == ["configure", "consent:true", "collection:true"])
-    }
-
-    @Test("EEA without a yes: the gate stays shut and Google is never configured")
-    func eeaNoYesStaysOff() {
-        for consent in [AdConsentAnswer.notAsked, .no] {
-            var input = goodInput()
-            input.region = .required
-            input.consent = consent
-            let result = AdGate.evaluate(input)
-            #expect(result.sdksMayStart == false)
-
-            let log = FirebaseHookLog()
-            let firebase = FirebaseAdSink(hooks: log.hooks)
-            let (defaults, name) = makeSuite()
-            defer { defaults.removePersistentDomain(forName: name) }
-            let events = AdEvents(defaults: defaults, now: { fixedNow }, makeSinks: { _ in [firebase] })
-            events.apply(result, keys: allKeys)
-            #expect(log.calls.isEmpty)
-        }
-    }
-
-    @Test("A later no denies Google's consent and stops collection")
-    func laterNoDeniesGoogle() {
-        let log = FirebaseHookLog()
-        let firebase = FirebaseAdSink(hooks: log.hooks)
-        let (defaults, name) = makeSuite()
-        defer { defaults.removePersistentDomain(forName: name) }
-        let events = AdEvents(defaults: defaults, now: { fixedNow }, makeSinks: { _ in [firebase] })
-        events.apply(AdGateResult(sdksMayStart: true, appleAdsMayRun: true), keys: allKeys)
-        events.apply(AdGateResult(sdksMayStart: false, appleAdsMayRun: true), keys: allKeys)
-        #expect(log.calls == ["configure", "consent:true", "collection:true", "consent:false", "collection:false"])
-
-        // A new yes grants again and does not configure twice (a second configure() would crash).
-        events.apply(AdGateResult(sdksMayStart: true, appleAdsMayRun: true), keys: allKeys)
-        #expect(log.calls.filter { $0 == "configure" }.count == 1)
-        #expect(log.calls.suffix(2) == ["consent:true", "collection:true"])
+        let (on, _) = makeSuite()
+        on.set("https://example.com", forKey: "source_url")
+        _ = await runLaunch(region: true, defaults: on, sink: FakeAdSink())
+        #expect(on.string(forKey: "source_url") == "https://example.com")
     }
 
     @Test("The Firebase sink does nothing without a valid GoogleService-Info.plist")
@@ -781,7 +651,6 @@ struct AdEventsTests {
         var keys = allKeys
         keys.hasFirebaseConfig = false
         firebase.start(keys: keys)
-        firebase.stop()
         #expect(log.calls.isEmpty)
     }
 }
