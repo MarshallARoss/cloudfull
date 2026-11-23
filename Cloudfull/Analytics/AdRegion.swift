@@ -8,6 +8,7 @@
 
 import Foundation
 import StoreKit
+import UIKit
 
 /// Where the three ad SDKs (Meta, Firebase, TikTok) stay off. There is no consent question in
 /// the app: in these countries the SDKs simply do not start. Apple Ads attribution is not
@@ -32,20 +33,48 @@ enum AdRegion {
         "SE", "IS", "LI", "NO", "GB", "CH",
     ]
 
-    /// Pure. The SDKs may start only when the storefront is known and not on the list, and the
-    /// device region, when known, is not on the list. An unknown storefront fails closed. An
-    /// unknown device region leaves the storefront to decide. Compares upper-cased.
-    static func sdksMayStart(storefrontCountryCode: String?, deviceRegionCode: String?) -> Bool {
-        guard let storefront = storefrontCountryCode, !storefront.isEmpty else { return false }
-        if offStorefrontCodes.contains(storefront.uppercased()) { return false }
-        if let device = deviceRegionCode, !device.isEmpty,
-           offDeviceRegionCodes.contains(device.uppercased()) { return false }
-        return true
+    /// What the two signals say. `unknown` is a storefront that is not known yet: the SDKs wait for
+    /// it (`AdEvents.launch`) and start late if it turns out to be outside the off-list.
+    enum Decision: Equatable, Sendable {
+        case allowed, off, unknown
     }
 
-    /// Reads both signals once. The storefront read is async, so it never blocks the main thread.
-    static func sdksMayStartNow() async -> Bool {
-        sdksMayStart(storefrontCountryCode: await Storefront.current?.countryCode,
-                     deviceRegionCode: Locale.current.region?.identifier)
+    /// Pure. A device region on the off-list is `off` even when the storefront is unknown. Else an
+    /// unknown storefront is `unknown`, a storefront on the off-list is `off`, any other is
+    /// `allowed`. An unknown device region leaves the storefront to decide. Compares upper-cased.
+    static func decide(storefrontCountryCode: String?, deviceRegionCode: String?) -> Decision {
+        if let device = deviceRegion(deviceRegionCode), offDeviceRegionCodes.contains(device.uppercased()) { return .off }
+        guard let storefront = storefrontCountryCode, !storefront.isEmpty else { return .unknown }
+        return offStorefrontCodes.contains(storefront.uppercased()) ? .off : .allowed
+    }
+
+    private static func deviceRegion(_ code: String?) -> String? {
+        guard let code, !code.isEmpty else { return nil }
+        return code
+    }
+
+    /// Reads both signals. The storefront read is async, so it never blocks the main thread.
+    static func decideNow() async -> Decision {
+        decide(storefrontCountryCode: await Storefront.current?.countryCode,
+               deviceRegionCode: Locale.current.region?.identifier)
+    }
+
+    /// One tick each time the storefront may have become known: StoreKit says it changed, or the app
+    /// becomes active again. `AdEvents.launch` reads the decision again on each tick.
+    static func changes() -> AsyncStream<Void> {
+        AsyncStream { continuation in
+            let storefront = Task {
+                for await _ in Storefront.updates { continuation.yield() }
+            }
+            let active = Task {
+                for await _ in NotificationCenter.default.notifications(named: UIApplication.didBecomeActiveNotification) {
+                    continuation.yield()
+                }
+            }
+            continuation.onTermination = { _ in
+                storefront.cancel()
+                active.cancel()
+            }
+        }
     }
 }

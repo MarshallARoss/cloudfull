@@ -20,7 +20,7 @@ This script sends GET requests only. It never sends POST, PATCH or
 DELETE. Creating the analytics report request is a POST that changes the
 App Store Connect account, so this script does not do it. If no report
 request exists, it says so and prints the one request the owner must
-create (see design/ADS_NOTES_SOURCES.md).
+create.
 
 Usage:
   python3 scripts/appstore_sources.py                # Last 30 days, readable text.
@@ -55,7 +55,7 @@ REQUIRED_REQUEST = {
 NOT_SET_UP_REQUEST = (
     "No analytics report request exists for the app yet. Apple makes no reports until the owner "
     "creates one request: POST /v1/analyticsReportRequests with accessType ONGOING for app "
-    f"{APP_ID} (see design/ADS_NOTES_SOURCES.md). The first report arrives in 1 to 2 days."
+    f"{APP_ID}. The first report arrives in 1 to 2 days."
 )
 
 
@@ -263,7 +263,7 @@ def fetch_sources(days=DEFAULT_DAYS, app_id=APP_ID):
         active = [r for r in requests_ if not (r.get("attributes") or {}).get("stoppedDueToInactivity")]
         ongoing = [r for r in active if (r.get("attributes") or {}).get("accessType") == "ONGOING"] or active
         if not ongoing:
-            return {"status": "not_set_up", "reason": "The report request stopped (stoppedDueToInactivity). The owner must create a new one; see design/ADS_NOTES_SOURCES.md.", "summary": None}
+            return {"status": "not_set_up", "reason": "The report request stopped (stoppedDueToInactivity). The owner must create a new one.", "summary": None}
         cutoff = (datetime.date.today() - datetime.timedelta(days=days)).isoformat()
         # kind -> {detailed: [(processingDate, rows)]}
         collected = {"downloads": {True: [], False: []}, "purchases": {True: [], False: []}}

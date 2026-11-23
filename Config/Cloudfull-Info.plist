@@ -14,15 +14,15 @@
 	<false/>
 	<key>FacebookAdvertiserIDCollectionEnabled</key>
 	<false/>
-	<!-- No screen titles, no sampled screen layouts (ADS_SDK_FACTS 1.1, Meta 19.0.0 changelog). -->
+	<!-- No screen titles, no sampled screen layouts (Meta 19.0.0 changelog). -->
 	<key>FBSDKAutoLogMetaDataEnabled</key>
 	<false/>
 	<key>FBSDKAutoLogProductImprovementEnabled</key>
 	<false/>
-	<!-- Firebase (Google Analytics). Meta is the one writer of the SKAdNetwork conversion value. -->
+	<!-- Firebase (Google Analytics). Meta writes the SKAdNetwork conversion value when its SDK starts; otherwise the app does (AdConversionWriter). -->
 	<key>GOOGLE_ANALYTICS_REGISTRATION_WITH_AD_NETWORK_ENABLED</key>
 	<false/>
-	<!-- No consent question in the app. Google denies these two for people it places in the EU User Consent Policy region (ADS_SDK_FACTS 1.2.4). -->
+	<!-- No consent question in the app. Google denies these two for people it places in the EU User Consent Policy region. -->
 	<key>GOOGLE_ANALYTICS_DEFAULT_ALLOW_AD_USER_DATA</key>
 	<string>eu_consent_policy</string>
 	<key>GOOGLE_ANALYTICS_DEFAULT_ALLOW_AD_PERSONALIZATION_SIGNALS</key>

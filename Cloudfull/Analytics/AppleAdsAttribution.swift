@@ -54,7 +54,7 @@ struct AppleAdsFacts: Codable, Equatable, Sendable {
             supplyPlacement: text(object["supplyPlacement"]))
     }
 
-    /// Usage fact keys → values (see ADS_CONTRACT §5). Absent fields are absent keys.
+    /// Usage fact keys → values (attribution fields become Usage keys). Absent fields are absent keys.
     var usageFacts: [String: String] {
         var facts = ["appleAds.attribution": attribution ? "true" : "false"]
         if let campaignId { facts["appleAds.campaignId"] = campaignId }
@@ -120,7 +120,7 @@ final class AppleAdsAttribution {
 
     /// Int. Launches whose request reached Apple and got no usable 200. At `maxLaunches`, give up
     /// for good. An offline launch (no token, or a post that threw) is not counted, so five
-    /// launches without a network cannot end the attempts (design/ADS_REPAIR.md, H-H7).
+    /// launches without a network cannot end the attempts.
     static let launchAttemptsKey = "ads.appleAds.launchAttempts"
     static let maxLaunches = 5
     static let attemptsPerLaunch = 3

@@ -18,10 +18,10 @@ struct AdRegionTests {
         #expect(AdRegion.offStorefrontCodes.count == 32)
         #expect(AdRegion.offDeviceRegionCodes.count == 32)
         for code in AdRegion.offStorefrontCodes {
-            #expect(!AdRegion.sdksMayStart(storefrontCountryCode: code, deviceRegionCode: nil), "storefront \(code)")
+            #expect(AdRegion.decide(storefrontCountryCode: code, deviceRegionCode: nil) != .allowed, "storefront \(code)")
         }
         for code in AdRegion.offDeviceRegionCodes {
-            #expect(!AdRegion.sdksMayStart(storefrontCountryCode: "USA", deviceRegionCode: code), "device \(code)")
+            #expect(AdRegion.decide(storefrontCountryCode: "USA", deviceRegionCode: code) != .allowed, "device \(code)")
         }
     }
 
@@ -41,40 +41,49 @@ struct AdRegionTests {
 
     @Test("The United Kingdom and Switzerland are off")
     func ukAndSwitzerland() {
-        #expect(!AdRegion.sdksMayStart(storefrontCountryCode: "GBR", deviceRegionCode: "GB"))
-        #expect(!AdRegion.sdksMayStart(storefrontCountryCode: "CHE", deviceRegionCode: "CH"))
+        #expect(AdRegion.decide(storefrontCountryCode: "GBR", deviceRegionCode: "GB") != .allowed)
+        #expect(AdRegion.decide(storefrontCountryCode: "CHE", deviceRegionCode: "CH") != .allowed)
     }
 
     @Test("A European country outside the EEA is on; the United States is on")
     func allowedCountries() {
-        #expect(AdRegion.sdksMayStart(storefrontCountryCode: "SRB", deviceRegionCode: "RS"))
-        #expect(AdRegion.sdksMayStart(storefrontCountryCode: "USA", deviceRegionCode: "US"))
+        #expect(AdRegion.decide(storefrontCountryCode: "SRB", deviceRegionCode: "RS") == .allowed)
+        #expect(AdRegion.decide(storefrontCountryCode: "USA", deviceRegionCode: "US") == .allowed)
     }
 
     @Test("An unknown storefront is off, whatever the device region says")
     func unknownStorefront() {
-        #expect(!AdRegion.sdksMayStart(storefrontCountryCode: nil, deviceRegionCode: "US"))
-        #expect(!AdRegion.sdksMayStart(storefrontCountryCode: nil, deviceRegionCode: nil))
-        #expect(!AdRegion.sdksMayStart(storefrontCountryCode: "", deviceRegionCode: "US"))
+        #expect(AdRegion.decide(storefrontCountryCode: nil, deviceRegionCode: "US") != .allowed)
+        #expect(AdRegion.decide(storefrontCountryCode: nil, deviceRegionCode: nil) != .allowed)
+        #expect(AdRegion.decide(storefrontCountryCode: "", deviceRegionCode: "US") != .allowed)
     }
 
     @Test("The two signals must agree: one off signal turns the SDKs off")
     func signalsCombine() {
-        #expect(!AdRegion.sdksMayStart(storefrontCountryCode: "USA", deviceRegionCode: "DE"))
-        #expect(!AdRegion.sdksMayStart(storefrontCountryCode: "DEU", deviceRegionCode: "US"))
+        #expect(AdRegion.decide(storefrontCountryCode: "USA", deviceRegionCode: "DE") != .allowed)
+        #expect(AdRegion.decide(storefrontCountryCode: "DEU", deviceRegionCode: "US") != .allowed)
     }
 
     @Test("An unknown device region leaves the storefront to decide")
     func unknownDeviceRegion() {
-        #expect(AdRegion.sdksMayStart(storefrontCountryCode: "USA", deviceRegionCode: nil))
-        #expect(AdRegion.sdksMayStart(storefrontCountryCode: "USA", deviceRegionCode: ""))
-        #expect(!AdRegion.sdksMayStart(storefrontCountryCode: "FRA", deviceRegionCode: nil))
+        #expect(AdRegion.decide(storefrontCountryCode: "USA", deviceRegionCode: nil) == .allowed)
+        #expect(AdRegion.decide(storefrontCountryCode: "USA", deviceRegionCode: "") == .allowed)
+        #expect(AdRegion.decide(storefrontCountryCode: "FRA", deviceRegionCode: nil) != .allowed)
     }
 
     @Test("Codes compare without regard to case")
     func caseInsensitive() {
-        #expect(!AdRegion.sdksMayStart(storefrontCountryCode: "deu", deviceRegionCode: nil))
-        #expect(!AdRegion.sdksMayStart(storefrontCountryCode: "usa", deviceRegionCode: "de"))
-        #expect(AdRegion.sdksMayStart(storefrontCountryCode: "usa", deviceRegionCode: "us"))
+        #expect(AdRegion.decide(storefrontCountryCode: "deu", deviceRegionCode: nil) != .allowed)
+        #expect(AdRegion.decide(storefrontCountryCode: "usa", deviceRegionCode: "de") != .allowed)
+        #expect(AdRegion.decide(storefrontCountryCode: "usa", deviceRegionCode: "us") == .allowed)
+    }
+
+    @Test("decide: an unknown storefront is unknown; an off device region wins over it")
+    func decideUnknown() {
+        #expect(AdRegion.decide(storefrontCountryCode: nil, deviceRegionCode: "US") == .unknown)
+        #expect(AdRegion.decide(storefrontCountryCode: nil, deviceRegionCode: nil) == .unknown)
+        #expect(AdRegion.decide(storefrontCountryCode: nil, deviceRegionCode: "DE") == .off)
+        #expect(AdRegion.decide(storefrontCountryCode: "USA", deviceRegionCode: "US") == .allowed)
+        #expect(AdRegion.decide(storefrontCountryCode: "GBR", deviceRegionCode: nil) == .off)
     }
 }

@@ -491,7 +491,7 @@ final class Entitlements: ObservableObject {
             if transaction.reason == .purchase, transaction.revocationDate == nil, let kind = Usage.purchaseProduct(for: transaction.productID) {
                 Usage.shared.purchase(kind, .success, tier: StoreProducts.tier(of: transaction.productID))
                 // Another device of the same buyer gets this transaction too; only the install
-                // whose token is on it counts the sale (design/ADS_REPAIR.md, H-H3).
+                // whose token is on it counts the sale, so one sale is not counted twice.
                 AdEvents.shared.purchased(AdPurchaseFact(transaction, kind: kind, installToken: AdEvents.installAccountToken()))
             }
             // A refund of the purchase this process proved ends the floor,

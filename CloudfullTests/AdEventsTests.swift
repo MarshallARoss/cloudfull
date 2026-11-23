@@ -454,8 +454,8 @@ struct AdEventsTests {
 
         #expect(AdEventMap.firebase(.paywallShown) == .viewItem)
         #expect(AdEventMap.firebase(.checkoutStarted(monthly)) == .beginCheckout)
-        #expect(AdEventMap.firebase(.subscribed(monthly)) == .purchase)       // no StoreKit transaction in a test
-        #expect(AdEventMap.firebase(.lifetimePurchased(lifetime)) == .purchase)
+        #expect(AdEventMap.firebase(.subscribed(monthly)) == .transaction)
+        #expect(AdEventMap.firebase(.lifetimePurchased(lifetime)) == .transaction)
 
         #expect(AdEventMap.tiktok(.paywallShown) == "ViewContent")
         #expect(AdEventMap.tiktok(.checkoutStarted(monthly)) == "Checkout")
@@ -592,7 +592,8 @@ struct AdEventsTests {
         base.regionAllowsSDKs = false
         await events.launch(input: base, keys: allKeys,
                             appTransaction: { transaction },
-                            regionAllowsSDKs: { asked = true; return region ?? false },
+                            region: { asked = true; return region == true ? .allowed : .off },
+                            regionChanges: { AsyncStream { $0.finish() } },
                             startAppleAds: { appleAds = true })
         return (events, appleAds, asked)
     }
@@ -657,3 +658,33 @@ struct AdEventsTests {
 
 /// Gives the test target a class to anchor `Bundle(for:)` on.
 private final class FakeAdSinkAnchor {}
+
+
+/// Test-only: builds a fact without a StoreKit `Transaction` (production uses the generic init
+/// with a real one). Goes through that same generic init, with a plain stand-in transaction.
+private struct StandInTransaction: AdTransactionFacts {
+    var id: UInt64
+    var purchaseDate: Date
+    var price: Decimal?
+    var currencyIdentifier: String?
+    var reason: Transaction.Reason
+    var revocationDate: Date?
+    var ownershipType: Transaction.OwnershipType
+    var isUpgraded: Bool
+    var appAccountToken: UUID? { nil }
+    var storeKitTransaction: Transaction? { nil }
+}
+
+extension AdPurchaseFact {
+    init(kind: Usage.PurchaseProduct, transactionID: UInt64, purchaseDate: Date, price: Decimal?, currencyCode: String?,
+         isPurchaseReason: Bool = true, isRevoked: Bool = false, isFamilyShared: Bool = false, isUpgraded: Bool = false,
+         isFromThisInstall: Bool = true) {
+        let stand = StandInTransaction(
+            id: transactionID, purchaseDate: purchaseDate, price: price, currencyIdentifier: currencyCode,
+            reason: isPurchaseReason ? .purchase : .renewal,
+            revocationDate: isRevoked ? purchaseDate : nil,
+            ownershipType: isFamilyShared ? .familyShared : .purchased,
+            isUpgraded: isUpgraded)
+        self.init(stand, kind: kind, localPurchase: isFromThisInstall)
+    }
+}

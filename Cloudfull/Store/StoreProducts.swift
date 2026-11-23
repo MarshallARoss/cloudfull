@@ -22,7 +22,7 @@ enum StoreProducts {
     static let lifetimePrefix = "com.cloudfull.app.unlock.lifetime."
 
     /// Auto-renewable, one month, in the subscription group "Cloudfull
-    /// Unlock", with a 7-day free introductory offer.
+    /// Unlock". It has no free introductory offer.
     static let monthly = "com.cloudfull.app.unlock.monthly.299"
     /// Non-consumable. Unlocks the app once, for good.
     static let lifetime = "com.cloudfull.app.unlock.lifetime.999"
