@@ -26,8 +26,8 @@ final class RegionProbe {
     }
 }
 
-/// An unknown storefront at launch: the SDKs wait for it and start late (item B), and the events
-/// TikTok's SDK no longer logs by itself (item A).
+/// An unknown storefront at launch: the SDKs wait for it and start late, and the events
+/// TikTok's SDK no longer logs by itself are logged by the app, once each.
 @Suite("AdLateStartTests", .serialized)
 @MainActor
 struct AdLateStartTests {

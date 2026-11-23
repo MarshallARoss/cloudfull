@@ -12,22 +12,14 @@ import StoreKitTest
 import Foundation
 @testable import Cloudfull
 
-/// The "this install" mark, proved with real StoreKit transactions (item E). The paywall buys with
+/// The "this install" mark, proved with real StoreKit transactions. The paywall buys with
 /// `AdEvents.purchaseOptions()`; these tests buy with the same set through `SKTestSession` and read
-/// the verified transaction back. Same set-up and clean-up as `EntitlementsStoreKitTests`: the
-/// simulated store is shared, so each test clears its transactions at its end.
-@Suite("Ad token + StoreKit", .serialized)
-@MainActor
-struct AdTokenStoreKitTests {
-    private let session: SKTestSession
-
-    init() throws {
-        session = try SKTestSession(configurationFileNamed: "Cloudfull")
-        session.disableDialogs = true
-        session.clearTransactions()
-        session.resetToDefaultState()
-    }
-
+/// the verified transaction back.
+///
+/// These tests are part of `EntitlementsStoreKitTests` (an extension), so they share its
+/// `.serialized` trait. Both groups use the simulator's one StoreKit store. Two separate suites
+/// run in parallel in Swift Testing, and one cleared the store under the other.
+extension EntitlementsStoreKitTests {
     private func makeSuite() -> UserDefaults {
         UserDefaults(suiteName: "AdTokenStoreKitTests.\(UUID().uuidString)")!
     }
@@ -47,7 +39,7 @@ struct AdTokenStoreKitTests {
 
     @Test("Monthly bought with the paywall's options carries the install token and counts as this install")
     func monthlyCarriesToken() async throws {
-        defer { session.clearTransactions() }
+        defer { tearDown() }
         let defaults = makeSuite()
         let token = AdEvents.installAccountToken(defaults: defaults)
         let transaction = try await buy(StoreProducts.monthly, options: AdEvents.purchaseOptions(defaults: defaults))
@@ -71,7 +63,7 @@ struct AdTokenStoreKitTests {
 
     @Test("Lifetime bought with the paywall's options carries the install token and counts as this install")
     func lifetimeCarriesToken() async throws {
-        defer { session.clearTransactions() }
+        defer { tearDown() }
         let defaults = makeSuite()
         let token = AdEvents.installAccountToken(defaults: defaults)
         let transaction = try await buy(StoreProducts.lifetime, options: AdEvents.purchaseOptions(defaults: defaults))
@@ -94,7 +86,7 @@ struct AdTokenStoreKitTests {
 
     @Test("A purchase with no token is not this install: no fact counts, nothing is sent")
     func noTokenIsNotThisInstall() async throws {
-        defer { session.clearTransactions() }
+        defer { tearDown() }
         let defaults = makeSuite()
         let token = AdEvents.installAccountToken(defaults: defaults)
         for productID in [StoreProducts.monthly, StoreProducts.lifetime] {
@@ -113,7 +105,7 @@ struct AdTokenStoreKitTests {
 
     @Test("A purchase that carries another install's token is not this install")
     func otherInstallToken() async throws {
-        defer { session.clearTransactions() }
+        defer { tearDown() }
         let otherDevice = makeSuite()
         let thisDevice = makeSuite()
         let transaction = try await buy(StoreProducts.lifetime, options: AdEvents.purchaseOptions(defaults: otherDevice))

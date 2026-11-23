@@ -128,9 +128,10 @@ echo "## GoogleService-Info.plist is present, BUNDLE_ID is com.cloudfull.app, an
 # Number of tests the CloudfullTests target must run. Swift Testing prints
 # "Test run with N tests"; N = 0 means a filter matched nothing. This build
 # adds six suites (AdEventsTests, AppleAdsAttributionTests, AdRegionTests, AdConversionValueTests,
-# AdLateStartTests, AdTokenStoreKitTests).
+# AdLateStartTests, AdScreenshotBlockTests) and four tests inside EntitlementsStoreKitTests
+# (AdTokenStoreKitTests.swift, an extension, so the StoreKit tests never run in parallel).
 # Change this one value whenever a unit test is added or removed.
-EXPECTED_UNIT_TESTS=162
+EXPECTED_UNIT_TESTS=167
 
 echo "################ UNIT TESTS (CloudfullTests) ################"
 if ! xcodebuild test -project "$PROJ/Cloudfull.xcodeproj" -scheme Cloudfull \

@@ -9,6 +9,7 @@
 import Foundation
 import StoreKit
 import UIKit
+import os
 // The three ad SDKs are imported here and nowhere else in the app.
 import FacebookCore
 import FirebaseCore
@@ -25,8 +26,7 @@ import TikTokBusinessSDK
 // - Every vendor's automatic purchase logging is off. The app logs purchases.
 // - No IDFA, no AdSupport import, no App Tracking Transparency call.
 // - No transaction id goes to a network. One exception is forced by Google's
-//   API: `Analytics.logTransaction` takes the StoreKit `Transaction`
-//   (contract section 7, item 1).
+//   API: `Analytics.logTransaction` takes the StoreKit `Transaction`.
 
 // MARK: - Keys
 
@@ -743,6 +743,9 @@ struct TikTokHooks {
     /// Starts the SDK. False when `TikTokConfig` could not be made.
     var initialize: (_ keys: AdKeys, _ debug: Bool) -> Bool
     var track: (_ name: String, _ properties: [String: Any]) -> Void
+    /// Makes TikTok's screenshot switch impossible to turn on. True when it is installed. The sink
+    /// does not start when this is false.
+    var blockScreenshots: () -> Bool = { true }
 
     @MainActor static let live = TikTokHooks(
         initialize: { keys, debug in
@@ -760,6 +763,9 @@ struct TikTokHooks {
             config.disablePaymentTracking()
             if debug { config.enableDebugMode() }
             TikTokBusiness.initializeSdk(config) { _, _ in }
+            #if DEBUG
+            if debug { Self.logScreenshotBlockCheck() }
+            #endif
             for name in TikTokAutomaticEvents.due(defaults: .standard, now: Date()) {
                 TikTokBusiness.trackTTEvent(TikTokBaseEvent(eventName: name, properties: ["type": "auto"],
                                                             eventId: UUID().uuidString))
@@ -777,8 +783,71 @@ struct TikTokHooks {
         },
         track: { name, properties in
             TikTokBusiness.trackTTEvent(TikTokBaseEvent(eventName: name, properties: properties, eventId: UUID().uuidString))
+        },
+        // TikTok's server can ask the SDK to attach a screenshot of the key window to each event:
+        // the config fetch sets the private `screenshotEnabled` from `enable_screenshot`
+        // (TikTokBusiness.m:70, :1069-1074), and when it is true each event carries the image
+        // (:617-622, :1181-1193, TikTokRequestHandler.m:395-396). Cloudfull's window shows the
+        // user's photos, and a screenshot is not ad measurement. The SDK has no public switch, so
+        // the setter is replaced: the stored value is always NO.
+        blockScreenshots: {
+            BoolSetterGuard.installForcingFalse(on: TikTokBusiness.self,
+                                                setter: NSSelectorFromString("setScreenshotEnabled:"),
+                                                getter: NSSelectorFromString("screenshotEnabled"))
         }
     )
+
+    #if DEBUG
+    /// For the phone test: tries to turn the switch on, reads it back, logs the answer.
+    @MainActor private static func logScreenshotBlockCheck() {
+        let instance: TikTokBusiness? = TikTokBusiness.getInstance()
+        instance?.setValue(true, forKey: "screenshotEnabled")
+        let stored = instance?.value(forKey: "screenshotEnabled") as? Bool
+        Logger(subsystem: "com.cloudfull.app", category: "AdTikTok").info(
+            "tiktok screenshot block ok=\(stored == false)")
+    }
+    #endif
+}
+
+/// Replaces a Bool setter on a class so the stored value is always false, for a flag the
+/// vendor's SDK exposes no switch for. Generic on purpose: a test runs it on its own class.
+enum BoolSetterGuard {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var installed: Set<String> = []
+
+    /// True when the guard is in place (now, or from an earlier call: it is installed one time).
+    /// False, with nothing changed, when the setter or the getter is missing or is not the
+    /// `void set(BOOL)` / `BOOL get()` shape.
+    static func installForcingFalse(on cls: AnyClass, setter: Selector, getter: Selector) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        let key = "\(NSStringFromClass(cls))|\(NSStringFromSelector(setter))"
+        if installed.contains(key) { return true }
+        guard let setterMethod = class_getInstanceMethod(cls, setter),
+              let getterMethod = class_getInstanceMethod(cls, getter),
+              let setterTypes = method_getTypeEncoding(setterMethod),
+              let getterTypes = method_getTypeEncoding(getterMethod),
+              ["v@:B", "v@:c"].contains(stripped(setterTypes)),
+              ["B@:", "c@:"].contains(stripped(getterTypes))
+        else {
+            Logger(subsystem: "com.cloudfull.app", category: "AdTikTok").error(
+                "bool setter guard not installed: \(NSStringFromSelector(setter), privacy: .public) missing or unexpected type")
+            return false
+        }
+        typealias Setter = @convention(c) (AnyObject, Selector, Bool) -> Void
+        let original = unsafeBitCast(method_getImplementation(setterMethod), to: Setter.self)
+        let replacement: @convention(block) (AnyObject, Bool) -> Void = { object, _ in
+            original(object, setter, false)
+        }
+        class_replaceMethod(cls, setter, imp_implementationWithBlock(replacement), setterTypes)
+        installed.insert(key)
+        return true
+    }
+
+    /// A type encoding with the byte offsets removed: "v20@0:8B16" becomes "v@:B".
+    private static func stripped(_ encoding: UnsafePointer<CChar>) -> String {
+        String(String(cString: encoding).filter { !$0.isNumber })
+    }
 }
 
 /// The events TikTok's SDK would log by itself with automatic tracking on. That switch is off
@@ -829,6 +898,8 @@ final class TikTokAdSink: AdSink {
 
     func start(keys: AdKeys) {
         guard keys.hasTikTok else { return }
+        // Fail closed: without the screenshot block TikTok does not start.
+        guard hooks.blockScreenshots() else { return }
         guard hooks.initialize(keys, AdEvents.debugOverrideRequested) else { return }
         isActive = true
     }
