@@ -56,6 +56,7 @@ def parse_args():
     ap.add_argument("--out", required=True, help="Where to write the HTML page.")
     ap.add_argument("--from-json", help="Read session dicts from this file instead of calling cktool (offline).")
     ap.add_argument("--dump-json", help="Save the pulled session dicts to this file.")
+    ap.add_argument("--sources-from-json", help="Offline test: a JSON file {\"downloads\": [report text], \"purchases\": [report text]} read instead of calling Apple for the sources section.")
     return ap.parse_args()
 
 
@@ -71,6 +72,7 @@ os.environ.setdefault("CLOUDFULL_TEAM_ID", "OFFLINE-FROM-JSON")
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import usage_report  # noqa: E402  (must come after the TEAM_ID guard above)
+import appstore_sources  # noqa: E402  (where-downloads-come-from section -- Apple's own numbers, read-only)
 import sales_report  # noqa: E402  (money banner -- App Store Connect, independent of the CloudKit usage pull above)
 
 def esc(s):
@@ -875,6 +877,70 @@ def build_apple_ads(args, S):
 
 
 # ---------------------------------------------------------------------------
+# Where downloads come from -- Apple's own aggregate numbers (App Store
+# Connect Analytics Reports). Read-only; independent of the CloudKit pull.
+# ---------------------------------------------------------------------------
+
+SOURCE_LABEL = {
+    "app store search": "App Store search",
+    "app store browse": "App Store browse (Today, Apps, Games tabs)",
+    "app referrer": "Another app",
+    "web referrer": "A website link",
+    "app clip": "App Clip",
+    "unavailable": "Apple does not say",
+    "institutional purchase": "Business or school purchase",
+}
+
+
+def build_sources(args):
+    if args.channel != "appStore":
+        return ""
+    if args.sources_from_json:
+        with open(args.sources_from_json, encoding="utf-8") as f:
+            d = json.load(f)
+        res = {"status": "ok", "reason": "", "summary": appstore_sources.summarize_texts(d.get("downloads", []), d.get("purchases", []))}
+    else:
+        res = appstore_sources.fetch_sources()
+    title = "Where downloads come from (Apple's numbers)"
+    intro = ('These are Apple\'s totals, not people. Apple hides small numbers. A tagged link looks like '
+             '<code>https://apps.apple.com/app/id6816547769?pt=&lt;provider token&gt;&amp;ct=&lt;name of the ad&gt;</code>')
+    head = f"""
+  <section>
+    <h2>{esc(title)}</h2>
+    <div class="panel">
+      <p>{intro}</p>"""
+    if res["status"] != "ok":
+        label = "Not set up yet" if res["status"] == "not_set_up" else "No data yet"
+        return f"{head}\n      <p><b>{label}.</b> {esc(res['reason'])}</p>\n    </div>\n  </section>"
+    s = res["summary"]
+    span = f"{esc(s['date_from'])} to {esc(s['date_to'])}" if s["date_from"] else ""
+    if s["by_source"]:
+        rows = "".join(f"<tr><td>{esc(SOURCE_LABEL.get(k.lower(), k))}</td><td>{v}</td></tr>"
+                       for k, v in sorted(s["by_source"].items(), key=lambda kv: (-kv[1], kv[0])))
+        src = (f'<div class="tablewrap"><table><thead><tr><th>Where they found the app</th><th>Downloads</th></tr></thead>'
+               f'<tbody>{rows}</tbody></table></div>')
+    else:
+        src = "<p>No downloads by source yet.</p>"
+    if s["by_campaign"]:
+        rows = "".join(
+            f"<tr><td>{esc(k)}</td><td>{v['downloads']}</td><td>{v['purchases']}</td><td>${v['proceeds']:,.2f}</td><td>{v['paying_users']}</td></tr>"
+            for k, v in sorted(s["by_campaign"].items(), key=lambda kv: (-kv[1]["downloads"], kv[0])))
+        camp = (f'<div class="tablewrap"><table><thead><tr><th>Ad name (ct)</th><th>Downloads</th><th>Purchases</th>'
+                f'<th>Proceeds</th><th>Paying users</th></tr></thead><tbody>{rows}</tbody></table></div>'
+                '<p>Paying users are added up across days, so one person can count twice.</p>')
+    elif s["has_campaign_column"]:
+        camp = "<p>No downloads with an ad name yet. Apple hides a row until at least 5 people are in it.</p>"
+    else:
+        camp = "<p>No ad names yet. Apple lists them only in its Detailed reports, which are not available yet.</p>"
+    return f"""{head}
+      <p>{span}. {s['redownloads']} re-downloads are not counted.</p>
+      {src}
+      {camp}
+    </div>
+  </section>"""
+
+
+# ---------------------------------------------------------------------------
 # Health
 # ---------------------------------------------------------------------------
 
@@ -1640,7 +1706,7 @@ PAGE_CSS = """
 """
 
 
-def build_page(args, S, M, money_html, n_lifetime, tiles_html, q1_html, q2_html, reminder_html, apple_ads_html, health_html, location_html, customers_html, static_html, raw_fields_html, paywall_html=""):
+def build_page(args, S, M, money_html, n_lifetime, tiles_html, q1_html, q2_html, reminder_html, apple_ads_html, health_html, location_html, customers_html, static_html, raw_fields_html, paywall_html="", sources_html=""):
     channel_label = CHANNEL_LABEL[args.channel]
     intro = CHANNEL_INTRO[args.channel]
     pulled = datetime.datetime.now(datetime.timezone.utc).strftime("%-d %b %Y %H:%M UTC")
@@ -1676,7 +1742,7 @@ def build_page(args, S, M, money_html, n_lifetime, tiles_html, q1_html, q2_html,
 <style>{PAGE_CSS}</style>
 </head>
 <body>
-<div class="wrap">{header}{money_html}{tiles_html}{q1_html}{q2_html}{reminder_html}{paywall_html}{apple_ads_html}{health_html}{location_html}{customers_html}{static_html}{raw_fields_html}
+<div class="wrap">{header}{money_html}{tiles_html}{q1_html}{q2_html}{reminder_html}{paywall_html}{apple_ads_html}{sources_html}{health_html}{location_html}{customers_html}{static_html}{raw_fields_html}
 </div>
 </body>
 </html>
@@ -1704,6 +1770,7 @@ def main():
     reminder_html = build_reminder(M, S)
     paywall_html, pw_check = build_paywall(M, S)
     apple_ads_html = build_apple_ads(args, S)
+    sources_html = build_sources(args)
     health_html = build_health(M, S)
     location_html, _loc_check = build_location(M, S)
     customers_html, customers_check = build_customers(M, S)
@@ -1713,7 +1780,7 @@ def main():
     run_cross_checks(args, S, M, q1_check, pw_check)
     check_customers(M, S, customers_check, q1_check, tiles_check, q2_check)
 
-    page = build_page(args, S, M, money_html, n_lifetime, tiles_html, q1_html, q2_html, reminder_html, apple_ads_html, health_html, location_html, customers_html, static_html, raw_fields_html, paywall_html)
+    page = build_page(args, S, M, money_html, n_lifetime, tiles_html, q1_html, q2_html, reminder_html, apple_ads_html, health_html, location_html, customers_html, static_html, raw_fields_html, paywall_html, sources_html)
     with open(args.out, "w", encoding="utf-8") as f:
         f.write(page)
 
