@@ -29,21 +29,22 @@ struct AdConversionValue: Equatable, Sendable {
     var coarse: AdCoarseValue
 }
 
-/// The facts the app records, one bit each. The fine value is the OR of the recorded bits.
-/// Bits 2 to 5 are not used and stay 0. Paywall and checkout events set nothing.
+/// The facts the app records, one bit each. The stored set is the OR of the recorded bits; the fine
+/// value is NOT the sum (see `AdConversionSchema`). Paywall and checkout events set nothing.
 struct AdFacts: OptionSet, Sendable {
     let rawValue: Int
     static let subscribed = AdFacts(rawValue: 1)           // bit 0: a monthly plan was bought (verified)
     static let lifetimePurchased = AdFacts(rawValue: 2)    // bit 1: the lifetime unlock was bought (verified)
 }
 
-/// The ONE table. Fine value: 0 = installed, nothing bought; 1 = monthly; 2 = lifetime; 3 = both.
-/// Coarse value (it carries the plan in the later windows): low = nothing bought; medium = monthly
-/// bought and no lifetime; high = lifetime bought. The same table must be entered in Meta Events
-/// Manager, TikTok Events Manager and Google Ads: fine 1 = Subscribe, fine 2 = Purchase, fine 3 =
-/// both, with the product's price as the money value of each row. Meta's own rule format is "a value
-/// matches when all its listed events were recorded" (FBSDKSKAdNetworkRule.m,
-/// isMatchedWithRecordedEvents); this table can be written in it.
+/// The ONE table. The fine value is the HIGHEST single event that happened, never a sum: Meta
+/// reports only the highest-priority event in a conversion window, so one fine value stands for
+/// one event. 0 = installed, nothing bought; 1 = monthly bought (and no lifetime); 2 = lifetime
+/// bought, with or without a monthly. The value 3 is never written. The numbers are the priority
+/// numbers to enter in Meta Events Manager (1 lowest, 63 highest): Subscribe = 1, Purchase = 2,
+/// and the same table in TikTok Events Manager and Google Ads, with the product's price as the
+/// money value of each row. Coarse value (it carries the plan in the later windows): low = nothing
+/// bought; medium = monthly bought and no lifetime; high = lifetime bought.
 enum AdConversionSchema {
     /// nil for the paywall and the checkout: they set nothing.
     static func fact(for event: AdEvent) -> AdFacts? {
@@ -63,7 +64,13 @@ enum AdConversionSchema {
         } else {
             coarse = .low
         }
-        return AdConversionValue(fine: facts.rawValue, coarse: coarse)
+        let fine: Int
+        switch coarse {
+        case .high: fine = 2
+        case .medium: fine = 1
+        case .low: fine = 0
+        }
+        return AdConversionValue(fine: fine, coarse: coarse)
     }
 
     /// The lifetime unlock is the highest fact, so nothing higher can follow; locking the window

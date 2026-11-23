@@ -131,7 +131,7 @@ echo "## GoogleService-Info.plist is present, BUNDLE_ID is com.cloudfull.app, an
 # AdLateStartTests, AdScreenshotBlockTests) and four tests inside EntitlementsStoreKitTests
 # (AdTokenStoreKitTests.swift, an extension, so the StoreKit tests never run in parallel).
 # Change this one value whenever a unit test is added or removed.
-EXPECTED_UNIT_TESTS=167
+EXPECTED_UNIT_TESTS=168
 
 echo "################ UNIT TESTS (CloudfullTests) ################"
 if ! xcodebuild test -project "$PROJ/Cloudfull.xcodeproj" -scheme Cloudfull \
