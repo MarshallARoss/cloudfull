@@ -245,10 +245,24 @@ final class AdEvents {
     /// tested with real keys. It never waives the official bundle id, the simulator, XCTest,
     /// keys or the region rule. Compiled out of Release.
     static let debugArgument = "-cloudfull-ads-debug"
+    /// Debug builds only, and only together with `debugArgument`. TikTok marks an app Verified only
+    /// when it receives SDK events outside test mode, so with this argument the TikTok sink starts
+    /// without `enableDebugMode()` and its events go to TikTok's normal pipeline. Compiled out of Release.
+    static let realPipelineArgument = "-cloudfull-ads-real-pipeline"
     #endif
     static var debugOverrideRequested: Bool {
         #if DEBUG
         return ProcessInfo.processInfo.arguments.contains(debugArgument)
+        #else
+        return false
+        #endif
+    }
+
+    /// True when TikTok's test mode is on: the debug argument is present and the real-pipeline
+    /// argument is not. Always false in Release.
+    nonisolated static func tiktokTestModeRequested(arguments: [String]) -> Bool {
+        #if DEBUG
+        return arguments.contains(debugArgument) && !arguments.contains(realPipelineArgument)
         #else
         return false
         #endif
@@ -761,7 +775,7 @@ struct TikTokHooks {
             // The app sends install, launch and retention itself (`TikTokAutomaticEvents`).
             config.disableAutomaticTracking()
             config.disablePaymentTracking()
-            if debug { config.enableDebugMode() }
+            if AdEvents.tiktokTestModeRequested(arguments: ProcessInfo.processInfo.arguments) { config.enableDebugMode() }
             TikTokBusiness.initializeSdk(config) { _, _ in }
             #if DEBUG
             if debug { Self.logScreenshotBlockCheck() }
