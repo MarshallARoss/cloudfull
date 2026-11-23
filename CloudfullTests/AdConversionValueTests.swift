@@ -203,10 +203,16 @@ struct AdConversionValueTests {
         #expect(AdConversionSchema.value(for: [.subscribed, .lifetimePurchased]) == v(2, .high))
     }
 
-    @Test("Only the lifetime fact locks the window")
-    func lockRule() {
-        #expect(AdConversionSchema.locksWindow(for: .lifetimePurchased) == true)
-        #expect(AdConversionSchema.locksWindow(for: .subscribed) == false)
+    @Test("No call locks the window: not registration, not monthly, not lifetime")
+    func neverLocks() async {
+        let (defaults, _) = makeSuite()
+        let updater = FakeConversionUpdater()
+        let events = makeEvents(defaults, updater: updater)
+        await launch(events, keys: allKeys, region: false)
+        events.purchased(fact(.monthly, id: 1))
+        events.purchased(fact(.lifetime, id: 2))
+        #expect(updater.calls.count == 3)
+        #expect(updater.locks == [false, false, false])
     }
 
     // MARK: - Stored state
@@ -249,24 +255,24 @@ struct AdConversionValueTests {
         #expect(defaults.object(forKey: AdConversionWriter.factsKey) == nil)
     }
 
-    @Test("Monthly bought: fine 1, coarse medium, window open. Lifetime bought: fine 2, coarse high, window locked")
+    @Test("Monthly bought: fine 1, coarse medium, window open. Lifetime bought: fine 2, coarse high, window open")
     func singleFacts() async {
-        let cases: [(String, Usage.PurchaseProduct, AdConversionValue, Bool)] = [
-            ("monthly", .monthly, v(1, .medium), false),
-            ("lifetime", .lifetime, v(2, .high), true),
+        let cases: [(String, Usage.PurchaseProduct, AdConversionValue)] = [
+            ("monthly", .monthly, v(1, .medium)),
+            ("lifetime", .lifetime, v(2, .high)),
         ]
-        for (name, kind, expected, lock) in cases {
+        for (name, kind, expected) in cases {
             let (defaults, _) = makeSuite()
             let updater = FakeConversionUpdater()
             let events = makeEvents(defaults, updater: updater)
             await launch(events, keys: allKeys, region: false)
             events.purchased(fact(kind, id: 1))
             #expect(updater.calls == [registered, expected], Comment(rawValue: name))
-            #expect(updater.locks == [false, lock], Comment(rawValue: name))
+            #expect(updater.locks == [false, false], Comment(rawValue: name))
         }
     }
 
-    @Test("Both plans: monthly then lifetime gives 1 then 2, locked on the lifetime call only")
+    @Test("Both plans: monthly then lifetime gives 1 then 2, no call locks")
     func monthlyThenLifetime() async {
         let (defaults, _) = makeSuite()
         let updater = FakeConversionUpdater()
@@ -277,11 +283,11 @@ struct AdConversionValueTests {
         events.purchased(fact(.monthly, id: 1))
         events.purchased(fact(.lifetime, id: 2))
         #expect(updater.calls == [registered, v(1, .medium), v(2, .high)])
-        #expect(updater.locks == [false, false, true])
+        #expect(updater.locks == [false, false, false])
         #expect(defaults.integer(forKey: AdConversionWriter.factsKey) == 3)
     }
 
-    @Test("Order does not matter: lifetime then monthly gives 2 then 2, and only the lifetime call locks")
+    @Test("Order does not matter: lifetime then monthly gives 2 then 2, and no call locks")
     func lifetimeThenMonthly() async {
         let (defaults, _) = makeSuite()
         let updater = FakeConversionUpdater()
@@ -290,7 +296,7 @@ struct AdConversionValueTests {
         events.purchased(fact(.lifetime, id: 1))
         events.purchased(fact(.monthly, id: 2))
         #expect(updater.calls == [registered, v(2, .high), v(2, .high)])
-        #expect(updater.locks == [false, true, false])
+        #expect(updater.locks == [false, false, false])
     }
 
     @Test("Both plans, in either order, end at fine 2 / coarse high, and the app never writes 3")

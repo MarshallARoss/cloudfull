@@ -226,7 +226,7 @@ struct AdLateStartTests {
         await task.value
         #expect(events.appIsWriter)
         #expect(updater.calls == [AdConversionValue(fine: 0, coarse: .low), AdConversionValue(fine: 2, coarse: .high)])
-        #expect(updater.locks == [false, true])
+        #expect(updater.locks == [false, false])
     }
 
     @Test("Without a Meta key the app is the writer in the wait and counts a held purchase at once")
@@ -276,7 +276,7 @@ struct AdLateStartTests {
             #expect(events.appIsWriter)
             events.purchased(fact(.lifetime, id: 5))
             #expect(updater.calls == [AdConversionValue(fine: 0, coarse: .low), AdConversionValue(fine: 2, coarse: .high)])
-            #expect(updater.locks == [false, true])
+            #expect(updater.locks == [false, false])
         }
     }
 

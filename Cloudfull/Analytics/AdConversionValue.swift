@@ -72,13 +72,13 @@ enum AdConversionSchema {
         }
         return AdConversionValue(fine: fine, coarse: coarse)
     }
-
-    /// The lifetime unlock is the highest fact, so nothing higher can follow; locking the window
-    /// makes Apple send the report sooner. Every other call leaves the window open.
-    static func locksWindow(for fact: AdFacts) -> Bool { fact == .lifetimePurchased }
 }
 
 /// The one call to Apple. The live type calls StoreKit; tests use a fake.
+/// The app never locks the window: Meta's guidance is "Don't use lock windows. To avoid
+/// under-reporting and suboptimal performance, don't use lock windows in your app setup", and Events
+/// Manager does not support them (Meta business help 332131285040809). `lockWindow` stays in the
+/// protocol only so a test can prove that no call passes true.
 protocol AdConversionUpdating {
     func update(_ value: AdConversionValue, lockWindow: Bool)
 }
@@ -147,6 +147,6 @@ struct AdConversionWriter {
         let all = facts.union(fact)
         defaults.set(all.rawValue, forKey: Self.factsKey)
         guard writeToApple else { return }
-        updater.update(AdConversionSchema.value(for: all), lockWindow: AdConversionSchema.locksWindow(for: fact))
+        updater.update(AdConversionSchema.value(for: all), lockWindow: false)
     }
 }
