@@ -472,7 +472,8 @@ struct AdEventsTests {
         var hooks: TikTokHooks {
             TikTokHooks(
                 initialize: { [self] _, _ in calls.append("initialize"); return true },
-                track: { [self] name, props in tracked.append((name, props)) }
+                track: { [self] name, props in tracked.append((name, props)) },
+                blockScreenshots: { true }
             )
         }
     }

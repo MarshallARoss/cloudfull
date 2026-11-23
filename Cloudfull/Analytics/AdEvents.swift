@@ -745,7 +745,7 @@ struct TikTokHooks {
     var track: (_ name: String, _ properties: [String: Any]) -> Void
     /// Makes TikTok's screenshot switch impossible to turn on. True when it is installed. The sink
     /// does not start when this is false.
-    var blockScreenshots: () -> Bool = { true }
+    var blockScreenshots: () -> Bool
 
     @MainActor static let live = TikTokHooks(
         initialize: { keys, debug in
