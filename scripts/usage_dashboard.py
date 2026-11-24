@@ -222,12 +222,17 @@ def tester_reason(sessions, launch_date):
       day of time-zone slack) -- the install existed before the App
       Store build did, so it was not using the App Store build then.
     - "non-appStore session": at least one of its sessions in the pull
-      was not installChannel appStore at all (TestFlight, unknown, or
-      the fact missing entirely)."""
+      explicitly reported a non-appStore installChannel (TestFlight or
+      unknown). A session that is simply missing the fact (a known gap
+      on some background-exit sessions) is not evidence either way, so
+      it never disqualifies an install on its own."""
     predates_launch = False
     has_non_app_store = False
     for r in sessions:
-        if r["facts"].get("installChannel") != "appStore":
+        channel = r["facts"].get("installChannel")
+        if channel is None:
+            continue
+        if channel != "appStore":
             has_non_app_store = True
             continue
         dsi = r.get("daysSinceInstall")
@@ -1110,7 +1115,15 @@ def run_cross_checks(args, S, M, q1_check):
     C = M["C"]
     orig_fetch, orig_argv = usage_report.fetch, sys.argv
     argv = ["usage_report.py", "--env", args.env, "--month", args.month]
-    if args.channel != "all":
+    # For "appStore", S has already been filtered by the install-level
+    # survivor rule (determine_surviving_installs), which keeps a real
+    # customer's sessions even if one of them is missing the
+    # installChannel fact outright. usage_report.py's own --channel
+    # flag is a cruder per-session check ("== appStore" exactly) built
+    # for standalone use; re-applying it here would drop those same
+    # sessions a second time and make this cross-check fail against
+    # its own upstream filtering, not against a real disagreement.
+    if args.channel not in ("all", "appStore"):
         argv += ["--channel", args.channel]
     usage_report.fetch = lambda env, month: S
     sys.argv = argv
