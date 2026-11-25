@@ -775,6 +775,11 @@ struct TikTokHooks {
             // The app sends install, launch and retention itself (`TikTokAutomaticEvents`).
             config.disableAutomaticTracking()
             config.disablePaymentTracking()
+            // TikTok's "Enhanced Data Postback" is on by default (TikTokConfig.m:149). When it runs it sends
+            // screen names, the view tree, the text of labels and text views, taps with button text, and the
+            // launch link. This call turns it off. In TikTok SDK 1.7.2 the server cannot turn it back on: every
+            // EDP path also needs this client flag (TikTokBusiness.m:942, :742, :946, :957, :1223).
+            config.disableAutoEnhancedDataPostbackEvent()
             if AdEvents.tiktokTestModeRequested(arguments: ProcessInfo.processInfo.arguments) { config.enableDebugMode() }
             TikTokBusiness.initializeSdk(config) { _, _ in }
             #if DEBUG
@@ -901,6 +906,7 @@ enum TikTokAutomaticEvents {
 /// TikTok. Automatic tracking is off; the app logs install, launch and retention
 /// (`TikTokAutomaticEvents`) and the purchases, so each fact is logged once.
 /// `disableSKAdNetworkSupport()` keeps TikTok out of the conversion value (Meta or the app writes it).
+/// `disableAutoEnhancedDataPostbackEvent()` stops TikTok from sending screen names, the view tree and label text.
 @MainActor
 final class TikTokAdSink: AdSink {
     private let hooks: TikTokHooks
