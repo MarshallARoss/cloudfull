@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Partial Info.plist: Xcode merges it with the INFOPLIST_KEY_ build settings. -->
+	<!-- Meta SDK. App ID and client token come from Config/AdKeys.xcconfig (empty = SDK stays off). -->
+	<key>FacebookAppID</key>
+	<string>$(META_APP_ID)</string>
+	<key>FacebookClientToken</key>
+	<string>$(META_CLIENT_TOKEN)</string>
+	<key>FacebookDisplayName</key>
+	<string>Cloudfull</string>
+	<key>FacebookAutoLogAppEventsEnabled</key>
+	<false/>
+	<key>FacebookAdvertiserIDCollectionEnabled</key>
+	<false/>
+	<!-- No screen titles, no sampled screen layouts (Meta 19.0.0 changelog). -->
+	<key>FBSDKAutoLogMetaDataEnabled</key>
+	<false/>
+	<key>FBSDKAutoLogProductImprovementEnabled</key>
+	<false/>
+	<!-- Firebase (Google Analytics). Meta writes the SKAdNetwork conversion value when its SDK starts; otherwise the app does (AdConversionWriter). -->
+	<key>GOOGLE_ANALYTICS_REGISTRATION_WITH_AD_NETWORK_ENABLED</key>
+	<false/>
+	<!-- No consent question in the app. Google denies these two for people it places in the EU User Consent Policy region. -->
+	<key>GOOGLE_ANALYTICS_DEFAULT_ALLOW_AD_USER_DATA</key>
+	<string>eu_consent_policy</string>
+	<key>GOOGLE_ANALYTICS_DEFAULT_ALLOW_AD_PERSONALIZATION_SIGNALS</key>
+	<string>eu_consent_policy</string>
+	<!-- TikTok Business SDK. The SDK has no Info.plist keys; these are our own keys that carry its values. -->
+	<key>CloudfullTikTokAppleAppID</key>
+	<string>$(TIKTOK_APPLE_APP_ID)</string>
+	<key>CloudfullTikTokAppID</key>
+	<string>$(TIKTOK_APP_ID)</string>
+	<key>CloudfullTikTokAccessToken</key>
+	<string>$(TIKTOK_ACCESS_TOKEN)</string>
+</dict>
+</plist>

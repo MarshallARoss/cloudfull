@@ -89,7 +89,7 @@
 #      reported its pool
 #   8  this script ran from somewhere other than the repo copy beside
 #      Cloudfull.xcodeproj
-#   9  source under Cloudfull/, CloudfullUITests/, scripts/, or
+#   9  source under Cloudfull/, CloudfullUITests/, scripts/, Config/, or
 #      Cloudfull.xcodeproj/ changed during the run
 #   10 the empty-bin identity proof failed. One of four checks failed:
 #        - the deleted or restored id count is wrong
@@ -137,8 +137,10 @@ mkdir -p "$LOGDIR"
 # The fence is a SHA-256 hash of the sorted "path:mtime:size" for the
 # source files that the build or the gate uses. These files are
 # Cloudfull/ (source, plists, entitlements, and the asset catalog),
-# CloudfullUITests/, scripts/ (including scripts/fixtures/), and
-# Cloudfull.xcodeproj/.
+# CloudfullUITests/, scripts/ (including scripts/fixtures/), Config/
+# (the xcconfig files, including the git-ignored Config/AdKeys.xcconfig, and
+# the partial Info.plist), and Cloudfull.xcodeproj/ (which holds the
+# Package.resolved file with the pinned SDK versions).
 # Hashing path, mtime, and size together, rather than only the newest
 # mtime, also detects a deleted file or an mtime moved backward.
 #
@@ -154,6 +156,7 @@ source_fence() {
     find "$PROJ/Cloudfull/Assets.xcassets" -type f -print0 2>/dev/null
     find "$PROJ/CloudfullUITests" -name '*.swift' -type f -print0 2>/dev/null
     find "$PROJ/scripts" \( -name '*.sh' -o -path '*/fixtures/*' \) -type f -print0 2>/dev/null
+    find "$PROJ/Config" -type f -print0 2>/dev/null
     find "$PROJ/Cloudfull.xcodeproj" -type f -print0 2>/dev/null
   } | { local f m s
     while IFS= read -r -d '' f; do

@@ -440,6 +440,7 @@ final class Entitlements: ObservableObject {
             return
         }
         Usage.shared.paywallShown(source)
+        AdEvents.shared.paywallShown()
         paywallRequest = source
     }
 
@@ -462,6 +463,7 @@ final class Entitlements: ObservableObject {
     /// unlocked user (to manage or upgrade).
     func presentPaywall(from source: PaywallSource) {
         Usage.shared.paywallShown(source)
+        AdEvents.shared.paywallShown()
         paywallRequest = source
     }
 
@@ -488,6 +490,9 @@ final class Entitlements: ObservableObject {
             // not delivered here, so this never double counts.)
             if transaction.reason == .purchase, transaction.revocationDate == nil, let kind = Usage.purchaseProduct(for: transaction.productID) {
                 Usage.shared.purchase(kind, .success, tier: StoreProducts.tier(of: transaction.productID))
+                // Another device of the same buyer gets this transaction too; only the install
+                // whose token is on it counts the sale, so one sale is not counted twice.
+                AdEvents.shared.purchased(AdPurchaseFact(transaction, kind: kind, installToken: AdEvents.installAccountToken()))
             }
             // A refund of the purchase this process proved ends the floor,
             // so the next refresh can lock again.
@@ -524,6 +529,7 @@ final class Entitlements: ObservableObject {
         guard let kind = Usage.purchaseProduct(for: product.id) else { return }
         purchaseSource = paywallRequest
         Usage.shared.purchase(kind, .started, tier: StoreProducts.tier(of: product.id))
+        AdEvents.shared.checkoutStarted(kind, price: product.price, currencyCode: product.priceFormatStyle.currencyCode)
         holdsPaywallForPrompt = kind == .lifetime && hasLiveSubscription
     }
 
@@ -553,6 +559,8 @@ final class Entitlements: ObservableObject {
                     holdsPaywallForPrompt = false
                     return .unverified
                 }
+                // Before `finish()` and the awaits below: a kill after them would lose the sale.
+                AdEvents.shared.purchased(AdPurchaseFact(transaction, kind: kind, localPurchase: true))
                 await transaction.finish()
                 #if DEBUG
                 // A fixed override (None, Trial, …) would hide the real

@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A1D0AD0000000000000000B1 /* FacebookCore in Frameworks */ = {isa = PBXBuildFile; productRef = A1D0AD0000000000000000C1 /* FacebookCore */; };
+		A1D0AD0000000000000000B2 /* FirebaseAnalytics in Frameworks */ = {isa = PBXBuildFile; productRef = A1D0AD0000000000000000C2 /* FirebaseAnalytics */; };
+		A1D0AD0000000000000000B3 /* TikTokBusinessSDK in Frameworks */ = {isa = PBXBuildFile; productRef = A1D0AD0000000000000000C3 /* TikTokBusinessSDK */; };
 		24BA96B149BA354D34DF6C3C /* Cloudfull.storekit in Resources */ = {isa = PBXBuildFile; fileRef = 5A6BD74F25E6A1E294A87BA9 /* Cloudfull.storekit */; };
 /* End PBXBuildFile section */
 
@@ -28,6 +31,9 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		A1D0AD0000000000000000E1 /* Cloudfull.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Cloudfull.xcconfig; sourceTree = "<group>"; };
+		A1D0AD0000000000000000E2 /* Cloudfull-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "Cloudfull-Info.plist"; sourceTree = "<group>"; };
+		A1D0AD0000000000000000E3 /* AdKeys.example.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = AdKeys.example.xcconfig; sourceTree = "<group>"; };
 		2DDCF90145CC06C37CAF5FDA /* CloudfullTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = CloudfullTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		5A6BD74F25E6A1E294A87BA9 /* Cloudfull.storekit */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text; path = Cloudfull.storekit; sourceTree = "<group>"; };
 		B8CDEEE2DE0948A39FEEF2BF /* CloudfullUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = CloudfullUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -75,6 +81,9 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A1D0AD0000000000000000B1 /* FacebookCore in Frameworks */,
+				A1D0AD0000000000000000B2 /* FirebaseAnalytics in Frameworks */,
+				A1D0AD0000000000000000B3 /* TikTokBusinessSDK in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -95,10 +104,21 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		A1D0AD0000000000000000E4 /* Config */ = {
+			isa = PBXGroup;
+			children = (
+				A1D0AD0000000000000000E1 /* Cloudfull.xcconfig */,
+				A1D0AD0000000000000000E3 /* AdKeys.example.xcconfig */,
+				A1D0AD0000000000000000E2 /* Cloudfull-Info.plist */,
+			);
+			path = Config;
+			sourceTree = "<group>";
+		};
 		8F20116579D0460EBCB15CEC = {
 			isa = PBXGroup;
 			children = (
 				7FAB512853194B7192AB2A1C /* Cloudfull */,
+				A1D0AD0000000000000000E4 /* Config */,
 				E68E56E90C9D4E14899017B7 /* CloudfullUITests */,
 				EBD1C02CFA714256885C1760 /* Products */,
 				5A6BD74F25E6A1E294A87BA9 /* Cloudfull.storekit */,
@@ -177,6 +197,11 @@
 				7FAB512853194B7192AB2A1C /* Cloudfull */,
 			);
 			name = Cloudfull;
+			packageProductDependencies = (
+				A1D0AD0000000000000000C1 /* FacebookCore */,
+				A1D0AD0000000000000000C2 /* FirebaseAnalytics */,
+				A1D0AD0000000000000000C3 /* TikTokBusinessSDK */,
+			);
 			productName = Cloudfull;
 			productReference = C8496FFE477B4F0C89098F92 /* Cloudfull.app */;
 			productType = "com.apple.product-type.application";
@@ -213,6 +238,11 @@
 				Base,
 			);
 			mainGroup = 8F20116579D0460EBCB15CEC;
+			packageReferences = (
+				A1D0AD0000000000000000D1 /* XCRemoteSwiftPackageReference "facebook-ios-sdk" */,
+				A1D0AD0000000000000000D2 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */,
+				A1D0AD0000000000000000D3 /* XCRemoteSwiftPackageReference "tiktok-business-ios-sdk" */,
+			);
 			productRefGroup = EBD1C02CFA714256885C1760 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
@@ -347,6 +377,7 @@
 		};
 		767D31FA309D439E9894829C /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = A1D0AD0000000000000000E1 /* Cloudfull.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES = AppIconLight;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
@@ -355,10 +386,11 @@
 				CLOUDKIT_ENVIRONMENT = Development;
 				CODE_SIGN_ENTITLEMENTS = Cloudfull/Cloudfull.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 4;
 				DEVELOPMENT_TEAM = TFC8WMVJ84;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Config/Cloudfull-Info.plist";
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Cloudfull shows the photos and videos already in your library so you can rediscover them and clear space. It also saves what you keep into a \"Cloudfull keeps\" album, and moves what you delete to your Recently Deleted.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -448,7 +480,7 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 4;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 1.1;
@@ -466,7 +498,7 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 4;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 1.1;
@@ -483,7 +515,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 4;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 1.1;
@@ -500,7 +532,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 4;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 1.1;
@@ -515,6 +547,7 @@
 		};
 		F95293CE8607451D96DA4627 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = A1D0AD0000000000000000E1 /* Cloudfull.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES = AppIconLight;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
@@ -523,10 +556,11 @@
 				CLOUDKIT_ENVIRONMENT = Production;
 				CODE_SIGN_ENTITLEMENTS = Cloudfull/Cloudfull.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 4;
 				DEVELOPMENT_TEAM = TFC8WMVJ84;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Config/Cloudfull-Info.plist";
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Cloudfull shows the photos and videos already in your library so you can rediscover them and clear space. It also saves what you keep into a \"Cloudfull keeps\" album, and moves what you delete to your Recently Deleted.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -587,6 +621,51 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		A1D0AD0000000000000000D1 /* XCRemoteSwiftPackageReference "facebook-ios-sdk" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/meta/facebook-ios-sdk";
+			requirement = {
+				kind = exactVersion;
+				version = 19.0.1;
+			};
+		};
+		A1D0AD0000000000000000D2 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/firebase/firebase-ios-sdk";
+			requirement = {
+				kind = exactVersion;
+				version = 13.2.0;
+			};
+		};
+		A1D0AD0000000000000000D3 /* XCRemoteSwiftPackageReference "tiktok-business-ios-sdk" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/tiktok/tiktok-business-ios-sdk";
+			requirement = {
+				kind = exactVersion;
+				version = 1.7.2;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		A1D0AD0000000000000000C1 /* FacebookCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A1D0AD0000000000000000D1 /* XCRemoteSwiftPackageReference "facebook-ios-sdk" */;
+			productName = FacebookCore;
+		};
+		A1D0AD0000000000000000C2 /* FirebaseAnalytics */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A1D0AD0000000000000000D2 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseAnalytics;
+		};
+		A1D0AD0000000000000000C3 /* TikTokBusinessSDK */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A1D0AD0000000000000000D3 /* XCRemoteSwiftPackageReference "tiktok-business-ios-sdk" */;
+			productName = TikTokBusinessSDK;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = D80B67A36AAA4727A45A2BBB /* Project object */;
 }

@@ -115,6 +115,9 @@ struct PaywallView: View {
         .onInAppPurchaseStart { product in
             entitlements.purchaseStarted(product)
         }
+        // Marks each sale with this install's token. A purchase that StoreKit later delivers to
+        // another device of the same buyer carries it, so that device does not count it again.
+        .inAppPurchaseOptions { _ in AdEvents.purchaseOptions() }
         .onInAppPurchaseCompletion { product, result in
             Task {
                 let outcome = await entitlements.handlePurchase(product, result)

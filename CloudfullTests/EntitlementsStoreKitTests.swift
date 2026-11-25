@@ -22,7 +22,7 @@ import Foundation
 @Suite("Entitlements + StoreKit", .serialized)
 @MainActor
 struct EntitlementsStoreKitTests {
-    private let session: SKTestSession
+    let session: SKTestSession
 
     init() throws {
         session = try SKTestSession(configurationFileNamed: "Cloudfull")
@@ -65,7 +65,7 @@ struct EntitlementsStoreKitTests {
     /// app shares the simulator's StoreKit store, so a subscription left
     /// live here would make `hasLiveSubscription` true in UI tests that
     /// run afterward.
-    private func tearDown() {
+    func tearDown() {
         session.clearTransactions()
         UserDefaults.standard.removeObject(forKey: Entitlements.cacheKey)
         AccessOverride.shared.value = .auto

@@ -56,6 +56,7 @@ def parse_args():
     ap.add_argument("--out", required=True, help="Where to write the HTML page.")
     ap.add_argument("--from-json", help="Read session dicts from this file instead of calling cktool (offline).")
     ap.add_argument("--dump-json", help="Save the pulled session dicts to this file.")
+    ap.add_argument("--sources-from-json", help="Offline test: a JSON file {\"downloads\": [report text], \"purchases\": [report text]} read instead of calling Apple for the sources section.")
     return ap.parse_args()
 
 
@@ -71,6 +72,7 @@ os.environ.setdefault("CLOUDFULL_TEAM_ID", "OFFLINE-FROM-JSON")
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import usage_report  # noqa: E402  (must come after the TEAM_ID guard above)
+import appstore_sources  # noqa: E402  (where-downloads-come-from section -- Apple's own numbers, read-only)
 import sales_report  # noqa: E402  (money banner -- App Store Connect, independent of the CloudKit usage pull above)
 
 def esc(s):
@@ -670,6 +672,275 @@ def build_reminder(M, S):
 
 
 # ---------------------------------------------------------------------------
+# Paywall -- how many installs reach the paywall and where they stop.
+# Same definitions as the "Paywall and plans" block of usage_report.py:
+# per INSTALL, over the sessions that carry an `entitlement` fact.
+# ---------------------------------------------------------------------------
+
+PAYWALL_PRODUCTS = ("monthly", "lifetime")
+PAYWALL_SOURCES = ("keep", "unkeep", "delete", "share", "album", "shrink", "emptyBin", "settings")
+PAYWALL_SOURCE_LABELS = {
+    "keep": "Keep", "unkeep": "Undo a keep", "delete": "Delete", "share": "Share", "album": "Album",
+    "shrink": "Shrink", "emptyBin": "Empty the bin", "settings": "Settings",
+}
+PAYWALL_DAY_BUCKETS = ("0", "1", "2-3", "4-7", "8-14", "15+")
+
+
+def paywall_day_bucket(n):
+    if n <= 1:
+        return str(n)
+    if n <= 3:
+        return "2-3"
+    if n <= 7:
+        return "4-7"
+    if n <= 14:
+        return "8-14"
+    return "15+"
+
+
+def build_paywall(M, S):
+    """The Paywall section. Returns (html, check) where `check` holds the
+    numbers run_cross_checks() compares with usage_report.py's printed
+    "Paywall and plans" lines."""
+    C = M["C"]
+    NO_DATA = "no data yet"
+    SENT = [r for r in S if "entitlement" in r["facts"]]
+    if not SENT:
+        html = f"""
+  <section>
+    <h2>Paywall · who sees it and who stops</h2>
+    <div class="panel"><p>{NO_DATA}. The paywall numbers start with the build that has the paywall.</p></div>
+  </section>"""
+        return html, None
+
+    by_install = collections.defaultdict(list)
+    for r in SENT:
+        by_install[r["install"]].append(r)
+    groups = list(by_install.values())
+
+    def has_count(rs, key):
+        return any(r["counts"].get(key, 0) > 0 for r in rs)
+
+    def has_prefix(rs, prefix):
+        return any(k.startswith(prefix) and v > 0 for r in rs for k, v in r["counts"].items())
+
+    def has_success(rs):
+        return any(k.startswith("purchase.") and k.endswith(".success") and v > 0 for r in rs for k, v in r["counts"].items())
+
+    def has_started(rs):
+        return any(k.startswith("purchase.") and k.endswith(".started") and v > 0 for r in rs for k, v in r["counts"].items())
+
+    def fact_int(rs, key):
+        for r in rs:
+            v = r["facts"].get(key)
+            if v is not None and v.lstrip("-").isdigit():
+                return int(v)
+        return None
+
+    n_inst = len(groups)
+    saw = [rs for rs in groups if has_prefix(rs, "paywall.shown.")]
+    n_saw = len(saw)
+    n_started = sum(1 for rs in groups if has_started(rs))
+    n_bought = sum(1 for rs in groups if has_success(rs))
+    n_monthly = sum(1 for rs in groups if has_count(rs, "purchase.monthly.success"))
+    n_lifetime = sum(1 for rs in groups if has_count(rs, "purchase.lifetime.success"))
+
+    def step(n, label, prev, prev_label, first=False):
+        if first:
+            return f'<div class="step"><div class="n">{n}</div><div class="t">{esc(label)}</div><div class="pct">&nbsp;</div></div>'
+        if not prev:
+            return (f'<div class="step"><div class="n">{n}</div><div class="t">{esc(label)}</div>'
+                    f'<div class="pct">{NO_DATA}</div></div>')
+        stopped = max(0, prev - n)
+        return (f'<div class="step"><div class="n">{n}</div><div class="t">{esc(label)}</div>'
+                f'<div class="pct">{esc(usage_report.pct(n, prev))} of {esc(prev_label)} · {stopped} stopped here</div></div>')
+
+    funnel_html = f"""
+    <div class="panel">
+      <h3>From install to purchase</h3>
+      <div class="funnel">
+        {step(n_inst, "Installs", None, "", first=True)}
+        {step(n_saw, "Saw the paywall", n_inst, "installs")}
+        {step(n_started, "Started a purchase", n_saw, "those who saw it")}
+        {step(n_bought, "Bought", n_started, "those who started")}
+      </div>
+      <p>Bought: {n_monthly} monthly · {n_lifetime} lifetime. Each number counts installs, not sessions. One install counts once.</p>
+    </div>"""
+
+    # Of the installs that saw the paywall.
+    closed = sum(1 for rs in saw if not has_success(rs) and has_count(rs, "paywall.dismissed"))
+    came_back = sum(1 for rs in saw if has_count(rs, "paywall.reopened"))
+    bought_saw = sum(1 for rs in saw if has_success(rs))
+    if n_saw:
+        outcome_html = f"""
+    <div class="panel">
+      <h3>Of the {n_saw} install{'s' if n_saw != 1 else ''} that saw the paywall</h3>
+      <div class="funnel">
+        <div class="step"><div class="n">{closed}</div><div class="t">Closed it and never bought</div><div class="pct">{esc(usage_report.pct(closed, n_saw))}</div></div>
+        <div class="step"><div class="n">{came_back}</div><div class="t">Came back to it later</div><div class="pct">{esc(usage_report.pct(came_back, n_saw))}</div></div>
+        <div class="step"><div class="n">{bought_saw}</div><div class="t">Bought</div><div class="pct">{esc(usage_report.pct(bought_saw, n_saw))}</div></div>
+      </div>
+      <p>An install that came back can also be in one of the other two. The three numbers do not add up to the total.</p>
+    </div>"""
+    else:
+        outcome_html = f'<div class="panel"><h3>After the paywall</h3><p>{NO_DATA}. Nobody has seen the paywall.</p></div>'
+
+    # By what raised the paywall. Same counters as usage_report.py.
+    shown = {s: C.get(f"paywall.shown.{s}", 0) for s in PAYWALL_SOURCES}
+    bought_by = collections.Counter()
+    for p in PAYWALL_PRODUCTS:
+        for s in PAYWALL_SOURCES:
+            bought_by[s] += C.get(f"purchase.{p}.from.{s}", 0)
+    src_rows = [(s, n, bought_by.get(s, 0)) for s, n in sorted(shown.items(), key=lambda kv: -kv[1]) if n or bought_by.get(s, 0)]
+    if sum(shown.values()):
+        body = "".join(
+            f"<tr><td>{esc(PAYWALL_SOURCE_LABELS.get(s, s))}</td><td>{n}</td><td>{b}</td><td>{esc(usage_report.pct(b, n))}</td></tr>"
+            for s, n, b in src_rows)
+        source_html = f"""
+    <div class="panel">
+      <h3>What raised the paywall</h3>
+      <div class="tablewrap"><table><thead><tr><th>What the person tapped</th><th>Paywall shown</th><th>Bought</th><th>Bought, of shown</th></tr></thead><tbody>{body}</tbody></table></div>
+      <p>This counts times the paywall showed, not installs.</p>
+    </div>"""
+    else:
+        source_html = f'<div class="panel"><h3>What raised the paywall</h3><p>{NO_DATA}.</p></div>'
+
+    # Days from install to the first paywall / first purchase.
+    never_bought, bought = collections.Counter(), collections.Counter()
+    for rs in groups:
+        if has_success(rs):
+            d = fact_int(rs, "daysToFirst.purchase")
+            if d is not None:
+                bought[paywall_day_bucket(d)] += 1
+        else:
+            d = fact_int(rs, "daysToFirst.paywall")
+            if d is not None:
+                never_bought[paywall_day_bucket(d)] += 1
+    if sum(never_bought.values()) + sum(bought.values()):
+        head = "".join(f"<th>{b}</th>" for b in PAYWALL_DAY_BUCKETS)
+        r1 = "".join(f"<td>{never_bought.get(b, 0)}</td>" for b in PAYWALL_DAY_BUCKETS)
+        r2 = "".join(f"<td>{bought.get(b, 0)}</td>" for b in PAYWALL_DAY_BUCKETS)
+        days_html = f"""
+    <div class="panel">
+      <h3>Days from install</h3>
+      <div class="tablewrap"><table><thead><tr><th>Days</th>{head}</tr></thead><tbody>
+        <tr><td>To the first paywall (never bought)</td>{r1}</tr>
+        <tr><td>To the first purchase (bought)</td>{r2}</tr>
+      </tbody></table></div>
+    </div>"""
+    else:
+        days_html = f'<div class="panel"><h3>Days from install</h3><p>{NO_DATA}.</p></div>'
+
+    html = f"""
+  <section>
+    <h2>Paywall · who sees it and who stops</h2>{funnel_html}{outcome_html}{source_html}{days_html}
+  </section>"""
+    check = {"installs": n_inst, "saw": n_saw, "started": n_started, "monthly": n_monthly, "lifetime": n_lifetime,
+             "sources": {s: (n, b) for s, n, b in src_rows}}
+    return html, check
+
+
+# ---------------------------------------------------------------------------
+# Apple Ads -- which campaign and keyword brought the people who paid.
+# Same definitions as usage_report.apple_ads_tables(). App Store only.
+# ---------------------------------------------------------------------------
+
+def build_apple_ads(args, S):
+    if args.channel != "appStore":
+        return ""
+    A = usage_report.apple_ads_tables(S)
+
+    def table(title, data):
+        if not data:
+            return f"<p>No Apple Ads installs with a {esc(title)} yet.</p>"
+        rows = "".join(
+            f"<tr><td>{esc(key)}</td><td>{row['installs']}</td><td>{row['buyers']}</td><td>{row['monthly']}</td><td>{row['lifetime']}</td></tr>"
+            for key, row in sorted(data.items(), key=lambda kv: (-kv[1]["buyers"], -kv[1]["installs"], kv[0])))
+        return (f'<div class="tablewrap"><table><thead><tr><th>{esc(title)}</th><th>Installs</th><th>Buyers</th>'
+                f'<th>Monthly</th><th>Lifetime</th></tr></thead><tbody>{rows}</tbody></table></div>')
+
+    return f"""
+  <section>
+    <h2>Apple Ads · who paid, by campaign and keyword</h2>
+    <div class="panel">
+      <p><b>{A['attributed']}</b> of {A['installs']} installs with a session: Apple returned attribution ({A['buyersAttributed']} paid;
+      {A['redownloads']} are reinstalls and {A['views']} are views, not taps).
+      Apple returned no attribution: {A['notAttributed']} ({A['buyersNotAttributed']} paid).
+      Apple has not answered yet: {A['unanswered']} ({A['buyersUnanswered']} paid).
+      Older build that never asks Apple: {A['notAsked']} ({A['buyersNotAsked']} paid).</p>
+      {table("campaignId", A["byCampaign"])}
+      {table("keywordId", A["byKeyword"])}
+      <p>A buyer is an install that bought the monthly plan or the lifetime unlock this month. Apple's record holds no user or device identifier.
+      Keyword ids need Apple Ads Advanced with exact keywords.</p>
+    </div>
+  </section>"""
+
+
+# ---------------------------------------------------------------------------
+# Where downloads come from -- Apple's own aggregate numbers (App Store
+# Connect Analytics Reports). Read-only; independent of the CloudKit pull.
+# ---------------------------------------------------------------------------
+
+SOURCE_LABEL = {
+    "app store search": "App Store search",
+    "app store browse": "App Store browse (Today, Apps, Games tabs)",
+    "app referrer": "Another app",
+    "web referrer": "A website link",
+    "app clip": "App Clip",
+    "unavailable": "Apple does not say",
+    "institutional purchase": "Business or school purchase",
+}
+
+
+def build_sources(args):
+    if args.channel != "appStore":
+        return ""
+    if args.sources_from_json:
+        with open(args.sources_from_json, encoding="utf-8") as f:
+            d = json.load(f)
+        res = {"status": "ok", "reason": "", "summary": appstore_sources.summarize_texts(d.get("downloads", []), d.get("purchases", []))}
+    else:
+        res = appstore_sources.fetch_sources()
+    title = "Where downloads come from (Apple's numbers)"
+    intro = ('These are Apple\'s totals, not people. Apple hides small numbers. A tagged link looks like '
+             '<code>https://apps.apple.com/app/id6816547769?pt=&lt;provider token&gt;&amp;ct=&lt;name of the ad&gt;</code>')
+    head = f"""
+  <section>
+    <h2>{esc(title)}</h2>
+    <div class="panel">
+      <p>{intro}</p>"""
+    if res["status"] != "ok":
+        label = "Not set up yet" if res["status"] == "not_set_up" else "No data yet"
+        return f"{head}\n      <p><b>{label}.</b> {esc(res['reason'])}</p>\n    </div>\n  </section>"
+    s = res["summary"]
+    span = f"{esc(s['date_from'])} to {esc(s['date_to'])}" if s["date_from"] else ""
+    if s["by_source"]:
+        rows = "".join(f"<tr><td>{esc(SOURCE_LABEL.get(k.lower(), k))}</td><td>{v}</td></tr>"
+                       for k, v in sorted(s["by_source"].items(), key=lambda kv: (-kv[1], kv[0])))
+        src = (f'<div class="tablewrap"><table><thead><tr><th>Where they found the app</th><th>Downloads</th></tr></thead>'
+               f'<tbody>{rows}</tbody></table></div>')
+    else:
+        src = "<p>No downloads by source yet.</p>"
+    if s["by_campaign"]:
+        rows = "".join(
+            f"<tr><td>{esc(k)}</td><td>{v['downloads']}</td><td>{v['purchases']}</td><td>${v['proceeds']:,.2f}</td><td>{v['paying_users']}</td></tr>"
+            for k, v in sorted(s["by_campaign"].items(), key=lambda kv: (-kv[1]["downloads"], kv[0])))
+        camp = (f'<div class="tablewrap"><table><thead><tr><th>Ad name (ct)</th><th>Downloads</th><th>Purchases</th>'
+                f'<th>Proceeds</th><th>Paying users</th></tr></thead><tbody>{rows}</tbody></table></div>'
+                '<p>Paying users are added up across days, so one person can count twice.</p>')
+    elif s["has_campaign_column"]:
+        camp = "<p>No downloads with an ad name yet. Apple hides a row until at least 5 people are in it.</p>"
+    else:
+        camp = "<p>No ad names yet. Apple lists them only in its Detailed reports, which are not available yet.</p>"
+    return f"""{head}
+      <p>{span}. {s['redownloads']} re-downloads are not counted.</p>
+      {src}
+      {camp}
+    </div>
+  </section>"""
+
+
+# ---------------------------------------------------------------------------
 # Health
 # ---------------------------------------------------------------------------
 
@@ -1099,7 +1370,7 @@ def build_static_sections(args, n_phones):
 # nobody can trust.
 # ---------------------------------------------------------------------------
 
-def run_cross_checks(args, S, M, q1_check):
+def run_cross_checks(args, S, M, q1_check, pw_check=None):
     """Monkeypatches usage_report.fetch() to hand back this exact session
     list `S`, fakes sys.argv to match this run's --env/--month/--channel,
     and runs usage_report.main() for real, capturing its stdout. Parses
@@ -1168,6 +1439,34 @@ def run_cross_checks(args, S, M, q1_check):
         rtotal, page_total = float(m.group(1)), C.get("bytesFreed.total", 0) / 1e9
         if abs(rtotal - page_total) > 0.005:
             problems.append(f"bytes freed TOTAL: usage_report.py printed {rtotal:.2f} GB but the page has {page_total:.2f} GB")
+
+    if pw_check is not None:
+        m = re.search(r"installs with plan data: (\d+)\s+scrolled: \d+ \([^)]*\)\s+saw the paywall: (\d+)", out)
+        if not m:
+            problems.append("usage_report.py printed no 'installs with plan data ... saw the paywall' line to check against")
+        else:
+            for label, got, expect in (("paywall installs", int(m.group(1)), pw_check["installs"]),
+                                       ("paywall saw", int(m.group(2)), pw_check["saw"])):
+                if got != expect:
+                    problems.append(f"{label}: usage_report.py printed {got} but the page has {expect}")
+        m = re.search(r"started a purchase: (\d+) installs", out)
+        if not m:
+            problems.append("usage_report.py printed no 'started a purchase' line to check against")
+        elif int(m.group(1)) != pw_check["started"]:
+            problems.append(f"paywall started: usage_report.py printed {m.group(1)} but the page has {pw_check['started']}")
+        m = re.search(r"bought monthly: (\d+) installs.*?bought lifetime: (\d+) installs", out)
+        if not m:
+            problems.append("usage_report.py printed no 'bought monthly ... bought lifetime' line to check against")
+        else:
+            for label, got, expect in (("bought monthly", int(m.group(1)), pw_check["monthly"]),
+                                       ("bought lifetime", int(m.group(2)), pw_check["lifetime"])):
+                if got != expect:
+                    problems.append(f"{label}: usage_report.py printed {got} but the page has {expect}")
+        printed = {}
+        for sm in re.finditer(r"^\s+(\w+)\s+shown=(\d+)\s+bought=(\d+) ", out, re.M):
+            printed[sm.group(1)] = (int(sm.group(2)), int(sm.group(3)))
+        if printed != pw_check["sources"]:
+            problems.append(f"paywall by source: usage_report.py printed {printed} but the page has {pw_check['sources']}")
 
     if problems:
         sys.exit("CROSS-CHECK FAILED against usage_report.py -- not writing the dashboard:\n  " + "\n  ".join(problems))
@@ -1407,7 +1706,7 @@ PAGE_CSS = """
 """
 
 
-def build_page(args, S, M, money_html, n_lifetime, tiles_html, q1_html, q2_html, reminder_html, health_html, location_html, customers_html, static_html, raw_fields_html):
+def build_page(args, S, M, money_html, n_lifetime, tiles_html, q1_html, q2_html, reminder_html, apple_ads_html, health_html, location_html, customers_html, static_html, raw_fields_html, paywall_html="", sources_html=""):
     channel_label = CHANNEL_LABEL[args.channel]
     intro = CHANNEL_INTRO[args.channel]
     pulled = datetime.datetime.now(datetime.timezone.utc).strftime("%-d %b %Y %H:%M UTC")
@@ -1443,7 +1742,7 @@ def build_page(args, S, M, money_html, n_lifetime, tiles_html, q1_html, q2_html,
 <style>{PAGE_CSS}</style>
 </head>
 <body>
-<div class="wrap">{header}{money_html}{tiles_html}{q1_html}{q2_html}{reminder_html}{health_html}{location_html}{customers_html}{static_html}{raw_fields_html}
+<div class="wrap">{header}{money_html}{tiles_html}{q1_html}{q2_html}{reminder_html}{paywall_html}{apple_ads_html}{sources_html}{health_html}{location_html}{customers_html}{static_html}{raw_fields_html}
 </div>
 </body>
 </html>
@@ -1469,16 +1768,19 @@ def main():
     q1_html, q1_check = build_q1(M, S)
     q2_html, q2_check = build_q2(M, S)
     reminder_html = build_reminder(M, S)
+    paywall_html, pw_check = build_paywall(M, S)
+    apple_ads_html = build_apple_ads(args, S)
+    sources_html = build_sources(args)
     health_html = build_health(M, S)
     location_html, _loc_check = build_location(M, S)
     customers_html, customers_check = build_customers(M, S)
     raw_fields_html, _table_check = build_phone_table(S, M)
     static_html = build_static_sections(args, M["n_phones"])
 
-    run_cross_checks(args, S, M, q1_check)
+    run_cross_checks(args, S, M, q1_check, pw_check)
     check_customers(M, S, customers_check, q1_check, tiles_check, q2_check)
 
-    page = build_page(args, S, M, money_html, n_lifetime, tiles_html, q1_html, q2_html, reminder_html, health_html, location_html, customers_html, static_html, raw_fields_html)
+    page = build_page(args, S, M, money_html, n_lifetime, tiles_html, q1_html, q2_html, reminder_html, apple_ads_html, health_html, location_html, customers_html, static_html, raw_fields_html, paywall_html, sources_html)
     with open(args.out, "w", encoding="utf-8") as f:
         f.write(page)
 

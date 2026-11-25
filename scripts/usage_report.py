@@ -261,6 +261,87 @@ def device_name(ident): return DEVICE_NAMES.get(ident, ident)
 def pct(n, d): return f"{(100*n/d):.0f}%" if d else "–"
 def avg(xs): return f"{sum(xs)/len(xs):.0f}" if xs else "–"
 
+NO_KEYWORD = "(no keyword: Search Match or Apple Ads Basic)"
+
+# The first app version that asks Apple (version 1.1, build 4). Older builds never ask, so their
+# installs are "not asked", not "Apple has not answered yet".
+APPLE_ADS_FIRST_APP = (1, 1, 4)
+
+def asks_apple(app):
+    """True when a session's `app` text ("1.1 (4)") is a build that asks Apple. Unknown: False."""
+    import re
+    m = re.match(r"^\s*(\d+)\.(\d+)(?:\.\d+)?\s*\((\d+)\)", app or "")
+    return bool(m) and (int(m.group(1)), int(m.group(2)), int(m.group(3))) >= APPLE_ADS_FIRST_APP
+
+def apple_ads_tables(S):
+    """Which Apple Ads campaign and keyword brought the people who paid.
+
+    One row per install, not per session. An install's Apple Ads answer is the
+    newest session in S that carries `appleAds.attribution` (the app writes it
+    into every session after Apple answered, like `installChannel`). An install
+    is a buyer when any of its sessions in S has `purchase.monthly.success` or
+    `purchase.lifetime.success` above 0. The numbers hold no person: Apple's
+    record has no user or device identifier.
+    Returns a dict, used by this script and by usage_dashboard.py."""
+    byInstall = collections.defaultdict(list)
+    for r in S: byInstall[r["install"]].append(r)
+    out = {"installs": len(byInstall), "attributed": 0, "notAttributed": 0, "unanswered": 0, "notAsked": 0,
+           "buyersAttributed": 0, "buyersNotAttributed": 0, "buyersUnanswered": 0, "buyersNotAsked": 0,
+           # Of the attributed installs: a reinstall (conversionType Redownload) is not a new
+           # download, and a view (claimType Impression) is not a tap. Tables count Download only.
+           "redownloads": 0, "buyersRedownloads": 0, "views": 0, "buyersViews": 0,
+           "byCampaign": {}, "byKeyword": {}}
+    def blank(): return {"installs": 0, "buyers": 0, "monthly": 0, "lifetime": 0}
+    for rs in byInstall.values():
+        monthly = any(r["counts"].get("purchase.monthly.success", 0) > 0 for r in rs)
+        lifetime = any(r["counts"].get("purchase.lifetime.success", 0) > 0 for r in rs)
+        buyer = monthly or lifetime
+        answered = [r for r in sorted(rs, key=lambda r: r["startedAt"] or "") if "appleAds.attribution" in r["facts"]]
+        if not answered:
+            # Only a build that asks Apple can be "not answered yet".
+            if any(asks_apple(r["app"]) for r in rs):
+                out["unanswered"] += 1; out["buyersUnanswered"] += buyer
+            else:
+                out["notAsked"] += 1; out["buyersNotAsked"] += buyer
+            continue
+        f = answered[-1]["facts"]
+        if f["appleAds.attribution"] != "true":
+            out["notAttributed"] += 1; out["buyersNotAttributed"] += buyer; continue
+        out["attributed"] += 1; out["buyersAttributed"] += buyer
+        if f.get("appleAds.claimType") == "Impression":
+            out["views"] += 1; out["buyersViews"] += buyer
+        if f.get("appleAds.conversionType") == "Redownload":
+            out["redownloads"] += 1; out["buyersRedownloads"] += buyer
+            continue
+        campaign = f.get("appleAds.campaignId") or "(unknown)"
+        keyword = f.get("appleAds.keywordId") or NO_KEYWORD
+        for table, key in ((out["byCampaign"], campaign), (out["byKeyword"], keyword)):
+            row = table.setdefault(key, blank())
+            row["installs"] += 1; row["buyers"] += buyer; row["monthly"] += monthly; row["lifetime"] += lifetime
+    return out
+
+def print_apple_ads(S, C):
+    """The Apple Ads block of the text report. App Store installs only."""
+    A = apple_ads_tables(S)
+    print("Apple Ads (App Store installs only)")
+    # OWNER COPY: placeholder wording. Apple's false also covers answers Apple withholds, so
+    # the bucket is "Apple returned no attribution", not "not from Apple Ads".
+    print(f"  installs with a session {A['installs']}   Apple returned attribution {A['attributed']} (buyers {A['buyersAttributed']})   "
+          f"Apple returned no attribution {A['notAttributed']} (buyers {A['buyersNotAttributed']})   "
+          f"no answer from Apple yet {A['unanswered']} (buyers {A['buyersUnanswered']})   "
+          f"older build, never asks Apple {A['notAsked']} (buyers {A['buyersNotAsked']})")
+    print(f"  of the attributed: reinstalls (Redownload) {A['redownloads']} (buyers {A['buyersRedownloads']}), "
+          f"views (Impression) {A['views']} (buyers {A['buyersViews']}). The tables below count Download only.")
+    for title, table in (("campaignId", A["byCampaign"]), ("keywordId", A["byKeyword"])):
+        if not table:
+            print(f"  by {title}: n/a (no Apple Ads installs yet)")
+            continue
+        print(f"  by {title}:")
+        print(f"    {title:44}{'installs':>9}{'buyers':>8}{'monthly':>9}{'lifetime':>9}")
+        for key, row in sorted(table.items(), key=lambda kv: (-kv[1]["buyers"], -kv[1]["installs"], kv[0])):
+            print(f"    {key:44}{row['installs']:>9}{row['buyers']:>8}{row['monthly']:>9}{row['lifetime']:>9}")
+    print()
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--env", default="development", choices=["development", "production"])
@@ -596,6 +677,9 @@ def main():
         print(f"  installs with plan data: {nInst}   scrolled: {scrolled} ({pct(scrolled, nInst)})   saw the paywall: {sawPaywall} ({pct(sawPaywall, nInst)})")
         print(f"  bought monthly: {boughtMonthly} installs ({successByProduct['monthly']} purchase events)   bought lifetime: {boughtLifetime} installs ({successByProduct['lifetime']} purchase events)   early buyers (legacy): {earlyBuyers}")
 
+        startedPurchase = sum(1 for rs in byInstall.values() if any(k.startswith("purchase.") and k.endswith(".started") and v > 0 for r in rs for k, v in r["counts"].items()))
+        print(f"  started a purchase: {startedPurchase} installs ({pct(startedPurchase, sawPaywall)} of those who saw the paywall)")
+
         # 2. Scroll-only installs: every session none/unknown, never a purchase success.
         def scrollOnly(rs): return all(r["facts"].get("entitlement") in ("none", "unknown") for r in rs) and not hasPurchaseSuccess(rs)
         soGroups = [rs for rs in byInstall.values() if scrollOnly(rs)]
@@ -692,6 +776,7 @@ def main():
             print("  cancellers (autoRenew=false): n/a (no sessions yet)")
         print()
 
+    if a.channel == "appStore": print_apple_ads(S, C)
     print("Health")
     print(f"  photo load failed {C.get('photoLoadFailedCount',0)}   video load failed {C.get('videoLoadFailedCount',0)}   slow downloads {C.get('slowDownloadCount',0)}   "
           f"stalls>250ms {sum(fnums('mainThreadStallsOver250ms'))}   ended by: " + "  ".join(f"{v}={n}" for v,n in F['endReason'].most_common()))
@@ -703,6 +788,9 @@ def main():
     src = open(__file__).read()
     for lit in _re.findall(r"""C\.get\(f?['"]([^'"]+)['"]""", src): named.add(_re.sub(r"\{[^}]*\}", "*", lit))
     import fnmatch as _fn
+    # Facts stored for lookups and not tabled. Their names appear in this file, so the
+    # "facts not read" check below counts them as read.
+    stored_only_facts = ("appleAds.adGroupId", "appleAds.claimType", "appleAds.conversionType", "appleAds.supplyPlacement")
     # Key families the script matches with `startswith`, instead of naming each key.
     scanned = ["setting.", "filterOn.", "filterOff.", "sortChanged.", "shareTarget", "shareTargetRaw.", "shareKind.", "shrink.originalKept.", "notificationTap.", "deleted.videos.res.", "deleted.photos.res.", "video.served.", "daysToFirst.", "settingsLink.", "tip.tapped.", "tip.outcome.", "tip.unavailable.", "bin.restore.",
                "secondsInPose.", "poseChange.", "afterDeleteByButton.", "video.rotatedToFullscreenIn.", "laptopPager.", "duoGrid.", "foldPlayback.", "foldResumeSeconds."]
@@ -711,6 +799,7 @@ def main():
     # Lists the facts whose names do not appear in this file. A name
     # anywhere in the file counts as read.
     mentioned = set(_re.findall(r"""['"]([A-Za-z][A-Za-z0-9._]*)['"]""", src))
+    mentioned.update(stored_only_facts)
     unreadFacts = sorted(k for k in F if k not in mentioned
                          and not any(k.startswith(p) for p in ("daysToFirst.", "firstLoadMs.", "sort.", "filters.", "types.")))
     if unreadFacts: print("  facts not read by this script: " + "  ".join(unreadFacts))

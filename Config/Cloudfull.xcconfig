@@ -1,0 +1,12 @@
+// Checked in. Base configuration of the Cloudfull app target (Debug and Release).
+// Every ad key defaults to EMPTY, so a build with no key file works and the ad SDKs stay off.
+// Real values live in the git-ignored Config/AdKeys.xcconfig (see AdKeys.example.xcconfig).
+
+META_APP_ID =
+META_CLIENT_TOKEN =
+TIKTOK_APPLE_APP_ID =
+TIKTOK_APP_ID =
+TIKTOK_ACCESS_TOKEN =
+
+// Optional file. A missing file is not an error.
+#include? "AdKeys.xcconfig"
